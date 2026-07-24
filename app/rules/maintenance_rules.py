@@ -4,7 +4,6 @@ import pandas as pd
 
 from app.schemas.contracts import EvidenceCreate, FindingCreate
 
-
 RULE_ID = "MAINT-001-REPEATED-FAILURE"
 
 
@@ -51,7 +50,13 @@ def detect_repeated_asset_failures(events: pd.DataFrame) -> list[FindingCreate]:
                 exposure_high=round(exposure_high, 2),
                 currency="USD",
                 confidence_score=round(confidence, 2),
-                ontology_concept_ids=["Asset", "Failure", "MaintenanceEvent", "Downtime", "ValueExposure"],
+                ontology_concept_ids=[
+                    "Asset",
+                    "Failure",
+                    "MaintenanceEvent",
+                    "Downtime",
+                    "ValueExposure",
+                ],
                 causal_chain_id="ASSET-FAILURE-DOWNTIME-VALUE",
                 evidence=evidence,
             )
