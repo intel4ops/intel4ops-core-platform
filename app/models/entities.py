@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -21,6 +22,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+if TYPE_CHECKING:
+    from app.models.source_system import SourceSystem
 
 
 def utc_now() -> datetime:
@@ -79,6 +83,7 @@ class Organization(Base):
     memberships: Mapped[list[OrganizationMembership]] = relationship(
         back_populates="organization", cascade="all, delete-orphan", passive_deletes=True
     )
+    source_systems: Mapped[list[SourceSystem]] = relationship(back_populates="organization")
 
 
 class OrganizationMembership(Base):
