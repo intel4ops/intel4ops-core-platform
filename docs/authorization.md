@@ -30,14 +30,14 @@ HTTP 404 when that pair does not exist.
 
 ## Roles and permissions
 
-| Role | Read organization data | Read memberships | Manage memberships | Source-system configuration | Source-system operations | Maintenance analysis | Recovery writes |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Platform administrator claim | Yes, all organizations | Yes | Yes | Yes | Yes | Yes | Yes |
-| `organization_admin` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| `analyst` | Yes | Yes | No | No | No | Yes | No |
-| `operator` | Yes | Yes | No | No | Yes | Yes | Yes |
-| `recovery_manager` | Yes | Yes | No | No | No | No | Yes |
-| `viewer` | Yes | Yes | No | No | No | No | No |
+| Role | Read organization data | Manage memberships | Source configuration | Ingestion operations | Dataset configuration | Release quarantine | Maintenance analysis | Recovery writes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Platform administrator claim | Yes, all organizations | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `organization_admin` | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `analyst` | Yes | No | No | No | No | No | Yes | No |
+| `operator` | Yes | No | No | Yes | No | No | Yes | Yes |
+| `recovery_manager` | Yes | No | No | No | No | No | No | Yes |
+| `viewer` | Yes | No | No | No | No | No | No | No |
 
 `platform_admin` remains a controlled membership role so imported or future membership
 records can represent it. In WP-2.02, cross-organization authority comes only from the

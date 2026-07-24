@@ -54,6 +54,30 @@ mechanism.
 - `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/connection-success`
 - `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/connection-failure`
 - `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/health`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches`
+- `GET /api/v1/organizations/{organization_id}/ingestion-batches`
+- `GET /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/transition`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/retry`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/quarantine`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/release`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/cancel`
+- `PATCH /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/counts`
+- `POST /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/failure`
+- `GET /api/v1/organizations/{organization_id}/ingestion-batches/{batch_id}/dataset-versions`
+- `POST /api/v1/organizations/{organization_id}/datasets`
+- `GET /api/v1/organizations/{organization_id}/datasets`
+- `GET /api/v1/organizations/{organization_id}/datasets/{dataset_id}`
+- `PATCH /api/v1/organizations/{organization_id}/datasets/{dataset_id}`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/activate`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/pause`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/deprecate`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/decommission`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions`
+- `GET /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions`
+- `GET /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions/{version_id}`
+- `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions/{version_id}/transition`
+- `PATCH /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions/{version_id}/counts`
 - `POST /api/v1/trust/profile`
 - `POST /api/v1/intelligence/maintenance/analyze?organization_id={uuid}`
 - `GET /api/v1/command/findings?organization_id={uuid}`
@@ -64,6 +88,8 @@ authenticated user authorized for that organization. Supplying an `organization_
 alone never grants access. See [Membership and authorization](docs/authorization.md).
 The governed registry and its credential boundary are documented in
 [Source systems registry](docs/source-systems.md).
+Ingestion governance, lifecycle, idempotency, and reconciliation are documented in
+[Ingestion control](docs/ingestion-control.md).
 
 ## Migrations
 
@@ -72,7 +98,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0003`.
+Current head revision: `20260724_0004`.
 
 ## Tests and quality checks
 
