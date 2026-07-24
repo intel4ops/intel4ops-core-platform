@@ -4,7 +4,20 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -17,6 +30,22 @@ def utc_now() -> datetime:
 class OrganizationStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
+
+
+class MembershipRole(StrEnum):
+    PLATFORM_ADMIN = "platform_admin"
+    ORGANIZATION_ADMIN = "organization_admin"
+    ANALYST = "analyst"
+    OPERATOR = "operator"
+    RECOVERY_MANAGER = "recovery_manager"
+    VIEWER = "viewer"
+
+
+class MembershipStatus(StrEnum):
+    INVITED = "invited"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REVOKED = "revoked"
 
 
 class FindingStatus(StrEnum):
@@ -47,6 +76,49 @@ class Organization(Base):
     )
 
     findings: Mapped[list[Finding]] = relationship(back_populates="organization")
+    memberships: Mapped[list[OrganizationMembership]] = relationship(
+        back_populates="organization", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class OrganizationMembership(Base):
+    __tablename__ = "organization_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "user_id",
+            name="uq_organization_members_organization_user",
+        ),
+        CheckConstraint(
+            "role IN ('platform_admin', 'organization_admin', 'analyst', 'operator', "
+            "'recovery_manager', 'viewer')",
+            name="ck_organization_members_role",
+        ),
+        CheckConstraint(
+            "status IN ('invited', 'active', 'suspended', 'revoked')",
+            name="ck_organization_members_status",
+        ),
+        Index("ix_organization_members_organization_id", "organization_id"),
+        Index("ix_organization_members_user_id", "user_id"),
+        Index("ix_organization_members_role", "role"),
+        Index("ix_organization_members_status", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    user_id: Mapped[UUID] = mapped_column(Uuid)
+    role: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20), default=MembershipStatus.INVITED.value)
+    invited_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="memberships")
 
 
 class Finding(Base):

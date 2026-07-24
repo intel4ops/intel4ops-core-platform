@@ -5,6 +5,18 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth.authorization import (
+    OrganizationAccess,
+    require_organization_roles,
+    require_platform_admin,
+)
+from app.auth.identity import AuthenticatedUser
+from app.auth.permissions import (
+    MAINTENANCE_ANALYSIS_ROLES,
+    ORGANIZATION_ADMIN_ROLES,
+    ORGANIZATION_READ_ROLES,
+    RECOVERY_WRITE_ROLES,
+)
 from app.db.session import get_db
 from app.engines.trust_engine import TrustEngine
 from app.models.entities import Finding, Organization, RecoveryAction
@@ -49,7 +61,11 @@ def health() -> dict[str, object]:
 
 
 @router.post("/organizations", response_model=OrganizationRead, status_code=201)
-def create_organization(payload: OrganizationCreate, db: Session = Depends(get_db)) -> Organization:
+def create_organization(
+    payload: OrganizationCreate,
+    db: Session = Depends(get_db),
+    _: AuthenticatedUser = Depends(require_platform_admin),
+) -> Organization:
     try:
         return organization_service.create(db, payload)
     except DuplicateOrganizationSlugError as exc:
@@ -57,12 +73,19 @@ def create_organization(payload: OrganizationCreate, db: Session = Depends(get_d
 
 
 @router.get("/organizations", response_model=list[OrganizationRead])
-def list_organizations(db: Session = Depends(get_db)) -> list[Organization]:
+def list_organizations(
+    db: Session = Depends(get_db),
+    _: AuthenticatedUser = Depends(require_platform_admin),
+) -> list[Organization]:
     return organization_service.list(db)
 
 
 @router.get("/organizations/{organization_id}", response_model=OrganizationRead)
-def get_organization(organization_id: UUID, db: Session = Depends(get_db)) -> Organization:
+def get_organization(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_READ_ROLES)),
+) -> Organization:
     try:
         return organization_service.get(db, organization_id)
     except OrganizationNotFoundError as exc:
@@ -74,6 +97,7 @@ def update_organization(
     organization_id: UUID,
     payload: OrganizationUpdate,
     db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
 ) -> Organization:
     try:
         return organization_service.update(db, organization_id, payload)
@@ -84,7 +108,11 @@ def update_organization(
 
 
 @router.post("/organizations/{organization_id}/deactivate", response_model=OrganizationRead)
-def deactivate_organization(organization_id: UUID, db: Session = Depends(get_db)) -> Organization:
+def deactivate_organization(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
+) -> Organization:
     try:
         return organization_service.deactivate(db, organization_id)
     except OrganizationNotFoundError as exc:
@@ -102,6 +130,7 @@ async def analyze_maintenance(
     organization_id: UUID,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*MAINTENANCE_ANALYSIS_ROLES)),
 ) -> list[Finding]:
     dataframe = await _read_tabular(file)
     try:
@@ -115,7 +144,11 @@ async def analyze_maintenance(
 
 
 @router.get("/command/findings", response_model=list[FindingRead])
-def list_findings(organization_id: UUID, db: Session = Depends(get_db)) -> list[Finding]:
+def list_findings(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_READ_ROLES)),
+) -> list[Finding]:
     return finding_service.list(db, organization_id)
 
 
@@ -124,6 +157,7 @@ def create_recovery_action(
     organization_id: UUID,
     payload: RecoveryActionCreate,
     db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*RECOVERY_WRITE_ROLES)),
 ) -> RecoveryAction:
     try:
         return recovery_service.create(db, organization_id, payload)
