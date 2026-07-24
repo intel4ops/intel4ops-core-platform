@@ -37,12 +37,21 @@ mechanism.
 - `GET /api/v1/organizations/{organization_id}`
 - `PATCH /api/v1/organizations/{organization_id}`
 - `POST /api/v1/organizations/{organization_id}/deactivate`
+- `POST /api/v1/organizations/{organization_id}/members`
+- `GET /api/v1/organizations/{organization_id}/members`
+- `GET /api/v1/organizations/{organization_id}/members/{membership_id}`
+- `PATCH /api/v1/organizations/{organization_id}/members/{membership_id}/role`
+- `POST /api/v1/organizations/{organization_id}/members/{membership_id}/activate`
+- `POST /api/v1/organizations/{organization_id}/members/{membership_id}/suspend`
+- `POST /api/v1/organizations/{organization_id}/members/{membership_id}/revoke`
 - `POST /api/v1/trust/profile`
 - `POST /api/v1/intelligence/maintenance/analyze?organization_id={uuid}`
 - `GET /api/v1/command/findings?organization_id={uuid}`
 - `POST /api/v1/recovery/actions?organization_id={uuid}`
 
-Finding creation, listing, and recovery lookup require an explicit organization UUID.
+Organization-scoped endpoints require both an explicit organization UUID and an
+authenticated user authorized for that organization. Supplying an `organization_id`
+alone never grants access. See [Membership and authorization](docs/authorization.md).
 
 ## Migrations
 
@@ -51,7 +60,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current baseline revision: `20260724_0001`.
+Current head revision: `20260724_0002`.
 
 ## Tests and quality checks
 
@@ -94,3 +103,9 @@ environment.
 ```text
 asset_id,failure_code,downtime_hours,repair_cost
 ```
+
+## Authentication status
+
+Production authentication intentionally fails closed until a real identity provider is
+configured. The test identity dependency used by the test suite is not a production
+authentication implementation and must never be enabled in a deployed environment.
