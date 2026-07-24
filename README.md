@@ -44,6 +44,16 @@ mechanism.
 - `POST /api/v1/organizations/{organization_id}/members/{membership_id}/activate`
 - `POST /api/v1/organizations/{organization_id}/members/{membership_id}/suspend`
 - `POST /api/v1/organizations/{organization_id}/members/{membership_id}/revoke`
+- `POST /api/v1/organizations/{organization_id}/source-systems`
+- `GET /api/v1/organizations/{organization_id}/source-systems`
+- `GET /api/v1/organizations/{organization_id}/source-systems/{source_system_id}`
+- `PATCH /api/v1/organizations/{organization_id}/source-systems/{source_system_id}`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/pause`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/reactivate`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/decommission`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/connection-success`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/connection-failure`
+- `POST /api/v1/organizations/{organization_id}/source-systems/{source_system_id}/health`
 - `POST /api/v1/trust/profile`
 - `POST /api/v1/intelligence/maintenance/analyze?organization_id={uuid}`
 - `GET /api/v1/command/findings?organization_id={uuid}`
@@ -52,6 +62,8 @@ mechanism.
 Organization-scoped endpoints require both an explicit organization UUID and an
 authenticated user authorized for that organization. Supplying an `organization_id`
 alone never grants access. See [Membership and authorization](docs/authorization.md).
+The governed registry and its credential boundary are documented in
+[Source systems registry](docs/source-systems.md).
 
 ## Migrations
 
@@ -60,7 +72,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0002`.
+Current head revision: `20260724_0003`.
 
 ## Tests and quality checks
 

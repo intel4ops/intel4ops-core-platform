@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.membership_routes import router as membership_router
 from app.api.routes import router
+from app.api.source_system_routes import router as source_system_router
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -17,3 +18,4 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(membership_router)
+app.include_router(source_system_router)
