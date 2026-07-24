@@ -18,9 +18,20 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.schemas.contracts import FindingCreate, OrganizationCreate
+from app.schemas.ingestion import (
+    DatasetCreate,
+    DatasetVersionCountsUpdate,
+    DatasetVersionCreate,
+    IngestionBatchCreate,
+)
 from app.schemas.memberships import MembershipCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.services.finding_service import FindingService
+from app.services.ingestion_service import (
+    DatasetService,
+    DatasetVersionService,
+    IngestionBatchService,
+)
 from app.services.membership_service import (
     DuplicateMembershipError,
     OrganizationMembershipService,
@@ -38,6 +49,9 @@ MANAGED_TABLES = {
     "recovery_actions",
     "organization_members",
     "source_systems",
+    "ingestion_batches",
+    "datasets",
+    "dataset_versions",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -190,6 +204,48 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert source_foreign_keys[0]["referred_table"] == "organizations"
     assert source_foreign_keys[0]["options"]["ondelete"] == "RESTRICT"
 
+    for table, json_column in (
+        ("ingestion_batches", "manifest_metadata"),
+        ("datasets", "metadata_json"),
+        ("dataset_versions", "metadata_json"),
+    ):
+        columns = {column["name"]: column for column in inspector.get_columns(table)}
+        assert str(columns["id"]["type"]) == "UUID"
+        assert str(columns["organization_id"]["type"]) == "UUID"
+        assert str(columns[json_column]["type"]) == "JSONB"
+    assert "uq_ingestion_batches_organization_batch" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("ingestion_batches")
+    }
+    assert "uq_ingestion_batches_organization_idempotency" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("ingestion_batches")
+    }
+    assert "uq_datasets_organization_code" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("datasets")
+    }
+    assert {
+        "uq_dataset_versions_dataset_version",
+        "uq_dataset_versions_batch_dataset",
+    } <= {constraint["name"] for constraint in inspector.get_unique_constraints("dataset_versions")}
+    assert {
+        "ix_ingestion_batches_organization_id",
+        "ix_ingestion_batches_source_system_id",
+        "ix_ingestion_batches_status",
+    } <= {index["name"] for index in inspector.get_indexes("ingestion_batches")}
+    assert {
+        "ix_datasets_organization_id",
+        "ix_datasets_source_system_id",
+        "ix_datasets_status",
+    } <= {index["name"] for index in inspector.get_indexes("datasets")}
+    assert {
+        "ix_dataset_versions_organization_id",
+        "ix_dataset_versions_dataset_id",
+        "ix_dataset_versions_ingestion_batch_id",
+    } <= {index["name"] for index in inspector.get_indexes("dataset_versions")}
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("dataset_versions")
+    } == {"organizations", "datasets", "ingestion_batches"}
+
     expected_indexes = {
         "findings": {
             "ix_findings_domain",
@@ -238,10 +294,11 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
-    command.downgrade(config, "20260724_0002")
-    wp_202_tables = set(inspect(postgres_engine).get_table_names())
-    assert "source_systems" not in wp_202_tables
-    assert MANAGED_TABLES - {"source_systems"} <= wp_202_tables
+    command.downgrade(config, "20260724_0003")
+    wp_203_tables = set(inspect(postgres_engine).get_table_names())
+    wp_204_tables = {"ingestion_batches", "datasets", "dataset_versions"}
+    assert not (wp_204_tables & wp_203_tables)
+    assert MANAGED_TABLES - wp_204_tables <= wp_203_tables
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
@@ -295,6 +352,92 @@ def test_source_system_uuid_scope_and_constraints(postgres_engine: Engine) -> No
         with pytest.raises(DuplicateSourceSystemCodeError):
             source_service.create(session, first.id, payload, actor)
         source_service.create(session, second.id, payload, actor)
+
+
+@pytest.mark.postgres
+def test_ingestion_governance_on_postgres(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    organization_service = OrganizationService()
+    source_service = SourceSystemService()
+    batch_service = IngestionBatchService()
+    dataset_service = DatasetService()
+    version_service = DatasetVersionService(dataset_service, batch_service)
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        organization = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Ingestion",
+                slug=f"postgres-ingestion-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        source = source_service.create(
+            session,
+            organization.id,
+            SourceSystemCreate(
+                name="PostgreSQL ERP",
+                code="postgres-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            uuid4(),
+        )
+        batch = batch_service.create(
+            session,
+            organization.id,
+            IngestionBatchCreate(
+                source_system_id=source.id,
+                batch_number=f"postgres-batch-{suffix}",
+                ingestion_method="database_extract",
+                trigger_type="scheduled",
+                idempotency_key=f"postgres-key-{suffix}",
+                manifest_metadata={"schema": "public"},
+            ),
+            uuid4(),
+        )
+        dataset = dataset_service.create(
+            session,
+            organization.id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="PostgreSQL Invoices",
+                code=f"postgres-invoices-{suffix}",
+                domain="invoices",
+                dataset_type="transactional",
+                metadata_json={"validated": True},
+            ),
+            uuid4(),
+        )
+        version = version_service.create(
+            session,
+            organization.id,
+            dataset.id,
+            DatasetVersionCreate(
+                ingestion_batch_id=batch.id,
+                source_file_name="invoices.csv",
+                source_file_extension="csv",
+            ),
+        )
+        version_service.update_counts(
+            session,
+            organization.id,
+            dataset.id,
+            version.id,
+            DatasetVersionCountsUpdate(
+                record_count=12,
+                accepted_record_count=10,
+                rejected_record_count=2,
+            ),
+        )
+        reconciled = batch_service.get(session, organization.id, batch.id)
+        assert isinstance(reconciled.id, UUID)
+        assert (reconciled.actual_dataset_count, reconciled.actual_record_count) == (
+            1,
+            12,
+        )
 
 
 @pytest.mark.postgres
