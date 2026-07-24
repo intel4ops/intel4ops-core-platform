@@ -1,0 +1,31 @@
+[project]
+name = "intel4ops-core-platform"
+version = "0.1.0"
+description = "Intel4Ops Core Platform - Connect, Trust, Intelligence, Command, Recovery"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.30,<1.0",
+  "sqlalchemy>=2.0,<3.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.4,<3.0",
+  "python-multipart>=0.0.9,<1.0",
+  "pandas>=2.2,<3.0",
+  "openpyxl>=3.1,<4.0",
+  "psycopg[binary]>=3.2,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9.0",
+  "httpx>=0.27,<1.0",
+  "ruff>=0.6,<1.0",
+  "mypy>=1.11,<2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
