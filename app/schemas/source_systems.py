@@ -31,6 +31,10 @@ FORBIDDEN_SECRET_KEYS = {
     "authorization",
     "connection_string",
     "database_url",
+    "authentication_header",
+    "service_account",
+    "service_account_credentials",
+    "signed_url",
 }
 
 
