@@ -11,9 +11,19 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.entities import Finding
+from app.models.entities import (
+    Finding,
+    MembershipRole,
+    MembershipStatus,
+    OrganizationMembership,
+)
 from app.schemas.contracts import FindingCreate, OrganizationCreate
+from app.schemas.memberships import MembershipCreate
 from app.services.finding_service import FindingService
+from app.services.membership_service import (
+    DuplicateMembershipError,
+    OrganizationMembershipService,
+)
 from app.services.organization_service import OrganizationService
 
 MANAGED_TABLES = {
@@ -21,6 +31,7 @@ MANAGED_TABLES = {
     "findings",
     "finding_evidence",
     "recovery_actions",
+    "organization_members",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -87,6 +98,51 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert organization_indexes["ix_organizations_slug"]["unique"] is True
     assert organization_indexes["ix_organizations_slug"]["column_names"] == ["slug"]
 
+    membership_columns = {
+        column["name"]: column for column in inspector.get_columns("organization_members")
+    }
+    assert set(membership_columns) == {
+        "id",
+        "organization_id",
+        "user_id",
+        "role",
+        "status",
+        "invited_by_user_id",
+        "joined_at",
+        "created_at",
+        "updated_at",
+    }
+    assert str(membership_columns["id"]["type"]) == "UUID"
+    assert str(membership_columns["organization_id"]["type"]) == "UUID"
+    assert str(membership_columns["user_id"]["type"]) == "UUID"
+
+    membership_indexes = {
+        index["name"]: index for index in inspector.get_indexes("organization_members")
+    }
+    assert {
+        "ix_organization_members_organization_id",
+        "ix_organization_members_user_id",
+        "ix_organization_members_role",
+        "ix_organization_members_status",
+    } <= set(membership_indexes)
+    membership_unique_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("organization_members")
+    }
+    assert "uq_organization_members_organization_user" in membership_unique_constraints
+    membership_checks = {
+        constraint["name"] for constraint in inspector.get_check_constraints("organization_members")
+    }
+    assert {
+        "ck_organization_members_role",
+        "ck_organization_members_status",
+    } <= membership_checks
+    membership_foreign_keys = inspector.get_foreign_keys("organization_members")
+    assert len(membership_foreign_keys) == 1
+    assert membership_foreign_keys[0]["constrained_columns"] == ["organization_id"]
+    assert membership_foreign_keys[0]["referred_table"] == "organizations"
+    assert membership_foreign_keys[0]["options"]["ondelete"] == "CASCADE"
+
     expected_indexes = {
         "findings": {
             "ix_findings_domain",
@@ -135,11 +191,87 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    command.downgrade(config, "20260724_0001")
+    wp_201_tables = set(inspect(postgres_engine).get_table_names())
+    assert "organization_members" not in wp_201_tables
+    assert MANAGED_TABLES - {"organization_members"} <= wp_201_tables
+
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     command.downgrade(config, "base")
     assert not (MANAGED_TABLES & set(inspect(postgres_engine).get_table_names()))
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
+
+
+@pytest.mark.postgres
+def test_membership_constraints_and_organization_cascade(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    organization_service = OrganizationService()
+    membership_service = OrganizationMembershipService()
+
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        organization = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Membership",
+                slug=f"postgres-membership-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        user_id = uuid4()
+        payload = MembershipCreate(
+            user_id=user_id,
+            role=MembershipRole.ORGANIZATION_ADMIN,
+            status=MembershipStatus.ACTIVE,
+        )
+        membership = membership_service.create(
+            session,
+            organization.id,
+            payload,
+            invited_by_user_id=uuid4(),
+        )
+        with pytest.raises(DuplicateMembershipError):
+            membership_service.create(
+                session,
+                organization.id,
+                payload,
+                invited_by_user_id=uuid4(),
+            )
+
+        membership_id = membership.id
+        session.delete(organization)
+        session.commit()
+        assert session.get(OrganizationMembership, membership_id) is None
+
+        invalid_organization = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Invalid Membership",
+                slug=f"postgres-invalid-membership-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        session.add(
+            OrganizationMembership(
+                organization_id=invalid_organization.id,
+                user_id=uuid4(),
+                role="invalid_role",
+                status=MembershipStatus.ACTIVE.value,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
 
 
 @pytest.mark.postgres
