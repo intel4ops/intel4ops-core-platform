@@ -8,6 +8,7 @@ from app.db.session import Base
 from app.models import (
     entities,  # noqa: F401
     ingestion,  # noqa: F401
+    raw_lineage,  # noqa: F401
     source_system,  # noqa: F401
 )
 

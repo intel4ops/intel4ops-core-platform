@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ from app.schemas.ingestion import (
     IngestionBatchCreate,
 )
 from app.schemas.memberships import MembershipCreate
+from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.services.finding_service import FindingService
 from app.services.ingestion_service import (
@@ -37,6 +39,7 @@ from app.services.membership_service import (
     OrganizationMembershipService,
 )
 from app.services.organization_service import OrganizationService
+from app.services.raw_lineage_service import RawStorageObjectService
 from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
@@ -52,6 +55,12 @@ MANAGED_TABLES = {
     "ingestion_batches",
     "datasets",
     "dataset_versions",
+    "raw_storage_objects",
+    "raw_record_references",
+    "processing_runs",
+    "lineage_nodes",
+    "lineage_edges",
+    "lineage_events",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -246,6 +255,40 @@ def assert_schema_at_head(engine: Engine) -> None:
         for foreign_key in inspector.get_foreign_keys("dataset_versions")
     } == {"organizations", "datasets", "ingestion_batches"}
 
+    wp_205_json_columns = {
+        "raw_storage_objects": "metadata_json",
+        "raw_record_references": "metadata_json",
+        "processing_runs": "parameters_json",
+        "lineage_nodes": "metadata_json",
+        "lineage_edges": "metadata_json",
+        "lineage_events": "metadata_json",
+    }
+    for table, json_column in wp_205_json_columns.items():
+        columns = {column["name"]: column for column in inspector.get_columns(table)}
+        assert str(columns["id"]["type"]) == "UUID"
+        assert str(columns["organization_id"]["type"]) == "UUID"
+        assert str(columns[json_column]["type"]) == "JSONB"
+    assert "uq_raw_objects_organization_number" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("raw_storage_objects")
+    }
+    assert "uq_raw_records_object_sequence" in {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("raw_record_references")
+    }
+    assert "uq_lineage_node_entity" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("lineage_nodes")
+    }
+    assert {
+        "organizations",
+        "source_systems",
+        "ingestion_batches",
+        "dataset_versions",
+        "raw_storage_objects",
+    } == {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("raw_storage_objects")
+    }
+
     expected_indexes = {
         "findings": {
             "ix_findings_domain",
@@ -294,11 +337,24 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    command.downgrade(config, "20260724_0004")
+    wp_205_tables = {
+        "raw_storage_objects",
+        "raw_record_references",
+        "processing_runs",
+        "lineage_nodes",
+        "lineage_edges",
+        "lineage_events",
+    }
+    assert not (wp_205_tables & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     command.downgrade(config, "20260724_0003")
     wp_203_tables = set(inspect(postgres_engine).get_table_names())
     wp_204_tables = {"ingestion_batches", "datasets", "dataset_versions"}
     assert not (wp_204_tables & wp_203_tables)
-    assert MANAGED_TABLES - wp_204_tables <= wp_203_tables
+    assert MANAGED_TABLES - wp_204_tables - wp_205_tables <= wp_203_tables
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
@@ -438,6 +494,91 @@ def test_ingestion_governance_on_postgres(postgres_engine: Engine) -> None:
             1,
             12,
         )
+
+
+@pytest.mark.postgres
+def test_raw_storage_uuid_scope_and_foreign_keys_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    organization_service = OrganizationService()
+    source_service = SourceSystemService()
+    batch_service = IngestionBatchService()
+    dataset_service = DatasetService()
+    version_service = DatasetVersionService(dataset_service, batch_service)
+    raw_service = RawStorageObjectService()
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        organization = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Raw",
+                slug=f"postgres-raw-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        source = source_service.create(
+            session,
+            organization.id,
+            SourceSystemCreate(
+                name="Raw source",
+                code="raw-source",
+                system_type="erp",
+                integration_method="file_upload",
+            ),
+            uuid4(),
+        )
+        batch = batch_service.create(
+            session,
+            organization.id,
+            IngestionBatchCreate(
+                source_system_id=source.id,
+                batch_number=f"raw-batch-{suffix}",
+                ingestion_method="file_upload",
+                trigger_type="manual",
+            ),
+            uuid4(),
+        )
+        dataset = dataset_service.create(
+            session,
+            organization.id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Raw dataset",
+                code=f"raw-dataset-{suffix}",
+                domain="operations",
+                dataset_type="transactional",
+            ),
+            uuid4(),
+        )
+        version = version_service.create(
+            session,
+            organization.id,
+            dataset.id,
+            DatasetVersionCreate(ingestion_batch_id=batch.id),
+        )
+        raw_object = raw_service.register(
+            session,
+            organization.id,
+            RawStorageObjectCreate(
+                source_system_id=source.id,
+                ingestion_batch_id=batch.id,
+                dataset_version_id=version.id,
+                object_number=f"raw-object-{suffix}",
+                object_type="file",
+                storage_provider="local",
+                storage_reference=f"opaque/raw-object-{suffix}",
+                content_checksum_algorithm="sha256",
+                content_checksum="a" * 64,
+                size_bytes=42,
+                received_at=datetime.now(UTC),
+            ),
+            uuid4(),
+        )
+        assert isinstance(raw_object.id, UUID)
+        assert raw_service.list(session, organization.id) == [raw_object]
 
 
 @pytest.mark.postgres

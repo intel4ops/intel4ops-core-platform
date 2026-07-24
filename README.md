@@ -90,6 +90,8 @@ The governed registry and its credential boundary are documented in
 [Source systems registry](docs/source-systems.md).
 Ingestion governance, lifecycle, idempotency, and reconciliation are documented in
 [Ingestion control](docs/ingestion-control.md).
+Raw artifact identity, integrity, retention, processing history, and bounded lineage
+are documented in [Raw storage and lineage](docs/raw-storage-lineage.md).
 
 ## Migrations
 
@@ -98,7 +100,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0004`.
+Current head revision: `20260724_0005`.
 
 ## Tests and quality checks
 
