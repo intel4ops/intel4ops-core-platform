@@ -68,16 +68,26 @@ pytest
 ### Disposable PostgreSQL migration test
 
 No production credentials are required. Create a separate empty local PostgreSQL
-database (a local Docker container is suitable), set only `TEST_POSTGRES_URL`, and run:
+database (a local Docker container is suitable), give it a name containing `test`,
+`testing`, `disposable`, or `validation`, and set:
+
+```text
+TEST_POSTGRES_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/TEST_DATABASE
+CONFIRM_DISPOSABLE_POSTGRES=1
+```
+
+The confirmation flag explicitly permits the destructive downgrade portion of the
+migration lifecycle. Then run:
 
 ```bash
 pytest -m postgres tests/test_postgres_migrations.py
 ```
 
-The test refuses non-PostgreSQL URLs and refuses a URL equal to `DATABASE_URL`.
-The target database must be disposable because the test performs a complete
-upgrade/downgrade/re-upgrade round trip. Never set `TEST_POSTGRES_URL` to Mobility
-production or any shared environment.
+The test refuses non-PostgreSQL URLs, a URL equal to `DATABASE_URL`, database names
+without a disposable safety marker, or a missing confirmation flag. The target database
+must be disposable because the test performs a complete upgrade/downgrade/re-upgrade
+round trip. Never set `TEST_POSTGRES_URL` to Mobility production or any shared
+environment.
 
 ## Required maintenance file columns
 
