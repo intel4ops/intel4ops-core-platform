@@ -19,12 +19,17 @@ from app.models.entities import (
 )
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.memberships import MembershipCreate
+from app.schemas.source_systems import SourceSystemCreate
 from app.services.finding_service import FindingService
 from app.services.membership_service import (
     DuplicateMembershipError,
     OrganizationMembershipService,
 )
 from app.services.organization_service import OrganizationService
+from app.services.source_system_service import (
+    DuplicateSourceSystemCodeError,
+    SourceSystemService,
+)
 
 MANAGED_TABLES = {
     "organizations",
@@ -32,6 +37,7 @@ MANAGED_TABLES = {
     "finding_evidence",
     "recovery_actions",
     "organization_members",
+    "source_systems",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -143,6 +149,47 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert membership_foreign_keys[0]["referred_table"] == "organizations"
     assert membership_foreign_keys[0]["options"]["ondelete"] == "CASCADE"
 
+    source_columns = {column["name"]: column for column in inspector.get_columns("source_systems")}
+    assert {
+        "id",
+        "organization_id",
+        "code",
+        "credential_reference",
+        "configuration_metadata",
+        "capabilities",
+        "failure_count",
+        "created_by_user_id",
+        "updated_by_user_id",
+        "deactivated_at",
+    } <= set(source_columns)
+    assert str(source_columns["id"]["type"]) == "UUID"
+    assert str(source_columns["organization_id"]["type"]) == "UUID"
+    assert str(source_columns["configuration_metadata"]["type"]) == "JSONB"
+    assert {
+        "ix_source_systems_organization_id",
+        "ix_source_systems_system_type",
+        "ix_source_systems_status",
+        "ix_source_systems_health_status",
+        "ix_source_systems_provider",
+        "ix_source_systems_is_active",
+    } <= {index["name"] for index in inspector.get_indexes("source_systems")}
+    assert "uq_source_systems_organization_code" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("source_systems")
+    }
+    assert {
+        "ck_source_systems_failure_count",
+        "ck_source_systems_system_type",
+        "ck_source_systems_integration_method",
+        "ck_source_systems_environment",
+        "ck_source_systems_status",
+        "ck_source_systems_health_status",
+        "ck_source_systems_data_classification",
+    } <= {constraint["name"] for constraint in inspector.get_check_constraints("source_systems")}
+    source_foreign_keys = inspector.get_foreign_keys("source_systems")
+    assert len(source_foreign_keys) == 1
+    assert source_foreign_keys[0]["referred_table"] == "organizations"
+    assert source_foreign_keys[0]["options"]["ondelete"] == "RESTRICT"
+
     expected_indexes = {
         "findings": {
             "ix_findings_domain",
@@ -191,10 +238,10 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
-    command.downgrade(config, "20260724_0001")
-    wp_201_tables = set(inspect(postgres_engine).get_table_names())
-    assert "organization_members" not in wp_201_tables
-    assert MANAGED_TABLES - {"organization_members"} <= wp_201_tables
+    command.downgrade(config, "20260724_0002")
+    wp_202_tables = set(inspect(postgres_engine).get_table_names())
+    assert "source_systems" not in wp_202_tables
+    assert MANAGED_TABLES - {"source_systems"} <= wp_202_tables
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
@@ -204,6 +251,50 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
+
+
+@pytest.mark.postgres
+def test_source_system_uuid_scope_and_constraints(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    organization_service = OrganizationService()
+    source_service = SourceSystemService()
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        first = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Source First",
+                slug=f"postgres-source-first-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        second = organization_service.create(
+            session,
+            OrganizationCreate(
+                name="PostgreSQL Source Second",
+                slug=f"postgres-source-second-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        payload = SourceSystemCreate(
+            name="PostgreSQL ERP",
+            code="postgres-erp",
+            system_type="erp",
+            integration_method="database",
+            configuration_metadata={"schema": "public"},
+        )
+        actor = uuid4()
+        source = source_service.create(session, first.id, payload, actor)
+        assert isinstance(source.id, UUID)
+        assert source_service.list(session, first.id) == [source]
+        assert source_service.list(session, second.id) == []
+        with pytest.raises(DuplicateSourceSystemCodeError):
+            source_service.create(session, first.id, payload, actor)
+        source_service.create(session, second.id, payload, actor)
 
 
 @pytest.mark.postgres
