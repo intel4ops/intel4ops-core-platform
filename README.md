@@ -159,3 +159,9 @@ asset_id,failure_code,downtime_hours,repair_cost
 Production authentication intentionally fails closed until a real identity provider is
 configured. The test identity dependency used by the test suite is not a production
 authentication implementation and must never be enabled in a deployed environment.
+
+## Findings and explainability
+
+WP-2.08 governed findings, immutable evidence, trace, review, lifecycle,
+deduplication, and tenant-safe API contracts are documented in
+[`docs/findings-evidence-explainability.md`](docs/findings-evidence-explainability.md).

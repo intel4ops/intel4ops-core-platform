@@ -1,3 +1,11 @@
+from app.models.findings import (
+    FindingCalculationTrace,
+    FindingEvidenceBundle,
+    FindingEvidenceItem,
+    FindingReview,
+    FindingRuleTrace,
+    FindingStatusHistory,
+)
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
 from app.models.raw_lineage import (
     LineageEdge,
@@ -27,4 +35,10 @@ __all__ = [
     "TrustRuleResult",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",
+    "FindingCalculationTrace",
+    "FindingEvidenceBundle",
+    "FindingEvidenceItem",
+    "FindingReview",
+    "FindingRuleTrace",
+    "FindingStatusHistory",
 ]
