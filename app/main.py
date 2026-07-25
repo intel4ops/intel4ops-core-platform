@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.finding_routes import router as finding_router
 from app.api.ingestion_routes import router as ingestion_router
 from app.api.intelligence_routes import router as intelligence_router
 from app.api.membership_routes import router as membership_router
@@ -40,3 +41,4 @@ app.include_router(ingestion_router)
 app.include_router(raw_lineage_router)
 app.include_router(trust_router)
 app.include_router(intelligence_router)
+app.include_router(finding_router)

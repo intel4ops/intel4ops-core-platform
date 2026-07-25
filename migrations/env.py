@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.db.session import Base
 from app.models import (
     entities,  # noqa: F401
+    findings,  # noqa: F401
     ingestion,  # noqa: F401
     intelligence,  # noqa: F401
     raw_lineage,  # noqa: F401

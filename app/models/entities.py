@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -14,11 +15,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -53,11 +56,24 @@ class MembershipStatus(StrEnum):
 
 
 class FindingStatus(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    UNDER_REVIEW = "under_review"
+    CONFIRMED = "confirmed"
+    DISMISSED = "dismissed"
+    SUPERSEDED = "superseded"
+    RESOLVED = "resolved"
+    ARCHIVED = "archived"
     OPEN = "open"
     ACCEPTED = "accepted"
-    DISMISSED = "dismissed"
     IN_RECOVERY = "in_recovery"
     VERIFIED = "verified"
+
+
+portable_json = JSON().with_variant(
+    postgresql.JSONB(astext_type=Text()),
+    "postgresql",
+)
 
 
 class Organization(Base):
@@ -128,6 +144,34 @@ class OrganizationMembership(Base):
 
 class Finding(Base):
     __tablename__ = "findings"
+    __table_args__ = (
+        Index(
+            "uq_findings_organization_deduplication",
+            "organization_id",
+            "deduplication_key",
+            unique=True,
+        ),
+        CheckConstraint(
+            "confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 1)",
+            name="ck_findings_confidence_score",
+        ),
+        CheckConstraint(
+            "affected_record_count >= 0",
+            name="ck_findings_affected_record_count",
+        ),
+        Index("ix_findings_organization_status", "organization_id", "status"),
+        Index("ix_findings_organization_type", "organization_id", "finding_type"),
+        Index("ix_findings_organization_severity", "organization_id", "severity"),
+        Index("ix_findings_organization_detected", "organization_id", "detected_at"),
+        Index("ix_findings_organization_occurrence", "organization_id", "occurrence_start"),
+        Index("ix_findings_source_execution", "organization_id", "source_execution_id"),
+        Index(
+            "ix_findings_definition",
+            "organization_id",
+            "definition_code",
+            "definition_version",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -142,13 +186,78 @@ class Finding(Base):
     exposure_low: Mapped[float] = mapped_column(Float, default=0)
     exposure_high: Mapped[float] = mapped_column(Float, default=0)
     currency: Mapped[str] = mapped_column(String(10), default="USD")
-    confidence_score: Mapped[float] = mapped_column(Float, default=0)
+    confidence_score: Mapped[Decimal] = mapped_column(Numeric(6, 4), default=Decimal("0"))
     status: Mapped[str] = mapped_column(String(50), default=FindingStatus.OPEN.value)
     ontology_concept_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     causal_chain_id: Mapped[str | None] = mapped_column(String, nullable=True)
     first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     last_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    finding_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    finding_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    domain_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    process_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    industry_pack_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    severity_reason: Mapped[dict[str, object] | None] = mapped_column(portable_json, nullable=True)
+    confidence_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    confidence_method_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    confidence_method_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    confidence_components: Mapped[dict[str, object] | None] = mapped_column(
+        portable_json, nullable=True
+    )
+    confidence_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence_limitations: Mapped[list[str] | None] = mapped_column(portable_json, nullable=True)
+    measured_value: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    measured_value_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    measured_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    measured_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    exposure_value: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), nullable=True)
+    exposure_value_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    exposure_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    affected_record_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    occurrence_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    occurrence_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_by_finding_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("findings.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_execution_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("intelligence_executions.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_result_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("intelligence_executions.id", ondelete="RESTRICT"), nullable=True
+    )
+    definition_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    definition_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    definition_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trust_assessment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("trust_assessments.id", ondelete="RESTRICT"), nullable=True
+    )
+    analytical_readiness_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("analytical_readiness_decisions.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    dataset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("datasets.id", ondelete="RESTRICT"), nullable=True
+    )
+    dataset_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    warnings: Mapped[list[str] | None] = mapped_column(portable_json, nullable=True)
+    limitations: Mapped[list[str] | None] = mapped_column(portable_json, nullable=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deduplication_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organization: Mapped[Organization] = relationship(back_populates="findings")
     evidence: Mapped[list[FindingEvidence]] = relationship(

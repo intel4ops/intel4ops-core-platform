@@ -19,6 +19,7 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.schemas.contracts import FindingCreate, OrganizationCreate
+from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import (
     DatasetCreate,
     DatasetVersionCountsUpdate,
@@ -30,6 +31,10 @@ from app.schemas.memberships import MembershipCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
+from app.services.finding_platform_service import (
+    FindingPublicationService,
+    FindingQueryService,
+)
 from app.services.finding_service import FindingService
 from app.services.ingestion_service import (
     DatasetService,
@@ -71,6 +76,12 @@ MANAGED_TABLES = {
     "analytical_readiness_decisions",
     "intelligence_executions",
     "intelligence_execution_evidence",
+    "finding_evidence_bundles",
+    "finding_evidence_items",
+    "finding_calculation_traces",
+    "finding_rule_traces",
+    "finding_reviews",
+    "finding_status_history",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -348,6 +359,14 @@ def assert_schema_at_head(engine: Engine) -> None:
             "ix_findings_domain",
             "ix_findings_organization_id",
             "ix_findings_rule_id",
+            "ix_findings_organization_status",
+            "ix_findings_organization_type",
+            "ix_findings_organization_severity",
+            "ix_findings_organization_detected",
+            "ix_findings_organization_occurrence",
+            "ix_findings_source_execution",
+            "ix_findings_definition",
+            "uq_findings_organization_deduplication",
         },
         "finding_evidence": {
             "ix_finding_evidence_finding_id",
@@ -362,7 +381,19 @@ def assert_schema_at_head(engine: Engine) -> None:
         assert names <= {index["name"] for index in inspector.get_indexes(table)}
 
     expected_foreign_keys = {
-        "findings": {("organization_id", "organizations", "id")},
+        "findings": {
+            ("organization_id", "organizations", "id"),
+            ("superseded_by_finding_id", "findings", "id"),
+            ("source_execution_id", "intelligence_executions", "id"),
+            ("source_result_id", "intelligence_executions", "id"),
+            ("trust_assessment_id", "trust_assessments", "id"),
+            (
+                "analytical_readiness_id",
+                "analytical_readiness_decisions",
+                "id",
+            ),
+            ("dataset_id", "datasets", "id"),
+        },
         "finding_evidence": {
             ("finding_id", "findings", "id"),
             ("organization_id", "organizations", "id"),
@@ -383,11 +414,37 @@ def assert_schema_at_head(engine: Engine) -> None:
         }
         assert actual == expected
 
+    finding_columns = {column["name"]: column for column in inspector.get_columns("findings")}
+    assert str(finding_columns["measured_value"]["type"]) == "NUMERIC(38, 12)"
+    assert str(finding_columns["exposure_value"]["type"]) == "NUMERIC(38, 12)"
+    assert str(finding_columns["confidence_score"]["type"]) == "NUMERIC(6, 4)"
+    assert str(finding_columns["severity_reason"]["type"]) == "JSONB"
+    assert str(finding_columns["warnings"]["type"]) == "JSONB"
+    assert str(finding_columns["limitations"]["type"]) == "JSONB"
+    evidence_item_columns = {
+        column["name"]: column for column in inspector.get_columns("finding_evidence_items")
+    }
+    assert str(evidence_item_columns["metadata_json"]["type"]) == "JSONB"
+    assert str(evidence_item_columns["comparison_value"]["type"]) == "NUMERIC(38, 12)"
+
 
 @pytest.mark.postgres
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_208_tables = {
+        "finding_evidence_bundles",
+        "finding_evidence_items",
+        "finding_calculation_traces",
+        "finding_rule_traces",
+        "finding_reviews",
+        "finding_status_history",
+    }
+    command.downgrade(config, "20260724_0007")
+    assert not (wp_208_tables & set(inspect(postgres_engine).get_table_names()))
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -429,7 +486,12 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     wp_204_tables = {"ingestion_batches", "datasets", "dataset_versions"}
     assert not (wp_204_tables & wp_203_tables)
     assert (
-        MANAGED_TABLES - wp_204_tables - wp_205_tables - wp_206_tables - wp_207_tables
+        MANAGED_TABLES
+        - wp_204_tables
+        - wp_205_tables
+        - wp_206_tables
+        - wp_207_tables
+        - wp_208_tables
         <= wp_203_tables
     )
 
@@ -890,3 +952,48 @@ def test_intelligence_decimal_and_tenant_scope_on_postgres(
         assert str(execution.result_value) == "0.300000000000"
         assert intelligence_service.list(session, organizations[0].id) == [execution]
         assert intelligence_service.list(session, organizations[1].id) == []
+        finding = FindingPublicationService().publish_candidate_finding(
+            session,
+            organizations[0].id,
+            CandidateFindingCreate(
+                execution_id=execution.id,
+                result_id=execution.id,
+                finding_type="kpi",
+                title="PostgreSQL exact arithmetic result",
+                summary="Synthetic PostgreSQL finding publication.",
+                domain_code="finance",
+                measured_value=execution.result_value,
+                measured_value_type="currency",
+                measured_currency="USD",
+                severity="info",
+                severity_reason={"policy": "postgres-validation"},
+                dataset_reference=f"{dataset.code}@postgres-validation",
+                evidence_policy_code="WP208-POSTGRES",
+                evidence_policy_version="1.0",
+                calculation_traces=[
+                    {
+                        "operation_code": "sum",
+                        "input_reference_summary": {"dataset_id": str(dataset.id)},
+                        "parameter_summary": {"field": "amount"},
+                    }
+                ],
+            ),
+            actor,
+        )
+        assert str(finding.measured_value) == "0.300000000000"
+        own, own_count = FindingQueryService().list(
+            session,
+            organizations[0].id,
+            page=1,
+            page_size=10,
+        )
+        other, other_count = FindingQueryService().list(
+            session,
+            organizations[1].id,
+            page=1,
+            page_size=10,
+        )
+        assert own == [finding]
+        assert own_count == 1
+        assert other == []
+        assert other_count == 0
