@@ -14,6 +14,7 @@ from app.models import (
     orchestration,  # noqa: F401
     raw_lineage,  # noqa: F401
     source_system,  # noqa: F401
+    statistics,  # noqa: F401
     trust,  # noqa: F401
 )
 

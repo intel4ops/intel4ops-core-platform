@@ -23,6 +23,7 @@ from app.schemas.orchestration import OrchestrationAnalyticalLevel
 class DefinitionKnowledgeClass(StrEnum):
     CALCULATION = "calculation"
     DETERMINISTIC_RULE = "deterministic_rule"
+    STATISTICAL_METHOD = "statistical_method"
 
 
 @dataclass(frozen=True)
@@ -192,7 +193,11 @@ class GovernedOIKBDefinitionResolver:
         knowledge_class = (
             DefinitionKnowledgeClass.DETERMINISTIC_RULE
             if expected_type == ExecutionType.RULE
-            else DefinitionKnowledgeClass.CALCULATION
+            else (
+                DefinitionKnowledgeClass.STATISTICAL_METHOD
+                if definition.analytical_level == OrchestrationAnalyticalLevel.STATISTICAL.value
+                else DefinitionKnowledgeClass.CALCULATION
+            )
         )
         return ResolvedDefinition(
             code=definition.stable_code,
@@ -209,7 +214,11 @@ class GovernedOIKBDefinitionResolver:
             required_engine_capability=(
                 "bounded_deterministic_rule"
                 if expected_type == ExecutionType.RULE
-                else "bounded_arithmetic"
+                else (
+                    "bounded_statistical_intelligence"
+                    if definition.analytical_level == OrchestrationAnalyticalLevel.STATISTICAL.value
+                    else "bounded_arithmetic"
+                )
             ),
             is_active=True,
             publication_eligible=True,

@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -50,8 +51,10 @@ from app.schemas.orchestration import (
     OrchestrationStepType,
     SufficiencyStatus,
 )
+from app.schemas.statistics import StatisticalExecutionCreate, StatisticalObservationInput
 from app.services.finding_platform_service import FindingPlatformError, finding_publication_service
 from app.services.intelligence_service import intelligence_execution_service
+from app.services.statistical_service import statistical_execution_service
 
 POLICY_CODE = "PROGRESSIVE_INTELLIGENCE"
 POLICY_VERSION = "1.0"
@@ -124,6 +127,136 @@ class DeterministicRuleEngineAdapter:
         return _embedded_output(execution)
 
 
+class StatisticalEngineAdapter:
+    capability = EngineCapability(
+        engine_code="STATISTICAL_INTELLIGENCE_ENGINE",
+        engine_name="Intel4Ops Statistical Intelligence Engine",
+        engine_version="1.0",
+        analytical_level=OrchestrationAnalyticalLevel.STATISTICAL,
+        capability_code="bounded_statistical_intelligence",
+        implementation_reference="app.services.statistical_service",
+    )
+
+    def can_execute(self, definition_level: OrchestrationAnalyticalLevel) -> bool:
+        return definition_level == self.capability.analytical_level
+
+    def execute(
+        self,
+        db: Session,
+        organization_id: UUID,
+        payload: OrchestrationCreate,
+        actor_user_id: UUID,
+        execution_idempotency_key: str,
+    ) -> EngineExecutionResult:
+        observations = [
+            StatisticalObservationInput(
+                value=record.get("value", record.get("observed_value")),
+                entity_reference=(
+                    str(record["entity_reference"])
+                    if record.get("entity_reference") is not None
+                    else None
+                ),
+                period_reference=(
+                    str(record["period_reference"])
+                    if record.get("period_reference") is not None
+                    else None
+                ),
+                timestamp=record.get("timestamp"),
+                period_status=record.get("period_status", "complete"),
+                unit=payload.unit,
+                currency=payload.currency,
+                materiality=float(str(record.get("materiality", 0.5))),
+                known_event=bool(record.get("known_event", False)),
+                planned_maintenance=bool(record.get("planned_maintenance", False)),
+                approved_business_event=bool(record.get("approved_business_event", False)),
+            )
+            for record in payload.records
+        ]
+        statistical = statistical_execution_service.execute(
+            db,
+            organization_id,
+            StatisticalExecutionCreate(
+                definition_code=payload.definition_code,
+                definition_version=payload.definition_version,
+                trust_assessment_id=payload.trust_assessment_id,
+                readiness_assessment_id=payload.analytical_readiness_id,
+                dataset_reference=payload.dataset_reference,
+                dataset_fingerprint=str(
+                    payload.request_context.get("dataset_fingerprint")
+                    or _hash({"dataset": payload.dataset_reference, "records": payload.records})
+                ),
+                source_lineage_reference=str(
+                    payload.request_context.get("source_lineage_reference")
+                    or f"dataset:{payload.dataset_reference}"
+                ),
+                observations=observations,
+                parameters=payload.parameters,
+                correlation_id=payload.correlation_id,
+                idempotency_key=execution_idempotency_key,
+            ),
+            actor_user_id,
+        )
+        statistical_observations = statistical_execution_service.observations_for(
+            db, organization_id, statistical.id
+        )
+        result = statistical_observations[0] if statistical_observations else None
+        status = (
+            IntelligenceExecutionStatus.COMPLETED.value
+            if statistical.status == "succeeded"
+            else (
+                IntelligenceExecutionStatus.BLOCKED.value
+                if statistical.status
+                in {"blocked", "not_ready", "insufficient_data", "unsupported"}
+                else IntelligenceExecutionStatus.FAILED.value
+            )
+        )
+        bridge = IntelligenceExecution(
+            organization_id=organization_id,
+            dataset_id=payload.dataset_id,
+            dataset_version_id=payload.dataset_version_id,
+            trust_assessment_id=payload.trust_assessment_id,
+            readiness_decision_id=payload.analytical_readiness_id,
+            execution_type=ExecutionType.CALCULATION.value,
+            definition_code=payload.definition_code,
+            definition_version=payload.definition_version,
+            definition_fingerprint=statistical.execution_package_fingerprint,
+            input_fingerprint=statistical.reproducibility_fingerprint,
+            status=status,
+            idempotency_key=f"{execution_idempotency_key}:bridge",
+            parameters_json=dict(payload.parameters),
+            result_value=(Decimal(str(result.statistical_score)) if result is not None else None),
+            unit="score",
+            checked_record_count=len(payload.records),
+            excluded_record_count=sum(
+                1 for observation in observations if observation.value is None
+            ),
+            affected_record_count=int(bool(result and result.is_anomaly)),
+            blocking_rule_codes=[],
+            warning_rule_codes=[],
+            warnings=list(statistical.warnings),
+            limitations=[
+                *statistical.limitations,
+                f"Statistical execution reference: {statistical.id}",
+            ],
+            non_execution_reason=statistical.blocked_reason or statistical.failure_message,
+            evaluation_time=datetime.now(UTC),
+            created_by_user_id=actor_user_id,
+            completed_at=statistical.completed_at,
+        )
+        db.add(bridge)
+        db.commit()
+        db.refresh(bridge)
+        return EngineExecutionResult(
+            execution=bridge,
+            output=AnalyticalOutputReference(
+                execution_id=bridge.id,
+                result_id=bridge.id,
+                result_locator=f"statistical_execution:{statistical.id}",
+                output_index=0,
+            ),
+        )
+
+
 def _embedded_output(execution: IntelligenceExecution) -> EngineExecutionResult:
     return EngineExecutionResult(
         execution=execution,
@@ -166,6 +299,7 @@ def default_engine_registry() -> EngineRegistry:
     registry = EngineRegistry()
     registry.register(ArithmeticEngineAdapter())
     registry.register(DeterministicRuleEngineAdapter())
+    registry.register(StatisticalEngineAdapter())
     return registry
 
 
@@ -707,7 +841,10 @@ class OrchestrationService:
         )
         engine_payload = payload
         governed_operation = definition.scope_metadata.get("operation")
-        if definition.scope_metadata.get("legacy_fallback") is False:
+        if (
+            definition.scope_metadata.get("legacy_fallback") is False
+            and definition_level != OrchestrationAnalyticalLevel.STATISTICAL
+        ):
             if not isinstance(governed_operation, str):
                 raise OrchestrationError(
                     "DEFINITION_PACKAGE_INVALID",
@@ -728,7 +865,10 @@ class OrchestrationService:
         )
         execution = engine_result.execution
         output = engine_result.output
-        if definition.scope_metadata.get("legacy_fallback") is False:
+        if (
+            definition.scope_metadata.get("legacy_fallback") is False
+            and definition_level != OrchestrationAnalyticalLevel.STATISTICAL
+        ):
             execution.definition_code = definition.code
             execution.definition_version = definition.version
             execution.definition_fingerprint = definition.definition_fingerprint

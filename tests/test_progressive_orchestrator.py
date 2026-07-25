@@ -416,7 +416,7 @@ def test_arithmetic_fallback_preserves_result_when_advanced_engine_is_absent(
 
     assert outcome.status == "completed_with_limitations"
     assert "arithmetic fallback" in outcome.limitations[0]
-    assert decisions[-1].escalation_status == "not_supported"
+    assert decisions[-1].escalation_status == "not_required"
     assert all(decision.selected_engine_code != "STATISTICAL_ENGINE" for decision in decisions)
 
 
@@ -471,6 +471,7 @@ def test_engine_registry_has_only_real_engines_and_persists_capabilities(
     assert [engine.engine_code for engine in engines] == [
         "ARITHMETIC_ENGINE",
         "DETERMINISTIC_RULE_ENGINE",
+        "STATISTICAL_INTELLIGENCE_ENGINE",
     ]
     assert all(engine.is_available and engine.supports_sync for engine in engines)
     assert (

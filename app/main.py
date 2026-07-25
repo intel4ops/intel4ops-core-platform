@@ -13,6 +13,7 @@ from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.routes import router
 from app.api.source_system_routes import router as source_system_router
+from app.api.statistical_routes import router as statistical_router
 from app.api.trust_routes import router as trust_router
 from app.core.config import get_settings
 
@@ -48,3 +49,4 @@ app.include_router(finding_router)
 app.include_router(orchestration_router)
 app.include_router(engine_router)
 app.include_router(oikb_router)
+app.include_router(statistical_router)

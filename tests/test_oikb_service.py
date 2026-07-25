@@ -385,8 +385,8 @@ def test_source_provenance_execution_package_and_unsupported_level(db: Session) 
         db, "SHARED.OPERATIONS.STATISTICAL", level=AnalyticalLevel.STATISTICAL
     )
     activate(db, advanced_version, advanced_actor)
-    with pytest.raises(OIKBUnsupportedError):
-        execution_package_export_service.export(db, advanced_version)
+    statistical_package = execution_package_export_service.export(db, advanced_version)
+    assert statistical_package.analytical_level == "statistical"
     assert advanced.analytical_level == "statistical"
 
 
