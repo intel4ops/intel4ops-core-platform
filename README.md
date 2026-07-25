@@ -165,3 +165,10 @@ authentication implementation and must never be enabled in a deployed environmen
 WP-2.08 governed findings, immutable evidence, trace, review, lifecycle,
 deduplication, and tenant-safe API contracts are documented in
 [`docs/findings-evidence-explainability.md`](docs/findings-evidence-explainability.md).
+
+## Progressive Intelligence
+
+WP-2.09 arithmetic-first method selection, explicit engine adapters,
+sufficiency and escalation policy, idempotency, and explainability are
+documented in
+[`docs/progressive-intelligence-orchestrator.md`](docs/progressive-intelligence-orchestrator.md).

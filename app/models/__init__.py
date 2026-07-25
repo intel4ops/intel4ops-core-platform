@@ -7,6 +7,13 @@ from app.models.findings import (
     FindingStatusHistory,
 )
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
+from app.models.orchestration import (
+    IntelligenceEngineRegistration,
+    IntelligenceOrchestrationDecision,
+    IntelligenceOrchestrationRequest,
+    IntelligenceOrchestrationStatusHistory,
+    IntelligenceOrchestrationStep,
+)
 from app.models.raw_lineage import (
     LineageEdge,
     LineageEvent,
@@ -35,6 +42,11 @@ __all__ = [
     "TrustRuleResult",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",
+    "IntelligenceEngineRegistration",
+    "IntelligenceOrchestrationDecision",
+    "IntelligenceOrchestrationRequest",
+    "IntelligenceOrchestrationStatusHistory",
+    "IntelligenceOrchestrationStep",
     "FindingCalculationTrace",
     "FindingEvidenceBundle",
     "FindingEvidenceItem",

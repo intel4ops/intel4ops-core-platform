@@ -5,6 +5,7 @@ Revises: 20260724_0007
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
@@ -21,8 +22,8 @@ portable_json = sa.JSON().with_variant(
 )
 
 
-def _finding_columns(*, include_foreign_keys: bool = True) -> list[sa.Column[object]]:
-    def uuid_reference(name: str, target: str) -> sa.Column[object]:
+def _finding_columns(*, include_foreign_keys: bool = True) -> list[sa.Column[Any]]:
+    def uuid_reference(name: str, target: str) -> sa.Column[Any]:
         if not include_foreign_keys:
             return sa.Column(name, sa.Uuid(), nullable=True)
         return sa.Column(
