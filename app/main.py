@@ -7,6 +7,8 @@ from app.api.finding_routes import router as finding_router
 from app.api.ingestion_routes import router as ingestion_router
 from app.api.intelligence_routes import router as intelligence_router
 from app.api.membership_routes import router as membership_router
+from app.api.orchestration_routes import engine_router
+from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.routes import router
 from app.api.source_system_routes import router as source_system_router
@@ -42,3 +44,5 @@ app.include_router(raw_lineage_router)
 app.include_router(trust_router)
 app.include_router(intelligence_router)
 app.include_router(finding_router)
+app.include_router(orchestration_router)
+app.include_router(engine_router)

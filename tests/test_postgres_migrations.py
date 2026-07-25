@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -18,6 +18,8 @@ from app.models.entities import (
     MembershipStatus,
     OrganizationMembership,
 )
+from app.models.orchestration import IntelligenceOrchestrationRequest
+from app.models.trust import AnalyticalReadinessDecision
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import (
@@ -28,6 +30,7 @@ from app.schemas.ingestion import (
 )
 from app.schemas.intelligence import IntelligenceExecutionCreate
 from app.schemas.memberships import MembershipCreate
+from app.schemas.orchestration import OrchestrationCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
@@ -46,6 +49,7 @@ from app.services.membership_service import (
     DuplicateMembershipError,
     OrganizationMembershipService,
 )
+from app.services.orchestration_service import OrchestrationService
 from app.services.organization_service import OrganizationService
 from app.services.raw_lineage_service import RawStorageObjectService
 from app.services.source_system_service import (
@@ -82,6 +86,11 @@ MANAGED_TABLES = {
     "finding_rule_traces",
     "finding_reviews",
     "finding_status_history",
+    "intelligence_orchestration_requests",
+    "intelligence_orchestration_decisions",
+    "intelligence_orchestration_steps",
+    "intelligence_engine_registrations",
+    "intelligence_orchestration_status_history",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -427,11 +436,73 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert str(evidence_item_columns["metadata_json"]["type"]) == "JSONB"
     assert str(evidence_item_columns["comparison_value"]["type"]) == "NUMERIC(38, 12)"
 
+    orchestration_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("intelligence_orchestration_requests")
+    }
+    assert str(orchestration_columns["id"]["type"]) == "UUID"
+    assert str(orchestration_columns["organization_id"]["type"]) == "UUID"
+    assert str(orchestration_columns["parameters_summary"]["type"]) == "JSONB"
+    assert str(orchestration_columns["request_context"]["type"]) == "JSONB"
+    assert {
+        "ix_orchestration_requests_organization_status",
+        "ix_orchestration_requests_organization_definition",
+        "ix_orchestration_requests_organization_requested",
+        "ix_orchestration_requests_dataset_id",
+        "ix_orchestration_requests_trust_assessment_id",
+        "ix_orchestration_requests_readiness_id",
+    } <= {index["name"] for index in inspector.get_indexes("intelligence_orchestration_requests")}
+    orchestration_uniques = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("intelligence_orchestration_requests")
+    }
+    assert {
+        "uq_orchestration_requests_organization_idempotency",
+        "uq_orchestration_requests_organization_correlation",
+    } <= orchestration_uniques
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("intelligence_orchestration_requests")
+    } == {
+        "organizations",
+        "datasets",
+        "dataset_versions",
+        "trust_assessments",
+        "analytical_readiness_decisions",
+    }
+    step_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("intelligence_orchestration_steps")
+    }
+    assert str(step_columns["input_reference_summary"]["type"]) == "JSONB"
+    assert str(step_columns["source_execution_id"]["type"]) == "UUID"
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("intelligence_orchestration_steps")
+    } == {
+        "organizations",
+        "intelligence_orchestration_requests",
+        "intelligence_executions",
+        "findings",
+    }
+
 
 @pytest.mark.postgres
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_209_tables = {
+        "intelligence_orchestration_requests",
+        "intelligence_orchestration_decisions",
+        "intelligence_orchestration_steps",
+        "intelligence_engine_registrations",
+        "intelligence_orchestration_status_history",
+    }
+    command.downgrade(config, "20260725_0008")
+    assert not (wp_209_tables & set(inspect(postgres_engine).get_table_names()))
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -492,6 +563,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_206_tables
         - wp_207_tables
         - wp_208_tables
+        - wp_209_tables
         <= wp_203_tables
     )
 
@@ -997,3 +1069,107 @@ def test_intelligence_decimal_and_tenant_scope_on_postgres(
         assert own_count == 1
         assert other == []
         assert other_count == 0
+
+
+@pytest.mark.postgres
+def test_orchestration_uuid_jsonb_idempotency_and_tenant_scope_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        actor = uuid4()
+        organizations = [
+            OrganizationService().create(
+                session,
+                OrganizationCreate(
+                    name=f"Orchestration {name}",
+                    slug=f"postgres-orchestration-{name}-{suffix}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                ),
+            )
+            for name in ("first", "second")
+        ]
+        source = SourceSystemService().create(
+            session,
+            organizations[0].id,
+            SourceSystemCreate(
+                name="Orchestration ERP",
+                code="orchestration-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            actor,
+        )
+        dataset = DatasetService().create(
+            session,
+            organizations[0].id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Orchestration values",
+                code=f"orchestration-values-{suffix}",
+                domain="finance",
+                dataset_type="transactional",
+                default_currency="USD",
+            ),
+            actor,
+        )
+        assessment = TrustAssessmentService().create_and_execute(
+            session,
+            organizations[0].id,
+            dataset.id,
+            TrustAssessmentCreate(
+                records=[{"id": "1", "amount": "0.10"}],
+                rule_configurations={
+                    "required_field_completeness": {"required_fields": ["id", "amount"]},
+                    "numeric_range_validity": {"numeric_ranges": {"amount": {"minimum": 0}}},
+                },
+            ),
+        )
+        readiness = session.scalar(
+            select(AnalyticalReadinessDecision).where(
+                AnalyticalReadinessDecision.trust_assessment_id == assessment.id,
+                AnalyticalReadinessDecision.analytical_level == "arithmetic",
+            )
+        )
+        assert readiness is not None
+        service = OrchestrationService()
+        payload = OrchestrationCreate(
+            definition_code="sum",
+            definition_version="1.0",
+            dataset_id=dataset.id,
+            dataset_reference=f"{dataset.code}@postgres",
+            trust_assessment_id=assessment.id,
+            analytical_readiness_id=readiness.id,
+            execution_type="calculation",
+            records=[{"amount": "0.10"}, {"amount": "0.20"}],
+            parameters={"field": "amount"},
+            currency="USD",
+            request_context={"synthetic": True},
+            correlation_id=f"postgres-correlation-{suffix}",
+            idempotency_key=f"postgres-idempotency-{suffix}",
+        )
+        orchestration = service.orchestrate(session, organizations[0].id, payload, actor)
+        duplicate = service.orchestrate(session, organizations[0].id, payload, actor)
+        assert isinstance(orchestration.id, UUID)
+        assert duplicate.id == orchestration.id
+        assert orchestration.request_context == {"synthetic": True}
+        own, own_count = service.list_requests(session, organizations[0].id, page=1, page_size=10)
+        other, other_count = service.list_requests(
+            session, organizations[1].id, page=1, page_size=10
+        )
+        assert own == [orchestration]
+        assert own_count == 1
+        assert other == []
+        assert other_count == 0
+        assert (
+            session.scalar(
+                select(IntelligenceOrchestrationRequest).where(
+                    IntelligenceOrchestrationRequest.id == orchestration.id,
+                    IntelligenceOrchestrationRequest.organization_id == organizations[1].id,
+                )
+            )
+            is None
+        )
