@@ -104,6 +104,17 @@ intentionally separate from the incomplete legacy readiness enum. SQLite cannot
 prove PostgreSQL UUID, JSONB, and unique-index behavior, so disposable
 PostgreSQL validation covers them explicitly.
 
+The orchestration service depends on the normalized `DefinitionResolver`
+protocol. `CodeBackedOIKBDefinitionResolver` is the temporary adapter over the
+static WP-2.07 registries and is the replacement boundary for a future
+persisted OIKB.
+
+`LEGACY_RULE_TO_ARITHMETIC_V1` makes the temporary rule-readiness bridge
+explicit in each affected decision. `AnalyticalOutputReference` similarly
+isolates embedded-result compatibility from a future multi-result persistence
+model. Engine registration and adapter metadata must match deterministically;
+persisted metadata alone never enables execution.
+
 The specification requires `mypy .`; merged main had two pre-existing generic
 typing errors in the WP-2.08 migration while CI checked only `app tests`. The
 WP-2.09 branch corrects those annotations without changing migration behavior.

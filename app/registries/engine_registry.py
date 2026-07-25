@@ -5,7 +5,11 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.intelligence import IntelligenceExecution
-from app.schemas.orchestration import OrchestrationAnalyticalLevel, OrchestrationCreate
+from app.schemas.orchestration import (
+    AnalyticalOutputReference,
+    OrchestrationAnalyticalLevel,
+    OrchestrationCreate,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,12 @@ class EngineCapability:
     implementation_reference: str = ""
 
 
+@dataclass(frozen=True)
+class EngineExecutionResult:
+    execution: IntelligenceExecution
+    output: AnalyticalOutputReference
+
+
 class EngineAdapter(Protocol):
     capability: EngineCapability
 
@@ -35,7 +45,7 @@ class EngineAdapter(Protocol):
         payload: OrchestrationCreate,
         actor_user_id: UUID,
         execution_idempotency_key: str,
-    ) -> IntelligenceExecution: ...
+    ) -> EngineExecutionResult: ...
 
 
 class EngineRegistryError(ValueError):

@@ -60,9 +60,27 @@ dataset. The supplied readiness decision must belong to the same assessment and
 cover the requested method. Rule-based execution maps to existing arithmetic
 readiness because WP-2.06 has no separate rule readiness level.
 
-Definitions resolve from the existing immutable calculation/rule registries.
-No caller-selected module is imported. Engine registrations synchronize from
-two explicit internal adapters and are read-only to platform administrators.
+The orchestrator depends on a typed normalized definition-resolution interface,
+not directly on the existing immutable calculation/rule registries.
+`CodeBackedOIKBDefinitionResolver` is the temporary adapter and supplies
+knowledge class, analytical/readiness levels, required engine capability,
+active/publication state, policy references, evidence policy, scope metadata,
+and a definition fingerprint. A persisted OIKB can replace the adapter without
+redesigning orchestration.
+
+Deterministic rules use the versioned
+`LEGACY_RULE_TO_ARITHMETIC_V1` compatibility policy. Decisions explicitly store
+requested level `rule_based`, evaluated readiness level `arithmetic`, mapping
+policy code/version, and a limitation warning. Arithmetic readiness blocks the
+rule when unsatisfied; no rule readiness row is fabricated. Recovery can inspect
+`economic_recovery` only through
+`LEGACY_RECOVERY_TO_ECONOMIC_RECOVERY_V1`.
+
+Persisted engine registration is necessary but cannot execute code. Eligibility
+also requires an explicit adapter with matching code, version, analytical
+level, capability, input/output contract versions, active status, and
+availability. No caller-selected module is imported and database values are
+never used for dynamic imports.
 
 Adapters construct the existing typed `IntelligenceExecutionCreate` contract
 and call `IntelligenceExecutionService`; calculation, rule, block, evidence,
@@ -129,8 +147,37 @@ sorting and workflow definitions are not accepted.
   eligibility does not exist.
 - Readiness has no rule-based, forecasting, reliability, or simulation rows.
 - WP-2.07 is synchronous and embeds results in execution rows.
+- `AnalyticalOutputReference` isolates that compatibility behavior with
+  `result_id = execution_id`, locator `embedded_result`, and output index `0`.
+  Orchestration and WP-2.08 publication consume the reference rather than
+  spreading the ID-equality assumption.
 - No distributed jobs, message broker, cancellation worker, or advanced engine
   is included.
 - Future engines must implement the typed adapter contract, be explicitly
   registered, declare contract versions, and receive matching OIKB/readiness
   support before becoming available.
+
+## Deferred architecture and replacement boundaries
+
+| Deferred item | Current compatibility behavior | Limitation | Required future work package | Replacement boundary | Expected migration impact |
+| --- | --- | --- | --- | --- | --- |
+| Persisted OIKB definitions and versions | Code-backed resolver normalizes static registries | No tenant-specific or persisted lifecycle | Future OIKB governance package | Implement `DefinitionResolver`; orchestration remains unchanged | Definition/version/policy tables and orchestration foreign keys |
+| Industry-pack registry | Scope metadata is code-backed and informational | Persisted industry eligibility cannot be proven | Industry-pack governance package | Definition resolver eligibility hook | Pack, assignment, and definition-link tables |
+| Dedicated rule-based readiness | `LEGACY_RULE_TO_ARITHMETIC_V1` evaluates arithmetic readiness | Rule-specific history and requirements cannot be expressed | Readiness expansion package | Compatibility policy returns direct `rule_based` | Expand readiness constraint and generate rule rows |
+| Forecasting readiness | Governed `UNSUPPORTED` unless approved arithmetic fallback applies | No history/horizon eligibility | Forecasting foundation package | Compatibility policy and future adapter | Readiness expansion and history-profile tables |
+| Reliability readiness | Governed `UNSUPPORTED` unless approved arithmetic fallback applies | No reliability population/exposure eligibility | Reliability foundation package | Compatibility policy and future adapter | Readiness expansion and reliability profiles |
+| Simulation readiness | Governed `UNSUPPORTED` unless approved arithmetic fallback applies | No scenario/distribution eligibility | Simulation foundation package | Compatibility policy and future adapter | Readiness expansion and simulation configuration |
+| Service identity | Internal calls retain authenticated user actor | No workload identity or service grant | Platform identity package | Authorization dependency and internal context | Service principals, grants, and actor-type audit fields |
+| Multi-result execution | Output reference uses `embedded_result`, index `0` | One scalar result per execution | Advanced-engine result package | Adapters return output references | Result/output table and reference foreign-key transition |
+
+## Quality-gate alignment
+
+Both local validation and `.github/workflows/quality-gate.yml` run:
+
+```text
+mypy .
+```
+
+The WP-2.08 migration annotation edit changes `Column[object]` to
+`Column[Any]` so its existing helper is type-correct under the expanded gate.
+It does not change generated SQL or migration behavior.

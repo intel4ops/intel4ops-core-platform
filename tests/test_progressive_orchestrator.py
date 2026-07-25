@@ -8,20 +8,28 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.definitions.resolution import (
+    CodeBackedOIKBDefinitionResolver,
+    DefinitionKnowledgeClass,
+)
 from app.models.entities import Finding
 from app.models.orchestration import (
     IntelligenceEngineRegistration,
     IntelligenceOrchestrationStep,
 )
 from app.models.trust import AnalyticalReadinessDecision, ReadinessStatus
+from app.registries.engine_registry import EngineRegistry
 from app.schemas.contracts import OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import DatasetCreate
+from app.schemas.intelligence import ExecutionType
 from app.schemas.orchestration import OrchestrationAnalyticalLevel, OrchestrationCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
 from app.services.ingestion_service import DatasetService
 from app.services.orchestration_service import (
+    ArithmeticEngineAdapter,
+    EngineRegistrationConsistencyService,
     OrchestrationError,
     OrchestrationService,
 )
@@ -174,6 +182,8 @@ def test_arithmetic_orchestration_is_explainable_and_reuses_wp207(db: Session) -
 
     assert outcome.status == "completed"
     assert execution_step.source_execution_id == execution_step.source_result_id
+    assert execution_step.result_locator == "embedded_result"
+    assert execution_step.output_index == 0
     assert execution_step.engine_code == "ARITHMETIC_ENGINE"
     assert decisions[-1].sufficiency_status == "sufficient"
     assert decisions[-1].escalation_status == "not_required"
@@ -212,6 +222,13 @@ def test_rule_orchestration_uses_only_registered_rule_engine(db: Session) -> Non
     assert step is not None
     assert step.engine_code == "DETERMINISTIC_RULE_ENGINE"
     assert step.analytical_level == "rule_based"
+    decisions = OrchestrationService().decisions(db, organization_id, outcome.id)
+    assert decisions[0].requested_level == "rule_based"
+    assert decisions[0].evaluated_readiness_level == "arithmetic"
+    assert decisions[0].readiness_mapping_policy_code == "LEGACY_RULE_TO_ARITHMETIC_V1"
+    assert decisions[0].readiness_mapping_policy_version == "1.0"
+    assert "Dedicated rule-based readiness is unavailable" in decisions[0].warnings[0]
+    assert any("LEGACY_RULE_TO_ARITHMETIC_V1" in item for item in outcome.warnings)
 
 
 def test_idempotency_conflicts_and_tenant_keys_are_isolated(db: Session) -> None:
@@ -312,7 +329,12 @@ def test_wp208_handoff_and_partial_completion_are_governed(db: Session) -> None:
     )
     assert published.status == "completed"
     assert finding_step.finding_id is not None
-    assert db.get(Finding, finding_step.finding_id) is not None
+    finding = db.get(Finding, finding_step.finding_id)
+    assert finding is not None
+    assert finding.source_execution_id == finding_step.source_execution_id
+    assert finding.source_result_id == finding_step.source_result_id
+    assert finding_step.result_locator == "embedded_result"
+    assert finding_step.output_index == 0
 
     partial = service.orchestrate(
         db,
@@ -349,6 +371,164 @@ def test_engine_registry_has_only_real_engines_and_persists_capabilities(
         )
         is None
     )
+
+
+def test_code_backed_oikb_adapter_returns_normalized_definition_contract() -> None:
+    resolver = CodeBackedOIKBDefinitionResolver()
+    calculation = resolver.resolve("sum", "1.0", ExecutionType.CALCULATION)
+    rule = resolver.resolve("threshold_exceeded", "1.0", ExecutionType.RULE)
+
+    assert calculation.knowledge_class == DefinitionKnowledgeClass.CALCULATION
+    assert calculation.analytical_level == "arithmetic"
+    assert calculation.required_readiness_level == "arithmetic"
+    assert calculation.required_engine_capability == "bounded_arithmetic"
+    assert calculation.is_active and calculation.publication_eligible
+    assert calculation.sufficiency_policy.code
+    assert calculation.escalation_policy.code
+    assert calculation.evidence_policy.code
+    assert isinstance(calculation.scope_metadata, dict)
+    assert len(calculation.definition_fingerprint) == 64
+    assert rule.knowledge_class == DefinitionKnowledgeClass.DETERMINISTIC_RULE
+    assert rule.analytical_level == "rule_based"
+    assert rule.required_readiness_level == "arithmetic"
+
+
+def test_rule_bridge_blocks_without_arithmetic_readiness_and_fabricates_nothing(
+    db: Session,
+) -> None:
+    organization_id, dataset_id, assessment_id, readiness_id = foundation(
+        db, "orchestration-rule-readiness-block"
+    )
+    readiness = db.get(AnalyticalReadinessDecision, readiness_id)
+    assert readiness is not None
+    readiness.readiness_status = ReadinessStatus.BLOCKED.value
+    readiness.explanation = "Arithmetic readiness is blocked"
+    db.commit()
+    payload = request(
+        dataset_id,
+        assessment_id,
+        readiness_id,
+        key="rule-readiness-block",
+        execution_type="rule",
+        definition_code="threshold_exceeded",
+        parameters={"value": 12, "threshold": 10},
+        records=[],
+    )
+    service = OrchestrationService()
+    outcome = service.orchestrate(db, organization_id, payload, uuid4())
+    decision = service.decisions(db, organization_id, outcome.id)[0]
+
+    assert outcome.status == "blocked"
+    assert decision.evaluated_readiness_level == "arithmetic"
+    assert decision.readiness_mapping_policy_code == "LEGACY_RULE_TO_ARITHMETIC_V1"
+    assert (
+        db.scalar(
+            select(AnalyticalReadinessDecision).where(
+                AnalyticalReadinessDecision.trust_assessment_id == assessment_id,
+                AnalyticalReadinessDecision.analytical_level == "rule_based",
+            )
+        )
+        is None
+    )
+    assert not any(
+        step.step_type == "execution" for step in service.steps(db, organization_id, outcome.id)
+    )
+
+
+@pytest.mark.parametrize("level", ["forecasting", "reliability", "simulation"])
+def test_missing_readiness_levels_are_governed_unsupported_outcomes(
+    db: Session, level: str
+) -> None:
+    organization_id, dataset_id, assessment_id, readiness_id = foundation(
+        db, f"orchestration-unsupported-{level}"
+    )
+    payload = request(
+        dataset_id,
+        assessment_id,
+        readiness_id,
+        key=f"unsupported-{level}",
+    ).model_copy(
+        update={
+            "requested_analytical_level": OrchestrationAnalyticalLevel(level),
+            "allow_arithmetic_fallback": False,
+        }
+    )
+    payload = OrchestrationCreate.model_validate(payload.model_dump())
+    service = OrchestrationService()
+    outcome = service.orchestrate(db, organization_id, payload, uuid4())
+    decision = service.decisions(db, organization_id, outcome.id)[0]
+
+    assert outcome.status == "unsupported"
+    assert decision.decision_reason_code == "READINESS_LEVEL_UNSUPPORTED"
+    assert decision.evaluated_readiness_level is None
+    assert decision.selected_engine_code is None
+    assert not any(
+        step.step_type == "execution" for step in service.steps(db, organization_id, outcome.id)
+    )
+
+
+def test_engine_registration_and_adapter_must_match_exactly(db: Session) -> None:
+    consistency = EngineRegistrationConsistencyService()
+    adapter = ArithmeticEngineAdapter()
+    registry = EngineRegistry()
+    registry.register(adapter)
+
+    with pytest.raises(OrchestrationError) as missing:
+        consistency.eligible_adapter(db, registry, adapter.capability.analytical_level)
+    assert missing.value.code == "ENGINE_NOT_REGISTERED"
+
+    consistency.seed_missing(db, registry)
+    registration = db.scalar(
+        select(IntelligenceEngineRegistration).where(
+            IntelligenceEngineRegistration.engine_code == "ARITHMETIC_ENGINE"
+        )
+    )
+    assert registration is not None
+    consistency.validate_registration(registration, adapter)
+
+    with pytest.raises(OrchestrationError) as no_adapter:
+        consistency.validate_registration(registration, None)
+    assert no_adapter.value.code == "ENGINE_NOT_REGISTERED"
+
+    mismatch_cases = (
+        ("engine_version", "9.9"),
+        ("input_contract_version", "9.9"),
+        ("output_contract_version", "9.9"),
+        ("analytical_level", "statistical"),
+    )
+    for field, invalid in mismatch_cases:
+        original = getattr(registration, field)
+        setattr(registration, field, invalid)
+        with pytest.raises(OrchestrationError) as mismatch:
+            consistency.validate_registration(registration, adapter)
+        assert mismatch.value.code == "ENGINE_CONTRACT_MISMATCH"
+        setattr(registration, field, original)
+
+    registration.status = "inactive"
+    with pytest.raises(OrchestrationError) as inactive:
+        consistency.validate_registration(registration, adapter)
+    assert inactive.value.code == "ENGINE_UNAVAILABLE"
+    registration.status = "active"
+
+    database_only = IntelligenceEngineRegistration(
+        engine_code="DATABASE_ONLY_ENGINE",
+        engine_name="Database-only engine",
+        engine_version="1.0",
+        analytical_level="statistical",
+        capability_code="not_executable",
+        status="active",
+        is_available=True,
+        supports_sync=True,
+        supports_async=False,
+        input_contract_version="1.0",
+        output_contract_version="1.0",
+        implementation_reference="none",
+    )
+    db.add(database_only)
+    db.flush()
+    with pytest.raises(OrchestrationError) as database_without_adapter:
+        consistency.validate_registration(database_only, None)
+    assert database_without_adapter.value.code == "ENGINE_NOT_REGISTERED"
 
 
 def test_api_queries_are_tenant_scoped_paginated_and_authorized(
