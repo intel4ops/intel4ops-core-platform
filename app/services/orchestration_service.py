@@ -11,9 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.definitions.resolution import (
-    CodeBackedOIKBDefinitionResolver,
     DefinitionResolutionError,
     DefinitionResolver,
+    OIKBFirstDefinitionResolver,
 )
 from app.models.entities import Organization, OrganizationStatus
 from app.models.ingestion import Dataset, DatasetVersion
@@ -395,7 +395,7 @@ class OrchestrationService:
         definitions: DefinitionResolver | None = None,
     ) -> None:
         self.engines = engines or default_engine_registry()
-        self.definitions = definitions or CodeBackedOIKBDefinitionResolver()
+        self.definitions = definitions or OIKBFirstDefinitionResolver()
         self.readiness_compatibility = ReadinessCompatibilityPolicy()
         self.engine_consistency = EngineRegistrationConsistencyService()
         self.sufficiency = SufficiencyPolicy()
@@ -441,6 +441,8 @@ class OrchestrationService:
                 payload.definition_code,
                 payload.definition_version,
                 payload.execution_type,
+                db=db,
+                organization_id=organization_id,
             )
         except DefinitionResolutionError as exc:
             raise OrchestrationError(
@@ -520,6 +522,7 @@ class OrchestrationService:
                 "definition_fingerprint": definition.definition_fingerprint,
                 "knowledge_class": definition.knowledge_class.value,
                 "required_engine_capability": definition.required_engine_capability,
+                "scope_metadata": definition.scope_metadata,
             },
         )
         self._step(
@@ -702,15 +705,39 @@ class OrchestrationService:
             "engine_selected",
             actor_user_id,
         )
+        engine_payload = payload
+        governed_operation = definition.scope_metadata.get("operation")
+        if definition.scope_metadata.get("legacy_fallback") is False:
+            if not isinstance(governed_operation, str):
+                raise OrchestrationError(
+                    "DEFINITION_PACKAGE_INVALID",
+                    "Governed execution package does not declare an operation",
+                )
+            engine_payload = payload.model_copy(
+                update={
+                    "definition_code": governed_operation,
+                    "definition_version": "1.0",
+                }
+            )
         engine_result = adapter.execute(
             db,
             organization_id,
-            payload,
+            engine_payload,
             actor_user_id,
             f"orchestration:{request.id}",
         )
         execution = engine_result.execution
         output = engine_result.output
+        if definition.scope_metadata.get("legacy_fallback") is False:
+            execution.definition_code = definition.code
+            execution.definition_version = definition.version
+            execution.definition_fingerprint = definition.definition_fingerprint
+            execution.limitations = [
+                *execution.limitations,
+                "Executed through the governed OIKB-to-WP-2.07 bounded primitive adapter",
+            ]
+            db.commit()
+            db.refresh(execution)
         if execution.organization_id != organization_id:
             raise OrchestrationError(
                 "CROSS_TENANT_REFERENCE",

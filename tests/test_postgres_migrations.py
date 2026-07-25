@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -91,6 +91,18 @@ MANAGED_TABLES = {
     "intelligence_orchestration_steps",
     "intelligence_engine_registrations",
     "intelligence_orchestration_status_history",
+    "oikb_definitions",
+    "oikb_definition_versions",
+    "oikb_parameters",
+    "oikb_input_requirements",
+    "oikb_evidence_requirements",
+    "oikb_sources",
+    "oikb_definition_sources",
+    "oikb_validation_cases",
+    "oikb_validation_results",
+    "oikb_approvals",
+    "oikb_change_log",
+    "oikb_relationships",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -402,6 +414,12 @@ def assert_schema_at_head(engine: Engine) -> None:
                 "id",
             ),
             ("dataset_id", "datasets", "id"),
+            ("oikb_definition_id", "oikb_definitions", "id"),
+            (
+                "oikb_definition_version_id",
+                "oikb_definition_versions",
+                "id",
+            ),
         },
         "finding_evidence": {
             ("finding_id", "findings", "id"),
@@ -494,12 +512,60 @@ def assert_schema_at_head(engine: Engine) -> None:
         "intelligence_executions",
         "findings",
     }
+    definition_columns = {
+        column["name"]: column for column in inspector.get_columns("oikb_definitions")
+    }
+    assert str(definition_columns["id"]["type"]) == "UUID"
+    assert definition_columns["scope_key"]["nullable"] is False
+    assert "uq_oikb_definition_scope" in {
+        constraint["name"] for constraint in inspector.get_unique_constraints("oikb_definitions")
+    }
+    version_columns = {
+        column["name"]: column for column in inspector.get_columns("oikb_definition_versions")
+    }
+    assert str(version_columns["expression_schema"]["type"]) == "JSONB"
+    assert str(version_columns["fingerprint"]["type"]) == "VARCHAR(64)"
+    assert {
+        "uq_oikb_definition_semantic_version",
+        "uq_oikb_definition_fingerprint",
+    } <= {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("oikb_definition_versions")
+    }
+    finding_foreign_tables = {
+        foreign_key["referred_table"] for foreign_key in inspector.get_foreign_keys("findings")
+    }
+    assert {"oikb_definitions", "oikb_definition_versions"} <= finding_foreign_tables
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 10
 
 
 @pytest.mark.postgres
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_210_tables = {
+        "oikb_definitions",
+        "oikb_definition_versions",
+        "oikb_parameters",
+        "oikb_input_requirements",
+        "oikb_evidence_requirements",
+        "oikb_sources",
+        "oikb_definition_sources",
+        "oikb_validation_cases",
+        "oikb_validation_results",
+        "oikb_approvals",
+        "oikb_change_log",
+        "oikb_relationships",
+    }
+    command.downgrade(config, "20260725_0009")
+    assert not (wp_210_tables & set(inspect(postgres_engine).get_table_names()))
+    assert "oikb_definition_id" not in {
+        column["name"] for column in inspect(postgres_engine).get_columns("findings")
+    }
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -573,6 +639,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_207_tables
         - wp_208_tables
         - wp_209_tables
+        - wp_210_tables
         <= wp_203_tables
     )
 

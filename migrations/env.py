@@ -10,6 +10,7 @@ from app.models import (
     findings,  # noqa: F401
     ingestion,  # noqa: F401
     intelligence,  # noqa: F401
+    oikb,  # noqa: F401
     orchestration,  # noqa: F401
     raw_lineage,  # noqa: F401
     source_system,  # noqa: F401

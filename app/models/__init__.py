@@ -7,6 +7,20 @@ from app.models.findings import (
     FindingStatusHistory,
 )
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
+from app.models.oikb import (
+    OIKBApproval,
+    OIKBChangeLog,
+    OIKBDefinition,
+    OIKBDefinitionSource,
+    OIKBDefinitionVersion,
+    OIKBEvidenceRequirement,
+    OIKBInputRequirement,
+    OIKBParameter,
+    OIKBRelationship,
+    OIKBSource,
+    OIKBValidationCase,
+    OIKBValidationResult,
+)
 from app.models.orchestration import (
     IntelligenceEngineRegistration,
     IntelligenceOrchestrationDecision,
@@ -53,4 +67,16 @@ __all__ = [
     "FindingReview",
     "FindingRuleTrace",
     "FindingStatusHistory",
+    "OIKBApproval",
+    "OIKBChangeLog",
+    "OIKBDefinition",
+    "OIKBDefinitionSource",
+    "OIKBDefinitionVersion",
+    "OIKBEvidenceRequirement",
+    "OIKBInputRequirement",
+    "OIKBParameter",
+    "OIKBRelationship",
+    "OIKBSource",
+    "OIKBValidationCase",
+    "OIKBValidationResult",
 ]
