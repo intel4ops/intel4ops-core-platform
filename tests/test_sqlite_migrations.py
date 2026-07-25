@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, inspect
 
 
 def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
-    database_path = Path(__file__).parent / ".wp205_migration.sqlite"
+    database_path = Path(__file__).parent / ".wp206_migration.sqlite"
     database_path.unlink(missing_ok=True)
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
     config = Config("alembic.ini")
@@ -23,14 +23,25 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "lineage_edges",
             "lineage_events",
         }
+        wp_206_tables = {
+            "trust_assessments",
+            "trust_rule_results",
+            "trust_evidence",
+            "analytical_readiness_decisions",
+        }
+        assert wp_205_tables | wp_206_tables <= set(inspect(engine).get_table_names())
+        command.downgrade(config, "20260724_0005")
+        assert not (wp_206_tables & set(inspect(engine).get_table_names()))
         assert wp_205_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_206_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260724_0004")
         assert not (wp_205_tables & set(inspect(engine).get_table_names()))
         assert {"ingestion_batches", "datasets", "dataset_versions"} <= set(
             inspect(engine).get_table_names()
         )
         command.upgrade(config, "head")
-        assert wp_205_tables <= set(inspect(engine).get_table_names())
+        assert wp_205_tables | wp_206_tables <= set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
         database_path.unlink(missing_ok=True)

@@ -92,6 +92,8 @@ Ingestion governance, lifecycle, idempotency, and reconciliation are documented 
 [Ingestion control](docs/ingestion-control.md).
 Raw artifact identity, integrity, retention, processing history, and bounded lineage
 are documented in [Raw storage and lineage](docs/raw-storage-lineage.md).
+Shared data-quality rules, scoring, evidence sampling, and Progressive Intelligence
+readiness gates are documented in [Shared Trust Engine](docs/trust-engine.md).
 
 ## Migrations
 
@@ -100,7 +102,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0005`.
+Current head revision: `20260724_0006`.
 
 ## Tests and quality checks
 

@@ -6,6 +6,12 @@ from app.models.raw_lineage import (
     RawRecordReference,
     RawStorageObject,
 )
+from app.models.trust import (
+    AnalyticalReadinessDecision,
+    TrustAssessment,
+    TrustEvidence,
+    TrustRuleResult,
+)
 
 __all__ = [
     "LineageEdge",
@@ -14,4 +20,8 @@ __all__ = [
     "ProcessingRun",
     "RawRecordReference",
     "RawStorageObject",
+    "AnalyticalReadinessDecision",
+    "TrustAssessment",
+    "TrustEvidence",
+    "TrustRuleResult",
 ]

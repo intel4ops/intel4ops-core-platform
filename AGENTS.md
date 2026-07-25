@@ -37,6 +37,11 @@ The current development phase is Phase 2 – Core Platform.
 - Findings must reference evidence.
 - Findings must include confidence and exposure.
 - Recovery actions must reference findings.
+- Shared Trust rules must remain industry-neutral and register through the Trust rule
+  registry.
+- Analytical methods must honor persisted readiness decisions; critical Trust defects
+  must not be hidden by aggregate scores.
+- Trust evidence must be bounded or sampled.
 - Use Alembic for every database schema change.
 - Do not use Base.metadata.create_all for managed environments.
 - Do not modify production infrastructure.
