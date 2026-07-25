@@ -690,6 +690,7 @@ class ProgressiveReadinessPolicy:
     minimum_rows = {
         AnalyticalLevel.ARITHMETIC: 1,
         AnalyticalLevel.STATISTICAL: 30,
+        AnalyticalLevel.FORECASTING: 24,
         AnalyticalLevel.PREDICTIVE: 100,
         AnalyticalLevel.OPTIMIZATION: 20,
         AnalyticalLevel.ECONOMIC_RECOVERY: 1,
@@ -699,6 +700,12 @@ class ProgressiveReadinessPolicy:
         AnalyticalLevel.STATISTICAL: {
             TrustDimension.COMPLETENESS,
             TrustDimension.CONSISTENCY,
+        },
+        AnalyticalLevel.FORECASTING: {
+            TrustDimension.COMPLETENESS,
+            TrustDimension.CONSISTENCY,
+            TrustDimension.TIMELINESS,
+            TrustDimension.LINEAGE,
         },
         AnalyticalLevel.PREDICTIVE: {
             TrustDimension.COMPLETENESS,
@@ -719,6 +726,7 @@ class ProgressiveReadinessPolicy:
     minimum_score = {
         AnalyticalLevel.ARITHMETIC: 60.0,
         AnalyticalLevel.STATISTICAL: 70.0,
+        AnalyticalLevel.FORECASTING: 75.0,
         AnalyticalLevel.PREDICTIVE: 80.0,
         AnalyticalLevel.OPTIMIZATION: 80.0,
         AnalyticalLevel.ECONOMIC_RECOVERY: 85.0,

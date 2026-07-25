@@ -57,11 +57,34 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "anomaly_suppression_records",
             "anomaly_review_feedback",
         }
-        assert wp_210_tables | wp_211_tables <= set(inspect(engine).get_table_names())
+        wp_212_tables = {
+            "forecast_executions",
+            "forecast_candidates",
+            "forecast_backtests",
+            "forecast_metrics",
+            "forecast_points",
+            "forecast_scenarios",
+            "forecast_revisions",
+            "forecast_actuals",
+            "forecast_accuracy_results",
+            "forecast_method_registry",
+            "forecast_execution_steps",
+        }
+        assert wp_210_tables | wp_211_tables | wp_212_tables <= set(
+            inspect(engine).get_table_names()
+        )
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 34
+            assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 320
+            assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
+            assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
+        command.downgrade(config, "20260725_0011")
+        assert not (wp_212_tables & set(inspect(engine).get_table_names()))
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 22
             assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 308
-            assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
+        command.upgrade(config, "head")
+        assert wp_212_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260725_0010")
         assert not (wp_211_tables & set(inspect(engine).get_table_names()))
         with engine.connect() as connection:

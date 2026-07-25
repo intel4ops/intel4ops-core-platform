@@ -116,7 +116,7 @@ def test_all_trust_endpoints_and_bounded_evidence(client: TestClient) -> None:
         f"/api/v1/organizations/{organization_id}/trust-assessments/{assessment_id}/readiness"
     )
     assert readiness.status_code == 200
-    assert len(readiness.json()) == 5
+    assert len(readiness.json()) == 6
     latest = client.get(
         f"/api/v1/organizations/{organization_id}/datasets/{dataset_id}/latest-trust-assessment"
     )

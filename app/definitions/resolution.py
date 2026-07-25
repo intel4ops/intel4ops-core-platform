@@ -24,6 +24,7 @@ class DefinitionKnowledgeClass(StrEnum):
     CALCULATION = "calculation"
     DETERMINISTIC_RULE = "deterministic_rule"
     STATISTICAL_METHOD = "statistical_method"
+    FORECASTING_METHOD = "forecasting_method"
 
 
 @dataclass(frozen=True)
@@ -194,9 +195,13 @@ class GovernedOIKBDefinitionResolver:
             DefinitionKnowledgeClass.DETERMINISTIC_RULE
             if expected_type == ExecutionType.RULE
             else (
-                DefinitionKnowledgeClass.STATISTICAL_METHOD
-                if definition.analytical_level == OrchestrationAnalyticalLevel.STATISTICAL.value
-                else DefinitionKnowledgeClass.CALCULATION
+                DefinitionKnowledgeClass.FORECASTING_METHOD
+                if definition.analytical_level == OrchestrationAnalyticalLevel.FORECASTING.value
+                else (
+                    DefinitionKnowledgeClass.STATISTICAL_METHOD
+                    if definition.analytical_level == OrchestrationAnalyticalLevel.STATISTICAL.value
+                    else DefinitionKnowledgeClass.CALCULATION
+                )
             )
         )
         return ResolvedDefinition(
@@ -215,9 +220,14 @@ class GovernedOIKBDefinitionResolver:
                 "bounded_deterministic_rule"
                 if expected_type == ExecutionType.RULE
                 else (
-                    "bounded_statistical_intelligence"
-                    if definition.analytical_level == OrchestrationAnalyticalLevel.STATISTICAL.value
-                    else "bounded_arithmetic"
+                    "bounded_forecasting_intelligence"
+                    if definition.analytical_level == OrchestrationAnalyticalLevel.FORECASTING.value
+                    else (
+                        "bounded_statistical_intelligence"
+                        if definition.analytical_level
+                        == OrchestrationAnalyticalLevel.STATISTICAL.value
+                        else "bounded_arithmetic"
+                    )
                 )
             ),
             is_active=True,

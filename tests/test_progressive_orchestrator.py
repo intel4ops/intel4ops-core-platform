@@ -471,6 +471,7 @@ def test_engine_registry_has_only_real_engines_and_persists_capabilities(
     assert [engine.engine_code for engine in engines] == [
         "ARITHMETIC_ENGINE",
         "DETERMINISTIC_RULE_ENGINE",
+        "FORECASTING_INTELLIGENCE_ENGINE",
         "STATISTICAL_INTELLIGENCE_ENGINE",
     ]
     assert all(engine.is_available and engine.supports_sync for engine in engines)
@@ -553,6 +554,15 @@ def test_missing_readiness_levels_are_governed_unsupported_outcomes(
     organization_id, dataset_id, assessment_id, readiness_id = foundation(
         db, f"orchestration-unsupported-{level}"
     )
+    if level == "forecasting":
+        forecasting_readiness = db.scalar(
+            select(AnalyticalReadinessDecision).where(
+                AnalyticalReadinessDecision.trust_assessment_id == assessment_id,
+                AnalyticalReadinessDecision.analytical_level == "forecasting",
+            )
+        )
+        assert forecasting_readiness is not None
+        readiness_id = forecasting_readiness.id
     payload = request(
         dataset_id,
         assessment_id,
@@ -569,9 +579,11 @@ def test_missing_readiness_levels_are_governed_unsupported_outcomes(
     outcome = service.orchestrate(db, organization_id, payload, uuid4())
     decision = service.decisions(db, organization_id, outcome.id)[0]
 
-    assert outcome.status == "unsupported"
-    assert decision.decision_reason_code == "READINESS_LEVEL_UNSUPPORTED"
-    assert decision.evaluated_readiness_level is None
+    assert outcome.status == ("blocked" if level == "forecasting" else "unsupported")
+    assert decision.decision_reason_code == (
+        "READINESS_REQUIREMENT_NOT_MET" if level == "forecasting" else "READINESS_LEVEL_UNSUPPORTED"
+    )
+    assert decision.evaluated_readiness_level == ("forecasting" if level == "forecasting" else None)
     assert decision.selected_engine_code is None
     assert not any(
         step.step_type == "execution" for step in service.steps(db, organization_id, outcome.id)

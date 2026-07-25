@@ -76,6 +76,7 @@ class TrustEvidenceType(StrEnum):
 class AnalyticalLevel(StrEnum):
     ARITHMETIC = "arithmetic"
     STATISTICAL = "statistical"
+    FORECASTING = "forecasting"
     PREDICTIVE = "predictive"
     OPTIMIZATION = "optimization"
     ECONOMIC_RECOVERY = "economic_recovery"

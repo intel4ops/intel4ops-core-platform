@@ -6,6 +6,19 @@ from app.models.findings import (
     FindingRuleTrace,
     FindingStatusHistory,
 )
+from app.models.forecasting import (
+    ForecastAccuracyResult,
+    ForecastActual,
+    ForecastBacktest,
+    ForecastCandidate,
+    ForecastExecution,
+    ForecastExecutionStep,
+    ForecastMethodRegistration,
+    ForecastMetric,
+    ForecastPoint,
+    ForecastRevision,
+    ForecastScenario,
+)
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
 from app.models.oikb import (
     OIKBApproval,
@@ -77,6 +90,17 @@ __all__ = [
     "FindingReview",
     "FindingRuleTrace",
     "FindingStatusHistory",
+    "ForecastAccuracyResult",
+    "ForecastActual",
+    "ForecastBacktest",
+    "ForecastCandidate",
+    "ForecastExecution",
+    "ForecastExecutionStep",
+    "ForecastMethodRegistration",
+    "ForecastMetric",
+    "ForecastPoint",
+    "ForecastRevision",
+    "ForecastScenario",
     "OIKBApproval",
     "OIKBChangeLog",
     "OIKBDefinition",
