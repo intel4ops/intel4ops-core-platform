@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.ingestion_routes import router as ingestion_router
+from app.api.intelligence_routes import router as intelligence_router
 from app.api.membership_routes import router as membership_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.routes import router
@@ -38,3 +39,4 @@ app.include_router(source_system_router)
 app.include_router(ingestion_router)
 app.include_router(raw_lineage_router)
 app.include_router(trust_router)
+app.include_router(intelligence_router)

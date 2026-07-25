@@ -29,7 +29,18 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "trust_evidence",
             "analytical_readiness_decisions",
         }
-        assert wp_205_tables | wp_206_tables <= set(inspect(engine).get_table_names())
+        wp_207_tables = {
+            "intelligence_executions",
+            "intelligence_execution_evidence",
+        }
+        assert wp_205_tables | wp_206_tables | wp_207_tables <= set(
+            inspect(engine).get_table_names()
+        )
+        command.downgrade(config, "20260724_0006")
+        assert not (wp_207_tables & set(inspect(engine).get_table_names()))
+        assert wp_206_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_207_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260724_0005")
         assert not (wp_206_tables & set(inspect(engine).get_table_names()))
         assert wp_205_tables <= set(inspect(engine).get_table_names())

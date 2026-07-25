@@ -25,6 +25,7 @@ from app.schemas.ingestion import (
     DatasetVersionCreate,
     IngestionBatchCreate,
 )
+from app.schemas.intelligence import IntelligenceExecutionCreate
 from app.schemas.memberships import MembershipCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.source_systems import SourceSystemCreate
@@ -35,6 +36,7 @@ from app.services.ingestion_service import (
     DatasetVersionService,
     IngestionBatchService,
 )
+from app.services.intelligence_service import IntelligenceExecutionService
 from app.services.membership_service import (
     DuplicateMembershipError,
     OrganizationMembershipService,
@@ -67,6 +69,8 @@ MANAGED_TABLES = {
     "trust_rule_results",
     "trust_evidence",
     "analytical_readiness_decisions",
+    "intelligence_executions",
+    "intelligence_execution_evidence",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -295,6 +299,27 @@ def assert_schema_at_head(engine: Engine) -> None:
         for foreign_key in inspector.get_foreign_keys("raw_storage_objects")
     }
 
+    execution_columns = {
+        column["name"]: column for column in inspector.get_columns("intelligence_executions")
+    }
+    assert str(execution_columns["id"]["type"]) == "UUID"
+    assert str(execution_columns["organization_id"]["type"]) == "UUID"
+    assert str(execution_columns["parameters_json"]["type"]) == "JSONB"
+    assert str(execution_columns["result_value"]["type"]) == "NUMERIC(38, 12)"
+    assert {
+        "ix_intelligence_executions_organization_id",
+        "ix_intelligence_executions_dataset_id",
+        "ix_intelligence_executions_trust_assessment_id",
+        "ix_intelligence_executions_definition",
+        "ix_intelligence_executions_status",
+        "ix_intelligence_executions_created_at",
+    } <= {index["name"] for index in inspector.get_indexes("intelligence_executions")}
+    evidence_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("intelligence_execution_evidence")
+    }
+    assert str(evidence_columns["aggregate_reference"]["type"]) == "JSONB"
+
     for table, json_columns in {
         "trust_rule_results": {"threshold_definition", "observed_value"},
         "trust_evidence": {"observed_value"},
@@ -366,6 +391,15 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_207_tables = {
+        "intelligence_executions",
+        "intelligence_execution_evidence",
+    }
+    command.downgrade(config, "20260724_0006")
+    assert not (wp_207_tables & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     wp_206_tables = {
         "trust_assessments",
         "trust_rule_results",
@@ -394,7 +428,10 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     wp_203_tables = set(inspect(postgres_engine).get_table_names())
     wp_204_tables = {"ingestion_batches", "datasets", "dataset_versions"}
     assert not (wp_204_tables & wp_203_tables)
-    assert MANAGED_TABLES - wp_204_tables - wp_205_tables - wp_206_tables <= wp_203_tables
+    assert (
+        MANAGED_TABLES - wp_204_tables - wp_205_tables - wp_206_tables - wp_207_tables
+        <= wp_203_tables
+    )
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
@@ -772,3 +809,84 @@ def test_uuid_foreign_keys_and_finding_tenant_scope(postgres_engine: Engine) -> 
         with pytest.raises(IntegrityError):
             session.commit()
         session.rollback()
+
+
+@pytest.mark.postgres
+def test_intelligence_decimal_and_tenant_scope_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    organization_service = OrganizationService()
+    source_service = SourceSystemService()
+    dataset_service = DatasetService()
+    trust_service = TrustAssessmentService()
+    intelligence_service = IntelligenceExecutionService()
+    with Session(postgres_engine) as session:
+        suffix = uuid4().hex[:10]
+        actor = uuid4()
+        organizations = [
+            organization_service.create(
+                session,
+                OrganizationCreate(
+                    name=f"Intelligence {name}",
+                    slug=f"postgres-intelligence-{name}-{suffix}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                ),
+            )
+            for name in ("first", "second")
+        ]
+        source = source_service.create(
+            session,
+            organizations[0].id,
+            SourceSystemCreate(
+                name="Intelligence ERP",
+                code="intelligence-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            actor,
+        )
+        dataset = dataset_service.create(
+            session,
+            organizations[0].id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Canonical values",
+                code=f"canonical-values-{suffix}",
+                domain="finance",
+                dataset_type="transactional",
+                default_currency="USD",
+            ),
+            actor,
+        )
+        assessment = trust_service.create_and_execute(
+            session,
+            organizations[0].id,
+            dataset.id,
+            TrustAssessmentCreate(
+                records=[{"id": "1", "amount": "0.10"}],
+                rule_configurations={
+                    "required_field_completeness": {"required_fields": ["id", "amount"]},
+                    "numeric_range_validity": {"numeric_ranges": {"amount": {"minimum": 0}}},
+                },
+            ),
+        )
+        execution = intelligence_service.execute(
+            session,
+            organizations[0].id,
+            IntelligenceExecutionCreate(
+                dataset_id=dataset.id,
+                trust_assessment_id=assessment.id,
+                execution_type="calculation",
+                definition_code="sum",
+                records=[{"amount": "0.10"}, {"amount": "0.20"}],
+                parameters={"field": "amount"},
+                currency="USD",
+            ),
+            actor,
+        )
+        assert str(execution.result_value) == "0.300000000000"
+        assert intelligence_service.list(session, organizations[0].id) == [execution]
+        assert intelligence_service.list(session, organizations[1].id) == []

@@ -1,3 +1,4 @@
+from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
 from app.models.raw_lineage import (
     LineageEdge,
     LineageEvent,
@@ -24,4 +25,6 @@ __all__ = [
     "TrustAssessment",
     "TrustEvidence",
     "TrustRuleResult",
+    "IntelligenceExecution",
+    "IntelligenceExecutionEvidence",
 ]
