@@ -38,7 +38,10 @@ class IntelligenceExecutionCreate(BaseModel):
     dataset_version_id: UUID | None = None
     trust_assessment_id: UUID | None = None
     execution_type: ExecutionType
-    definition_code: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)
+    definition_code: str = Field(
+        pattern=r"^(?:[a-z][a-z0-9_]*|[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)+)$",
+        max_length=100,
+    )
     definition_version: str = Field(default="1.0", pattern=r"^[0-9]+(?:\.[0-9]+)*$")
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
     records: list[dict[str, object]] = Field(default_factory=list, max_length=1000)
@@ -139,3 +142,9 @@ class DefinitionRead(BaseModel):
     required_parameters: list[str]
     analytical_level: str
     status: str
+    canonical_fields: list[str] = Field(default_factory=list)
+    evidence_contract: str | None = None
+    unit_policy: str | None = None
+    currency_policy: str | None = None
+    scope_correction: str | None = None
+    domain_owner: str | None = None

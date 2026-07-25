@@ -83,7 +83,57 @@ def test_intelligence_api_execution_registry_and_lookup(client: TestClient) -> N
     assert fetched.status_code == 200
     assert [item["id"] for item in listed.json()] == [body["id"]]
     assert any(item["code"] == "sum" for item in calculations.json())
+    direct_quality_cost = next(
+        item for item in calculations.json() if item["code"] == "SHARED.QUALITY.DIRECT_QUALITY_COST"
+    )
+    assert direct_quality_cost["version"] == "1.0.0"
+    assert direct_quality_cost["operation"] == "sum"
+    assert direct_quality_cost["domain_owner"] == "Quality Cost and Finance Control Owner"
+    assert "direct_cost" in direct_quality_cost["canonical_fields"]
     assert any(item["code"] == "threshold_exceeded" for item in rules.json())
+
+
+def test_first_oikb_seed_executes_through_api(client: TestClient) -> None:
+    organization_id, dataset_id, assessment_id = api_foundation(client, "oikb-direct-cost")
+    response = client.post(
+        f"/api/v1/organizations/{organization_id}/intelligence-executions",
+        json={
+            "dataset_id": dataset_id,
+            "trust_assessment_id": assessment_id,
+            "execution_type": "calculation",
+            "definition_code": "SHARED.QUALITY.DIRECT_QUALITY_COST",
+            "definition_version": "1.0.0",
+            "records": [
+                {"direct_cost": "100.00", "currency": "USD"},
+                {"direct_cost": None, "currency": "USD"},
+                {"direct_cost": "25.50", "currency": "USD"},
+            ],
+            "parameters": {"field": "direct_cost"},
+            "currency": "USD",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["result_value"] == "125.500000000000"
+    assert response.json()["checked_record_count"] == 3
+    assert response.json()["excluded_record_count"] == 1
+
+    mixed_currency = client.post(
+        f"/api/v1/organizations/{organization_id}/intelligence-executions",
+        json={
+            "dataset_id": dataset_id,
+            "trust_assessment_id": assessment_id,
+            "execution_type": "calculation",
+            "definition_code": "SHARED.QUALITY.DIRECT_QUALITY_COST",
+            "definition_version": "1.0.0",
+            "records": [{"direct_cost": "10", "currency": "EUR"}],
+            "parameters": {"field": "direct_cost"},
+            "currency": "USD",
+        },
+    )
+    assert mixed_currency.status_code == 201
+    assert mixed_currency.json()["status"] == "failed"
+    assert "FX is unsupported" in mixed_currency.json()["non_execution_reason"]
 
 
 def test_intelligence_api_authorization_and_safe_errors(
