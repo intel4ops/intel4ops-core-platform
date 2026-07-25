@@ -189,6 +189,10 @@ class IntelligenceOrchestrationDecision(Base):
     )
     trust_status: Mapped[str] = mapped_column(String(40))
     readiness_status: Mapped[str] = mapped_column(String(40))
+    evaluated_readiness_level: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    readiness_mapping_policy_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    readiness_mapping_policy_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    warnings: Mapped[list[str]] = mapped_column(portable_json, default=list)
     sufficiency_status: Mapped[str] = mapped_column(String(40))
     escalation_status: Mapped[str] = mapped_column(String(40))
     decision: Mapped[str] = mapped_column(String(40))
@@ -249,6 +253,8 @@ class IntelligenceOrchestrationStep(Base):
     source_result_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("intelligence_executions.id", ondelete="RESTRICT"), nullable=True
     )
+    result_locator: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    output_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     finding_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("findings.id", ondelete="RESTRICT"), nullable=True
     )

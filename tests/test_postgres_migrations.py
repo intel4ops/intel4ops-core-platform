@@ -476,6 +476,15 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert str(step_columns["input_reference_summary"]["type"]) == "JSONB"
     assert str(step_columns["source_execution_id"]["type"]) == "UUID"
+    assert str(step_columns["source_result_id"]["type"]) == "UUID"
+    assert str(step_columns["result_locator"]["type"]) == "VARCHAR(100)"
+    assert str(step_columns["output_index"]["type"]) == "INTEGER"
+    decision_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("intelligence_orchestration_decisions")
+    }
+    assert str(decision_columns["warnings"]["type"]) == "JSONB"
+    assert str(decision_columns["readiness_mapping_policy_code"]["type"]) == "VARCHAR(100)"
     assert {
         foreign_key["referred_table"]
         for foreign_key in inspector.get_foreign_keys("intelligence_orchestration_steps")

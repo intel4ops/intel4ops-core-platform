@@ -65,6 +65,13 @@ class OrchestrationStepType(StrEnum):
     COMPLETION = "completion"
 
 
+class AnalyticalOutputReference(BaseModel):
+    execution_id: UUID
+    result_id: UUID
+    result_locator: str = Field(min_length=1, max_length=100)
+    output_index: int = Field(ge=0)
+
+
 class OrchestrationCreate(BaseModel):
     definition_code: str = Field(
         pattern=r"^(?:[a-z][a-z0-9_]*|[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)+)$",
@@ -121,6 +128,10 @@ class OrchestrationDecisionRead(BaseModel):
     alternatives_considered: list[dict[str, object]]
     trust_status: str
     readiness_status: str
+    evaluated_readiness_level: str | None
+    readiness_mapping_policy_code: str | None
+    readiness_mapping_policy_version: str | None
+    warnings: list[str]
     sufficiency_status: SufficiencyStatus
     escalation_status: EscalationStatus
     decision: str
@@ -146,6 +157,8 @@ class OrchestrationStepRead(BaseModel):
     completed_at: datetime | None
     source_execution_id: UUID | None
     source_result_id: UUID | None
+    result_locator: str | None
+    output_index: int | None
     finding_id: UUID | None
     input_reference_summary: dict[str, object]
     output_reference_summary: dict[str, object]

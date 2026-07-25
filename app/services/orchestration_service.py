@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -10,6 +10,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.definitions.resolution import (
+    CodeBackedOIKBDefinitionResolver,
+    DefinitionResolutionError,
+    DefinitionResolver,
+)
 from app.models.entities import Organization, OrganizationStatus
 from app.models.ingestion import Dataset, DatasetVersion
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionStatus
@@ -30,18 +35,15 @@ from app.models.trust import (
     TrustAssessment,
     TrustAssessmentStatus,
 )
-from app.registries.calculation_registry import (
-    CalculationDefinition,
-    DefinitionNotFoundError,
-    default_calculation_registry,
-)
 from app.registries.engine_registry import (
+    EngineAdapter,
     EngineCapability,
+    EngineExecutionResult,
     EngineRegistry,
 )
-from app.registries.rule_registry import RuleDefinition, default_rule_registry
 from app.schemas.intelligence import ExecutionType, IntelligenceExecutionCreate
 from app.schemas.orchestration import (
+    AnalyticalOutputReference,
     EscalationStatus,
     OrchestrationAnalyticalLevel,
     OrchestrationCreate,
@@ -82,13 +84,14 @@ class ArithmeticEngineAdapter:
         payload: OrchestrationCreate,
         actor_user_id: UUID,
         execution_idempotency_key: str,
-    ) -> IntelligenceExecution:
-        return intelligence_execution_service.execute(
+    ) -> EngineExecutionResult:
+        execution = intelligence_execution_service.execute(
             db,
             organization_id,
             _execution_payload(payload, ExecutionType.CALCULATION, execution_idempotency_key),
             actor_user_id,
         )
+        return _embedded_output(execution)
 
 
 class DeterministicRuleEngineAdapter:
@@ -111,13 +114,26 @@ class DeterministicRuleEngineAdapter:
         payload: OrchestrationCreate,
         actor_user_id: UUID,
         execution_idempotency_key: str,
-    ) -> IntelligenceExecution:
-        return intelligence_execution_service.execute(
+    ) -> EngineExecutionResult:
+        execution = intelligence_execution_service.execute(
             db,
             organization_id,
             _execution_payload(payload, ExecutionType.RULE, execution_idempotency_key),
             actor_user_id,
         )
+        return _embedded_output(execution)
+
+
+def _embedded_output(execution: IntelligenceExecution) -> EngineExecutionResult:
+    return EngineExecutionResult(
+        execution=execution,
+        output=AnalyticalOutputReference(
+            execution_id=execution.id,
+            result_id=execution.id,
+            result_locator="embedded_result",
+            output_index=0,
+        ),
+    )
 
 
 def _execution_payload(
@@ -158,27 +174,155 @@ def _hash(value: object) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-class DefinitionResolver:
-    def __init__(self) -> None:
-        self.calculations = default_calculation_registry()
-        self.rules = default_rule_registry()
+@dataclass(frozen=True)
+class ReadinessResolution:
+    evaluated_level: str | None
+    mapping_policy_code: str | None = None
+    mapping_policy_version: str | None = None
+    warnings: tuple[str, ...] = ()
+    unsupported_reason_code: str | None = None
 
+
+class ReadinessCompatibilityPolicy:
+    version = "1.0"
+
+    @staticmethod
     def resolve(
-        self, code: str, version: str, execution_type: ExecutionType
-    ) -> tuple[CalculationDefinition | RuleDefinition, OrchestrationAnalyticalLevel]:
-        try:
-            if execution_type == ExecutionType.CALCULATION:
-                return (
-                    self.calculations.get(code, version),
-                    OrchestrationAnalyticalLevel.ARITHMETIC,
+        requested_level: OrchestrationAnalyticalLevel,
+        definition_level: OrchestrationAnalyticalLevel,
+        *,
+        allow_arithmetic_fallback: bool,
+    ) -> ReadinessResolution:
+        if requested_level == OrchestrationAnalyticalLevel.RULE_BASED:
+            return ReadinessResolution(
+                evaluated_level="arithmetic",
+                mapping_policy_code="LEGACY_RULE_TO_ARITHMETIC_V1",
+                mapping_policy_version="1.0",
+                warnings=(
+                    "Dedicated rule-based readiness is unavailable; arithmetic "
+                    "readiness was evaluated through LEGACY_RULE_TO_ARITHMETIC_V1.",
+                ),
+            )
+        if requested_level == OrchestrationAnalyticalLevel.RECOVERY:
+            return ReadinessResolution(
+                evaluated_level="economic_recovery",
+                mapping_policy_code="LEGACY_RECOVERY_TO_ECONOMIC_RECOVERY_V1",
+                mapping_policy_version="1.0",
+                warnings=(
+                    "Recovery readiness uses the legacy economic_recovery level "
+                    "through an explicit compatibility policy.",
+                ),
+            )
+        if requested_level in {
+            OrchestrationAnalyticalLevel.FORECASTING,
+            OrchestrationAnalyticalLevel.RELIABILITY,
+            OrchestrationAnalyticalLevel.SIMULATION,
+        }:
+            if (
+                definition_level == OrchestrationAnalyticalLevel.ARITHMETIC
+                and allow_arithmetic_fallback
+            ):
+                return ReadinessResolution(
+                    evaluated_level="arithmetic",
+                    mapping_policy_code="APPROVED_ARITHMETIC_FALLBACK_V1",
+                    mapping_policy_version="1.0",
+                    warnings=(
+                        f"{requested_level.value} readiness is unavailable; the "
+                        "approved arithmetic fallback readiness was evaluated.",
+                    ),
                 )
-            return self.rules.get(code, version), OrchestrationAnalyticalLevel.RULE_BASED
-        except DefinitionNotFoundError as exc:
+            return ReadinessResolution(
+                evaluated_level=None,
+                unsupported_reason_code="READINESS_LEVEL_UNSUPPORTED",
+                warnings=(
+                    f"{requested_level.value} readiness is deferred to a later work package.",
+                ),
+            )
+        return ReadinessResolution(evaluated_level=requested_level.value)
+
+
+class EngineRegistrationConsistencyService:
+    @staticmethod
+    def seed_missing(db: Session, engines: EngineRegistry) -> None:
+        for adapter in engines.list():
+            capability = adapter.capability
+            existing = db.scalar(
+                select(IntelligenceEngineRegistration).where(
+                    IntelligenceEngineRegistration.engine_code == capability.engine_code
+                )
+            )
+            if existing is None:
+                db.add(
+                    IntelligenceEngineRegistration(
+                        engine_code=capability.engine_code,
+                        engine_name=capability.engine_name,
+                        engine_version=capability.engine_version,
+                        analytical_level=capability.analytical_level.value,
+                        capability_code=capability.capability_code,
+                        status=EngineRegistrationStatus.ACTIVE.value,
+                        is_available=capability.is_available,
+                        supports_sync=capability.supports_sync,
+                        supports_async=capability.supports_async,
+                        input_contract_version=capability.input_contract_version,
+                        output_contract_version=capability.output_contract_version,
+                        implementation_reference=capability.implementation_reference,
+                    )
+                )
+        db.flush()
+
+    @staticmethod
+    def validate_registration(
+        registration: IntelligenceEngineRegistration,
+        adapter: EngineAdapter | None,
+    ) -> None:
+        if adapter is None:
             raise OrchestrationError(
-                "DEFINITION_NOT_ELIGIBLE",
-                "Definition is not eligible",
-                http_status=404,
-            ) from exc
+                "ENGINE_NOT_REGISTERED",
+                "Persisted engine registration has no code-backed adapter",
+            )
+        capability = adapter.capability
+        if (
+            registration.status != EngineRegistrationStatus.ACTIVE.value
+            or not registration.is_available
+        ):
+            raise OrchestrationError("ENGINE_UNAVAILABLE", "Engine registration is inactive")
+        if not capability.is_available:
+            raise OrchestrationError("ENGINE_UNAVAILABLE", "Engine adapter is unavailable")
+        checks = (
+            registration.engine_code == capability.engine_code,
+            registration.engine_version == capability.engine_version,
+            registration.analytical_level == capability.analytical_level.value,
+            registration.input_contract_version == capability.input_contract_version,
+            registration.output_contract_version == capability.output_contract_version,
+            registration.capability_code == capability.capability_code,
+        )
+        if not all(checks):
+            raise OrchestrationError(
+                "ENGINE_CONTRACT_MISMATCH",
+                "Engine registration and adapter contracts do not match",
+            )
+
+    def eligible_adapter(
+        self,
+        db: Session,
+        engines: EngineRegistry,
+        level: OrchestrationAnalyticalLevel,
+    ) -> EngineAdapter | None:
+        adapter = engines.for_level(level)
+        if adapter is None:
+            return None
+        registration = db.scalar(
+            select(IntelligenceEngineRegistration).where(
+                IntelligenceEngineRegistration.engine_code == adapter.capability.engine_code
+            )
+        )
+        if registration is None:
+            raise OrchestrationError(
+                "ENGINE_NOT_REGISTERED",
+                "Code-backed adapter has no persisted active registration",
+            )
+        self.validate_registration(registration, adapter)
+        return adapter
 
 
 class SufficiencyPolicy:
@@ -245,9 +389,15 @@ class OrchestrationService:
         },
     }
 
-    def __init__(self, engines: EngineRegistry | None = None) -> None:
+    def __init__(
+        self,
+        engines: EngineRegistry | None = None,
+        definitions: DefinitionResolver | None = None,
+    ) -> None:
         self.engines = engines or default_engine_registry()
-        self.definitions = DefinitionResolver()
+        self.definitions = definitions or CodeBackedOIKBDefinitionResolver()
+        self.readiness_compatibility = ReadinessCompatibilityPolicy()
+        self.engine_consistency = EngineRegistrationConsistencyService()
         self.sufficiency = SufficiencyPolicy()
         self.escalation = EscalationPolicy()
 
@@ -286,12 +436,27 @@ class OrchestrationService:
                 http_status=409,
             )
         self._validate_references(db, organization_id, payload)
-        definition, definition_level = self.definitions.resolve(
-            payload.definition_code,
-            payload.definition_version,
-            payload.execution_type,
-        )
+        try:
+            definition = self.definitions.resolve(
+                payload.definition_code,
+                payload.definition_version,
+                payload.execution_type,
+            )
+        except DefinitionResolutionError as exc:
+            raise OrchestrationError(
+                "DEFINITION_NOT_ELIGIBLE",
+                "Definition is not eligible",
+                http_status=404,
+            ) from exc
+        if not definition.is_active:
+            raise OrchestrationError("DEFINITION_NOT_ELIGIBLE", "Definition is inactive")
+        definition_level = definition.analytical_level
         requested_level = payload.requested_analytical_level or definition_level
+        readiness_resolution = self.readiness_compatibility.resolve(
+            requested_level,
+            definition_level,
+            allow_arithmetic_fallback=payload.allow_arithmetic_fallback,
+        )
         request = IntelligenceOrchestrationRequest(
             organization_id=organization_id,
             request_code=f"ORC-{uuid4().hex[:16].upper()}",
@@ -352,10 +517,11 @@ class OrchestrationService:
             output_summary={
                 "definition_code": definition.code,
                 "definition_version": definition.version,
-                "definition_fingerprint": _hash(asdict(definition)),
+                "definition_fingerprint": definition.definition_fingerprint,
+                "knowledge_class": definition.knowledge_class.value,
+                "required_engine_capability": definition.required_engine_capability,
             },
         )
-        readiness = self._readiness(db, organization_id, payload, definition_level)
         self._step(
             db,
             request,
@@ -363,6 +529,25 @@ class OrchestrationService:
             OrchestrationStepStatus.COMPLETED,
             output_summary={"trust_status": self._assessment(db, organization_id, payload).status},
         )
+        if readiness_resolution.unsupported_reason_code is not None:
+            request.warnings = list(readiness_resolution.warnings)
+            self._unsupported(
+                db,
+                request,
+                requested_level,
+                None,
+                readiness_resolution,
+                actor_user_id,
+                readiness_resolution.unsupported_reason_code,
+            )
+            return request
+        readiness = self._readiness(
+            db,
+            organization_id,
+            payload,
+            readiness_resolution.evaluated_level,
+        )
+        request.warnings = list(readiness_resolution.warnings)
         if readiness.readiness_status not in {
             ReadinessStatus.READY.value,
             ReadinessStatus.READY_WITH_WARNINGS.value,
@@ -393,8 +578,12 @@ class OrchestrationService:
                 OrchestrationDecisionType.BLOCK,
                 reason,
                 readiness.explanation,
+                readiness_resolution,
             )
-            request.limitations = [readiness.explanation]
+            request.limitations = [
+                readiness.explanation,
+                *readiness_resolution.warnings,
+            ]
             self._transition(db, request, OrchestrationStatus.BLOCKED, reason, actor_user_id)
             request.completed_at = datetime.now(UTC)
             db.commit()
@@ -406,9 +595,18 @@ class OrchestrationService:
             OrchestrationStepType.READINESS_CHECK,
             OrchestrationStepStatus.COMPLETED,
             level=definition_level,
-            warnings=list(readiness.warning_rule_codes),
-            output_summary={"readiness_status": readiness.readiness_status},
+            warnings=[
+                *readiness.warning_rule_codes,
+                *readiness_resolution.warnings,
+            ],
+            output_summary={
+                "readiness_status": readiness.readiness_status,
+                "evaluated_readiness_level": readiness_resolution.evaluated_level,
+                "mapping_policy_code": readiness_resolution.mapping_policy_code,
+                "mapping_policy_version": readiness_resolution.mapping_policy_version,
+            },
         )
+        self.engine_consistency.seed_missing(db, self.engines)
         requested_adapter = self.engines.for_level(requested_level)
         selected_level = definition_level
         used_fallback = requested_level != definition_level
@@ -421,33 +619,47 @@ class OrchestrationService:
                 request,
                 requested_level,
                 readiness,
+                readiness_resolution,
                 actor_user_id,
                 "DEFINITION_LEVEL_MISMATCH",
             )
             return request
-        adapter = self.engines.for_level(selected_level)
+        try:
+            adapter = self.engine_consistency.eligible_adapter(db, self.engines, selected_level)
+        except OrchestrationError as exc:
+            self._unsupported(
+                db,
+                request,
+                requested_level,
+                readiness,
+                readiness_resolution,
+                actor_user_id,
+                exc.code,
+            )
+            return request
         if adapter is None:
             self._unsupported(
                 db,
                 request,
                 requested_level,
                 readiness,
+                readiness_resolution,
                 actor_user_id,
                 "ENGINE_NOT_REGISTERED",
             )
             return request
-        if not adapter.capability.is_available:
+        if adapter.capability.capability_code != definition.required_engine_capability:
             self._unsupported(
                 db,
                 request,
                 requested_level,
                 readiness,
+                readiness_resolution,
                 actor_user_id,
-                "ENGINE_UNAVAILABLE",
+                "ENGINE_CONTRACT_MISMATCH",
             )
             return request
-        self._synchronize_engines(db)
-        limitations = []
+        limitations = list(readiness_resolution.warnings)
         if used_fallback:
             limitations.append(
                 f"{requested_level.value} is unavailable; arithmetic fallback was executed"
@@ -472,6 +684,7 @@ class OrchestrationService:
             ),
             "LOWEST_SUFFICIENT_ENGINE_SELECTED",
             "Selected the lowest implemented engine permitted by the definition and readiness",
+            readiness_resolution,
         )
         self._step(
             db,
@@ -489,13 +702,15 @@ class OrchestrationService:
             "engine_selected",
             actor_user_id,
         )
-        execution = adapter.execute(
+        engine_result = adapter.execute(
             db,
             organization_id,
             payload,
             actor_user_id,
             f"orchestration:{request.id}",
         )
+        execution = engine_result.execution
+        output = engine_result.output
         if execution.organization_id != organization_id:
             raise OrchestrationError(
                 "CROSS_TENANT_REFERENCE",
@@ -511,6 +726,7 @@ class OrchestrationService:
                 level=selected_level,
                 engine=adapter.capability,
                 execution=execution,
+                output=output,
                 block_reason="EXECUTION_BLOCKED",
                 limitations=[execution.non_execution_reason or "Execution blocked"],
             )
@@ -534,6 +750,7 @@ class OrchestrationService:
                 level=selected_level,
                 engine=adapter.capability,
                 execution=execution,
+                output=output,
                 error_code="EXECUTION_FAILED",
             )
             self._transition(
@@ -555,6 +772,7 @@ class OrchestrationService:
             level=selected_level,
             engine=adapter.capability,
             execution=execution,
+            output=output,
         )
         sufficiency = self.sufficiency.evaluate(execution, used_fallback=used_fallback)
         escalation = self.escalation.evaluate(
@@ -593,11 +811,15 @@ class OrchestrationService:
             OrchestrationDecisionType.STOP_WITH_CURRENT_RESULT,
             "CURRENT_RESULT_EVALUATED",
             "The deterministic sufficiency and escalation policies evaluated the result",
+            readiness_resolution,
         )
         publication_failed = False
         if payload.publish_finding and payload.finding_candidate is not None:
             candidate = payload.finding_candidate.model_copy(
-                update={"execution_id": execution.id, "result_id": execution.id}
+                update={
+                    "execution_id": output.execution_id,
+                    "result_id": output.result_id,
+                }
             )
             try:
                 finding = finding_publication_service.publish_candidate_finding(
@@ -616,6 +838,7 @@ class OrchestrationService:
                     OrchestrationStepStatus.FAILED,
                     level=selected_level,
                     execution=execution,
+                    output=output,
                     error_code="FINDING_PUBLICATION_FAILED",
                 )
             else:
@@ -626,6 +849,7 @@ class OrchestrationService:
                     OrchestrationStepStatus.COMPLETED,
                     level=selected_level,
                     execution=execution,
+                    output=output,
                     finding_id=finding.id,
                     output_summary={"finding_id": str(finding.id)},
                 )
@@ -638,7 +862,10 @@ class OrchestrationService:
                 else OrchestrationStatus.COMPLETED
             )
         )
-        request.warnings = list(execution.warnings)
+        request.warnings = [
+            *readiness_resolution.warnings,
+            *execution.warnings,
+        ]
         request.limitations = request.limitations or limitations
         request.completed_at = datetime.now(UTC)
         self._transition(db, request, target, "orchestration_finalized", actor_user_id)
@@ -649,6 +876,7 @@ class OrchestrationService:
             OrchestrationStepStatus.COMPLETED,
             level=selected_level,
             execution=execution,
+            output=output,
             output_summary={"outcome": target.value},
             limitations=request.limitations,
         )
@@ -773,7 +1001,7 @@ class OrchestrationService:
         )
 
     def engines_list(self, db: Session) -> list[IntelligenceEngineRegistration]:
-        self._synchronize_engines(db)
+        self.engine_consistency.seed_missing(db, self.engines)
         db.commit()
         return list(
             db.scalars(
@@ -785,7 +1013,7 @@ class OrchestrationService:
         )
 
     def engine(self, db: Session, engine_code: str) -> IntelligenceEngineRegistration:
-        self._synchronize_engines(db)
+        self.engine_consistency.seed_missing(db, self.engines)
         db.commit()
         registration = db.scalar(
             select(IntelligenceEngineRegistration).where(
@@ -879,28 +1107,13 @@ class OrchestrationService:
             )
         return assessment
 
-    @staticmethod
-    def _readiness_level(level: OrchestrationAnalyticalLevel) -> str | None:
-        mapping = {
-            OrchestrationAnalyticalLevel.ARITHMETIC: "arithmetic",
-            OrchestrationAnalyticalLevel.RULE_BASED: "arithmetic",
-            OrchestrationAnalyticalLevel.STATISTICAL: "statistical",
-            OrchestrationAnalyticalLevel.PREDICTIVE: "predictive",
-            OrchestrationAnalyticalLevel.OPTIMIZATION: "optimization",
-            OrchestrationAnalyticalLevel.RECOVERY: "economic_recovery",
-        }
-        return mapping.get(level)
-
     def _readiness(
         self,
         db: Session,
         organization_id: UUID,
         payload: OrchestrationCreate,
-        definition_level: OrchestrationAnalyticalLevel,
+        expected_level: str | None,
     ) -> AnalyticalReadinessDecision:
-        expected_level = self._readiness_level(
-            payload.requested_analytical_level or definition_level
-        )
         readiness = db.scalar(
             select(AnalyticalReadinessDecision).where(
                 AnalyticalReadinessDecision.id == payload.analytical_readiness_id,
@@ -926,7 +1139,8 @@ class OrchestrationService:
         db: Session,
         request: IntelligenceOrchestrationRequest,
         requested_level: OrchestrationAnalyticalLevel,
-        readiness: AnalyticalReadinessDecision,
+        readiness: AnalyticalReadinessDecision | None,
+        readiness_resolution: ReadinessResolution,
         actor_user_id: UUID,
         reason: str,
     ) -> None:
@@ -942,6 +1156,7 @@ class OrchestrationService:
             OrchestrationDecisionType.UNSUPPORTED,
             reason,
             "No eligible implemented engine can satisfy the governed request",
+            readiness_resolution,
         )
         self._step(
             db,
@@ -955,44 +1170,6 @@ class OrchestrationService:
         request.completed_at = datetime.now(UTC)
         db.commit()
         db.refresh(request)
-
-    def _synchronize_engines(self, db: Session) -> None:
-        for adapter in self.engines.list():
-            capability = adapter.capability
-            row = db.scalar(
-                select(IntelligenceEngineRegistration).where(
-                    IntelligenceEngineRegistration.engine_code == capability.engine_code,
-                    IntelligenceEngineRegistration.engine_version == capability.engine_version,
-                )
-            )
-            values = {
-                "engine_name": capability.engine_name,
-                "analytical_level": capability.analytical_level.value,
-                "capability_code": capability.capability_code,
-                "status": (
-                    EngineRegistrationStatus.ACTIVE.value
-                    if capability.is_available
-                    else EngineRegistrationStatus.UNAVAILABLE.value
-                ),
-                "is_available": capability.is_available,
-                "supports_sync": capability.supports_sync,
-                "supports_async": capability.supports_async,
-                "input_contract_version": capability.input_contract_version,
-                "output_contract_version": capability.output_contract_version,
-                "implementation_reference": capability.implementation_reference,
-            }
-            if row is None:
-                db.add(
-                    IntelligenceEngineRegistration(
-                        engine_code=capability.engine_code,
-                        engine_version=capability.engine_version,
-                        **values,
-                    )
-                )
-            else:
-                for key, value in values.items():
-                    setattr(row, key, value)
-        db.flush()
 
     @staticmethod
     def _context_fingerprint(organization_id: UUID, payload: OrchestrationCreate) -> str:
@@ -1111,6 +1288,7 @@ class OrchestrationService:
         level: OrchestrationAnalyticalLevel | None = None,
         engine: EngineCapability | None = None,
         execution: IntelligenceExecution | None = None,
+        output: AnalyticalOutputReference | None = None,
         finding_id: UUID | None = None,
         input_summary: dict[str, object] | None = None,
         output_summary: dict[str, object] | None = None,
@@ -1128,6 +1306,7 @@ class OrchestrationService:
             "level": level,
             "engine": engine.engine_code if engine else None,
             "execution": execution.id if execution else None,
+            "analytical_output": output.model_dump() if output else None,
             "finding": finding_id,
             "input": input_summary or {},
             "output": output_summary or {},
@@ -1148,10 +1327,26 @@ class OrchestrationService:
                 status=status.value,
                 started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
-                source_execution_id=execution.id if execution else None,
+                source_execution_id=output.execution_id if output else None,
                 source_result_id=(
-                    execution.id
-                    if execution and execution.status == IntelligenceExecutionStatus.COMPLETED.value
+                    output.result_id
+                    if output
+                    and execution
+                    and execution.status == IntelligenceExecutionStatus.COMPLETED.value
+                    else None
+                ),
+                result_locator=(
+                    output.result_locator
+                    if output
+                    and execution
+                    and execution.status == IntelligenceExecutionStatus.COMPLETED.value
+                    else None
+                ),
+                output_index=(
+                    output.output_index
+                    if output
+                    and execution
+                    and execution.status == IntelligenceExecutionStatus.COMPLETED.value
                     else None
                 ),
                 finding_id=finding_id,
@@ -1184,12 +1379,13 @@ class OrchestrationService:
         requested_level: OrchestrationAnalyticalLevel,
         selected_level: OrchestrationAnalyticalLevel | None,
         engine: EngineCapability | None,
-        readiness: AnalyticalReadinessDecision,
+        readiness: AnalyticalReadinessDecision | None,
         sufficiency: SufficiencyStatus,
         escalation: EscalationStatus,
         decision: OrchestrationDecisionType,
         reason: str,
         summary: str,
+        readiness_resolution: ReadinessResolution,
     ) -> None:
         sequence = self._next_decision(db, request.id)
         content = {
@@ -1200,7 +1396,8 @@ class OrchestrationService:
             "selected": selected_level,
             "engine": engine.engine_code if engine else None,
             "trust": request.trust_assessment_id,
-            "readiness": (readiness.id, readiness.readiness_status),
+            "readiness": ((readiness.id, readiness.readiness_status) if readiness else None),
+            "readiness_resolution": readiness_resolution,
             "sufficiency": sufficiency,
             "escalation": escalation,
             "decision": decision,
@@ -1229,7 +1426,11 @@ class OrchestrationService:
                     }
                 ],
                 trust_status="satisfied",
-                readiness_status=readiness.readiness_status,
+                readiness_status=(readiness.readiness_status if readiness else "unsupported"),
+                evaluated_readiness_level=readiness_resolution.evaluated_level,
+                readiness_mapping_policy_code=(readiness_resolution.mapping_policy_code),
+                readiness_mapping_policy_version=(readiness_resolution.mapping_policy_version),
+                warnings=list(readiness_resolution.warnings),
                 sufficiency_status=sufficiency.value,
                 escalation_status=escalation.value,
                 decision=decision.value,
