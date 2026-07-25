@@ -28,6 +28,7 @@ from app.schemas.ingestion import (
 from app.schemas.memberships import MembershipCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.source_systems import SourceSystemCreate
+from app.schemas.trust import TrustAssessmentCreate
 from app.services.finding_service import FindingService
 from app.services.ingestion_service import (
     DatasetService,
@@ -44,6 +45,7 @@ from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
 )
+from app.services.trust_service import TrustAssessmentService
 
 MANAGED_TABLES = {
     "organizations",
@@ -61,6 +63,10 @@ MANAGED_TABLES = {
     "lineage_nodes",
     "lineage_edges",
     "lineage_events",
+    "trust_assessments",
+    "trust_rule_results",
+    "trust_evidence",
+    "analytical_readiness_decisions",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -289,6 +295,29 @@ def assert_schema_at_head(engine: Engine) -> None:
         for foreign_key in inspector.get_foreign_keys("raw_storage_objects")
     }
 
+    for table, json_columns in {
+        "trust_rule_results": {"threshold_definition", "observed_value"},
+        "trust_evidence": {"observed_value"},
+        "analytical_readiness_decisions": {
+            "blocking_rule_codes",
+            "warning_rule_codes",
+        },
+    }.items():
+        columns = {column["name"]: column for column in inspector.get_columns(table)}
+        assert str(columns["id"]["type"]) == "UUID"
+        assert str(columns["organization_id"]["type"]) == "UUID"
+        assert all(str(columns[column]["type"]) == "JSONB" for column in json_columns)
+    assert {
+        "ix_trust_assessments_organization_id",
+        "ix_trust_assessments_dataset_id",
+        "ix_trust_assessments_status",
+        "ix_trust_assessments_created_at",
+    } <= {index["name"] for index in inspector.get_indexes("trust_assessments")}
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("trust_assessments")
+    } == {"organizations", "datasets", "ingestion_batches"}
+
     expected_indexes = {
         "findings": {
             "ix_findings_domain",
@@ -337,6 +366,17 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_206_tables = {
+        "trust_assessments",
+        "trust_rule_results",
+        "trust_evidence",
+        "analytical_readiness_decisions",
+    }
+    command.downgrade(config, "20260724_0005")
+    assert not (wp_206_tables & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     command.downgrade(config, "20260724_0004")
     wp_205_tables = {
         "raw_storage_objects",
@@ -354,7 +394,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     wp_203_tables = set(inspect(postgres_engine).get_table_names())
     wp_204_tables = {"ingestion_batches", "datasets", "dataset_versions"}
     assert not (wp_204_tables & wp_203_tables)
-    assert MANAGED_TABLES - wp_204_tables - wp_205_tables <= wp_203_tables
+    assert MANAGED_TABLES - wp_204_tables - wp_205_tables - wp_206_tables <= wp_203_tables
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
@@ -579,6 +619,24 @@ def test_raw_storage_uuid_scope_and_foreign_keys_on_postgres(
         )
         assert isinstance(raw_object.id, UUID)
         assert raw_service.list(session, organization.id) == [raw_object]
+        trust_service = TrustAssessmentService()
+        assessment = trust_service.create_and_execute(
+            session,
+            organization.id,
+            dataset.id,
+            TrustAssessmentCreate(
+                ingestion_batch_id=batch.id,
+                records=[{"id": "1", "amount": 42}],
+                rule_configurations={
+                    "required_field_completeness": {"required_fields": ["id", "amount"]},
+                    "primary_identifier_uniqueness": {"identifier_field": "id"},
+                },
+            ),
+        )
+        assert isinstance(assessment.id, UUID)
+        assert assessment.overall_score == 100
+        assert len(trust_service.rule_results(session, organization.id, assessment.id)) == 2
+        assert len(trust_service.readiness(session, organization.id, assessment.id)) == 5
 
 
 @pytest.mark.postgres

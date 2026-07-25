@@ -10,6 +10,7 @@ from app.models import (
     ingestion,  # noqa: F401
     raw_lineage,  # noqa: F401
     source_system,  # noqa: F401
+    trust,  # noqa: F401
 )
 
 config = context.config
