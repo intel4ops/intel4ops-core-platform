@@ -538,6 +538,7 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert {"oikb_definitions", "oikb_definition_versions"} <= finding_foreign_tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 10
+        assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 56
 
 
 @pytest.mark.postgres

@@ -682,7 +682,11 @@ class KnowledgeValidationService:
         all_passed = True
         for case in cases:
             actual, error = self._execute(version, case.input_payload)
-            passed = error is None and self._matches(actual, case.expected_output, case.tolerance)
+            passed = (
+                error is not None
+                if case.expected_status == "failed"
+                else error is None and self._matches(actual, case.expected_output, case.tolerance)
+            )
             all_passed = all_passed and passed
             result = OIKBValidationResult(
                 definition_version_id=version.id,
@@ -711,13 +715,24 @@ class KnowledgeValidationService:
         operation = str(version.expression_schema["operation"])
         values = payload.get("values")
         try:
-            numeric = [Decimal(str(item)) for item in values] if isinstance(values, list) else []
+            supplied_unit = payload.get("unit")
+            if supplied_unit is not None and supplied_unit != version.output_unit:
+                return None, "UNIT_MISMATCH"
+            if operation in {
+                "count",
+                "distinct_count",
+                "sum",
+                "average",
+                "minimum",
+                "maximum",
+            } and not isinstance(values, list):
+                return None, "MISSING_INPUT"
+            value_list = values if isinstance(values, list) else []
+            numeric = [Decimal(str(item)) for item in value_list if item is not None]
             if operation == "count":
-                return len(values) if isinstance(values, list) else 0, None
+                return len([item for item in value_list if item is not None]), None
             if operation == "distinct_count":
-                return len(set(str(item) for item in values)) if isinstance(
-                    values, list
-                ) else 0, None
+                return len(set(str(item) for item in value_list if item is not None)), None
             if operation == "sum":
                 return str(sum(numeric, Decimal("0"))), None
             if operation == "average":

@@ -397,33 +397,56 @@ def _seed_governed_definitions() -> None:
                 }
             ],
         )
-        case_specs: tuple[tuple[str, dict[str, object], object], ...]
+        case_specs: tuple[tuple[str, dict[str, object], object, str], ...]
         if operation == "count":
             case_specs = (
-                ("NORMAL_CASE", {"values": [1, 2]}, 2),
-                ("ZERO_CASE", {"values": []}, 0),
+                ("NORMAL_CASE", {"values": [1, 2]}, 2, "completed"),
+                ("ZERO_CASE", {"values": []}, 0, "completed"),
+                ("NULL_HANDLING_CASE", {"values": [1, None]}, 1, "completed"),
+                ("BOUNDARY_CASE", {"values": list(range(100))}, 100, "completed"),
             )
         elif operation == "sum":
             case_specs = (
-                ("NORMAL_CASE", {"values": [1, 2]}, "3"),
-                ("ZERO_CASE", {"values": []}, "0"),
+                ("NORMAL_CASE", {"values": [1, 2]}, "3", "completed"),
+                ("ZERO_CASE", {"values": []}, "0", "completed"),
+                ("NULL_HANDLING_CASE", {"values": [1, None]}, "1", "completed"),
+                (
+                    "BOUNDARY_CASE",
+                    {"values": ["999999999999.99"]},
+                    "999999999999.99",
+                    "completed",
+                ),
             )
         elif operation in {"absolute_variance", "reconciliation"}:
             case_specs = (
-                ("NORMAL_CASE", {"left": 2, "right": 1}, "1"),
-                ("ZERO_CASE", {"left": 0, "right": 0}, "0"),
+                ("NORMAL_CASE", {"left": 2, "right": 1}, "1", "completed"),
+                ("ZERO_CASE", {"left": 0, "right": 0}, "0", "completed"),
+                ("BOUNDARY_CASE", {"left": -1, "right": 1}, "-2", "completed"),
             )
         elif operation == "percentage_variance":
             case_specs = (
-                ("NORMAL_CASE", {"left": 3, "right": 2}, "50"),
-                ("ZERO_CASE", {"left": 1, "right": 1}, "0"),
+                ("NORMAL_CASE", {"left": 3, "right": 2}, "50", "completed"),
+                ("ZERO_CASE", {"left": 1, "right": 1}, "0", "completed"),
+                ("BOUNDARY_CASE", {"left": 0, "right": 1}, "-100", "completed"),
+                ("DENOMINATOR_ZERO_CASE", {"left": 1, "right": 0}, None, "failed"),
             )
         else:
             case_specs = (
-                ("NORMAL_CASE", {"left": 1, "right": 2}, "50"),
-                ("ZERO_CASE", {"left": 0, "right": 1}, "0"),
+                ("NORMAL_CASE", {"left": 1, "right": 2}, "50", "completed"),
+                ("ZERO_CASE", {"left": 0, "right": 1}, "0", "completed"),
+                ("BOUNDARY_CASE", {"left": 1, "right": 1}, "100", "completed"),
+                ("DENOMINATOR_ZERO_CASE", {"left": 1, "right": 0}, None, "failed"),
             )
-        for case_code, payload, expected in case_specs:
+        case_specs += (
+            ("MISSING_INPUT_CASE", {}, None, "failed"),
+            (
+                "INVALID_UNIT_CASE",
+                {"values": [1], "left": 1, "right": 1, "unit": "INVALID"},
+                None,
+                "failed",
+            ),
+        )
+        for case_code, payload, expected, expected_status in case_specs:
             op.bulk_insert(
                 cases,
                 [
@@ -435,7 +458,7 @@ def _seed_governed_definitions() -> None:
                         "input_payload": seed_json(payload),
                         "expected_output": seed_json(expected),
                         "tolerance": "0",
-                        "expected_status": "completed",
+                        "expected_status": expected_status,
                         "created_at": now,
                         "updated_at": now,
                     }

@@ -50,6 +50,7 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
         assert wp_210_tables <= set(inspect(engine).get_table_names())
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 10
+            assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 56
         command.downgrade(config, "20260725_0009")
         assert not (wp_210_tables & set(inspect(engine).get_table_names()))
         command.upgrade(config, "head")
