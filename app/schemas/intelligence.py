@@ -118,6 +118,16 @@ class IntelligenceExecutionRead(BaseModel):
     evaluation_time: datetime
     completed_at: datetime | None
     created_at: datetime
+    evidence: list["EvidenceReferenceRead"]
+
+
+class EvidenceReferenceRead(EvidenceReference):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    execution_id: UUID
+    created_at: datetime
 
 
 class DefinitionRead(BaseModel):

@@ -30,6 +30,18 @@ def test_decimal_calculations_are_exact_and_nulls_are_explicit() -> None:
     assert total.excluded_count == 1
 
 
+def test_distinct_count_excludes_only_nulls_not_duplicates() -> None:
+    outcome = ArithmeticEvaluator().execute(
+        default_calculation_registry().get("distinct_count", "1.0"),
+        [{"code": "A"}, {"code": "A"}, {"code": "B"}, {"code": None}],
+        {"field": "code"},
+    )
+
+    assert outcome.value == Decimal(2)
+    assert outcome.checked_count == 4
+    assert outcome.excluded_count == 1
+
+
 @pytest.mark.parametrize("code", ["ratio", "percentage", "percentage_variance"])
 def test_division_by_zero_is_rejected(code: str) -> None:
     definition = default_calculation_registry().get(code, "1.0")

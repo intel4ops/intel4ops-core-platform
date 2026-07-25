@@ -72,6 +72,7 @@ def test_intelligence_api_execution_registry_and_lookup(client: TestClient) -> N
     body = response.json()
     assert body["result_value"] == "0.300000000000"
     assert body["status"] == "completed"
+    assert body["evidence"] == []
 
     fetched = client.get(
         f"/api/v1/organizations/{organization_id}/intelligence-executions/{body['id']}"

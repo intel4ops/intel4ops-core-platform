@@ -50,8 +50,13 @@ class ArithmeticEvaluator:
             return ArithmeticOutcome(Decimal(len(records)), len(records), 0)
         if operation == CalculationOperation.DISTINCT_COUNT:
             field = str(parameters["field"])
-            values = {str(record[field]) for record in records if record.get(field) is not None}
-            return ArithmeticOutcome(Decimal(len(values)), len(records), len(records) - len(values))
+            present_values = [
+                str(record[field]) for record in records if record.get(field) is not None
+            ]
+            values = set(present_values)
+            return ArithmeticOutcome(
+                Decimal(len(values)), len(records), len(records) - len(present_values)
+            )
         if operation in {
             CalculationOperation.SUM,
             CalculationOperation.AVERAGE,

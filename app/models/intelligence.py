@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 from app.models.entities import utc_now
@@ -112,6 +112,10 @@ class IntelligenceExecution(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
+    evidence: Mapped[list["IntelligenceExecutionEvidence"]] = relationship(
+        back_populates="execution", cascade="all, delete-orphan", passive_deletes=True
+    )
+
 
 class IntelligenceExecutionEvidence(Base):
     __tablename__ = "intelligence_execution_evidence"
@@ -151,3 +155,5 @@ class IntelligenceExecutionEvidence(Base):
     contributing_record_count: Mapped[int] = mapped_column(Integer, default=0)
     excluded_record_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    execution: Mapped[IntelligenceExecution] = relationship(back_populates="evidence")
