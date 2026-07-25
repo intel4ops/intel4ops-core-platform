@@ -110,7 +110,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0007`.
+Current head revision: `20260725_0010`.
 
 ## Tests and quality checks
 
@@ -172,3 +172,15 @@ WP-2.09 arithmetic-first method selection, explicit engine adapters,
 sufficiency and escalation policy, idempotency, and explainability are
 documented in
 [`docs/progressive-intelligence-orchestrator.md`](docs/progressive-intelligence-orchestrator.md).
+
+## Operational Intelligence Knowledge Base
+
+WP-2.10 adds the governed OIKB definition registry, immutable semantic versions,
+bounded formula contracts, provenance, validation, approvals, lifecycle audit,
+tenant-safe specialization resolution, and execution-package export. See
+[`docs/oikb/architecture.md`](docs/oikb/architecture.md).
+
+OIKB APIs use the `/api/v1/oikb` prefix. Private operations require
+`organization_id`; shared system knowledge requires platform administration.
+The migration installs ten active provisional seed definitions and retains an
+explicit code-backed compatibility fallback for definitions not yet governed.

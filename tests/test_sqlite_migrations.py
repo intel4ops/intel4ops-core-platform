@@ -2,7 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 
 def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
@@ -33,6 +33,28 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "intelligence_executions",
             "intelligence_execution_evidence",
         }
+        wp_210_tables = {
+            "oikb_definitions",
+            "oikb_definition_versions",
+            "oikb_parameters",
+            "oikb_input_requirements",
+            "oikb_evidence_requirements",
+            "oikb_sources",
+            "oikb_definition_sources",
+            "oikb_validation_cases",
+            "oikb_validation_results",
+            "oikb_approvals",
+            "oikb_change_log",
+            "oikb_relationships",
+        }
+        assert wp_210_tables <= set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 10
+            assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 56
+        command.downgrade(config, "20260725_0009")
+        assert not (wp_210_tables & set(inspect(engine).get_table_names()))
+        command.upgrade(config, "head")
+        assert wp_210_tables <= set(inspect(engine).get_table_names())
         assert wp_205_tables | wp_206_tables | wp_207_tables <= set(
             inspect(engine).get_table_names()
         )

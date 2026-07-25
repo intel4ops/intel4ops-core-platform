@@ -13,6 +13,7 @@ from app.definitions.resolution import (
     DefinitionKnowledgeClass,
 )
 from app.models.entities import Finding
+from app.models.intelligence import IntelligenceExecution
 from app.models.orchestration import (
     IntelligenceEngineRegistration,
     IntelligenceOrchestrationStep,
@@ -23,10 +24,23 @@ from app.schemas.contracts import OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import DatasetCreate
 from app.schemas.intelligence import ExecutionType
+from app.schemas.oikb import (
+    DefinitionCreate,
+    DefinitionVersionCreate,
+    GovernanceAction,
+    InputRequirementCreate,
+    LifecycleStatus,
+    ValidationCaseCreate,
+)
 from app.schemas.orchestration import OrchestrationAnalyticalLevel, OrchestrationCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
 from app.services.ingestion_service import DatasetService
+from app.services.oikb_service import (
+    definition_registry_service,
+    governance_service,
+    knowledge_validation_service,
+)
 from app.services.orchestration_service import (
     ArithmeticEngineAdapter,
     EngineRegistrationConsistencyService,
@@ -161,6 +175,102 @@ def candidate(measured_value: str) -> CandidateFindingCreate:
         ],
         limitations=["Synthetic acceptance-test evidence."],
     )
+
+
+def test_governed_oikb_definition_executes_through_wp207_adapter(db: Session) -> None:
+    organization_id, dataset_id, assessment_id, readiness_id = foundation(
+        db, "orchestration-governed-oikb"
+    )
+    actor = uuid4()
+    definition = definition_registry_service.create(
+        db,
+        DefinitionCreate(
+            stable_code="SHARED.OPERATIONS.GOVERNED_SUM",
+            name="Governed sum",
+            description="Governed orchestration integration test.",
+            knowledge_class="kpi",
+            analytical_level="arithmetic",
+            domain="operations",
+            scope_type="shared_core",
+            is_system_definition=True,
+        ),
+        actor,
+    )
+    version = definition_registry_service.create_version(
+        db,
+        definition.id,
+        None,
+        DefinitionVersionCreate(
+            semantic_version="1.0.0",
+            quality_level="provisional",
+            expression_schema={"operation": "sum", "inputs": ["amount"]},
+            output_type="currency",
+            output_unit="USD",
+            currency_code="USD",
+            readiness_requirement={"analytical_level": "arithmetic"},
+            input_requirements=[
+                InputRequirementCreate(
+                    input_code="amount",
+                    canonical_entity="transaction",
+                    canonical_field="amount",
+                    expected_type="currency",
+                    expected_unit="USD",
+                    currency_code="USD",
+                )
+            ],
+        ),
+        actor,
+    )
+    knowledge_validation_service.create_case(
+        db,
+        version,
+        ValidationCaseCreate(
+            case_code="NORMAL_CASE",
+            description="Normal sum.",
+            input_payload={"values": [1, 2]},
+            expected_output="3",
+            tolerance="0",
+        ),
+    )
+    knowledge_validation_service.run(db, version, actor)
+    for lifecycle in (
+        LifecycleStatus.IN_REVIEW,
+        LifecycleStatus.VALIDATED,
+        LifecycleStatus.APPROVED,
+        LifecycleStatus.ACTIVE,
+    ):
+        if lifecycle == LifecycleStatus.VALIDATED:
+            governance_service.mark_validated(db, version.id, None, actor)
+        else:
+            governance_service.transition(
+                db,
+                version.id,
+                None,
+                lifecycle,
+                GovernanceAction(reason=f"test {lifecycle.value}"),
+                actor,
+            )
+    payload = request(
+        dataset_id,
+        assessment_id,
+        readiness_id,
+        key="governed-oikb",
+        definition_code=definition.stable_code,
+    ).model_copy(update={"definition_version": "1.0.0"})
+    service = OrchestrationService()
+    outcome = service.orchestrate(db, organization_id, payload, actor)
+    execution_id = next(
+        step.source_execution_id
+        for step in service.steps(db, organization_id, outcome.id)
+        if step.source_execution_id is not None
+    )
+    execution = db.get(IntelligenceExecution, execution_id)
+    assert execution is not None
+    assert execution.status == "completed"
+    assert execution.definition_code == definition.stable_code
+    assert execution.definition_version == "1.0.0"
+    assert execution.definition_fingerprint == version.fingerprint
+    assert any("governed OIKB-to-WP-2.07" in item for item in execution.limitations)
 
 
 def test_arithmetic_orchestration_is_explainable_and_reuses_wp207(db: Session) -> None:

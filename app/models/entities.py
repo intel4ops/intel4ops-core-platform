@@ -171,6 +171,12 @@ class Finding(Base):
             "definition_code",
             "definition_version",
         ),
+        Index(
+            "ix_findings_oikb_definition",
+            "organization_id",
+            "oikb_definition_id",
+            "oikb_definition_version_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -240,6 +246,12 @@ class Finding(Base):
     definition_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     definition_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
     definition_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    oikb_definition_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("oikb_definitions.id", ondelete="RESTRICT"), nullable=True
+    )
+    oikb_definition_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("oikb_definition_versions.id", ondelete="RESTRICT"), nullable=True
+    )
     trust_assessment_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("trust_assessments.id", ondelete="RESTRICT"), nullable=True
     )
