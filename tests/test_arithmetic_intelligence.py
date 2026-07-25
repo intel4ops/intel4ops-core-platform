@@ -89,3 +89,53 @@ def test_definition_registries_are_stable_and_sorted() -> None:
     assert [(item.code, item.version) for item in rules] == sorted(
         (item.code, item.version) for item in rules
     )
+
+
+def test_approved_oikb_seed_library_is_registered_and_deferred_methods_are_absent() -> None:
+    registry = default_calculation_registry()
+    approved_codes = {
+        "SHARED.QUALITY.DIRECT_QUALITY_COST",
+        "SHARED.FINANCE.OUTSTANDING_BALANCE",
+        "SHARED.FINANCE.DISCOUNT_VARIANCE",
+        "SHARED.PROCUREMENT.PURCHASE_PRICE_VARIANCE",
+        "SHARED.PROCUREMENT.THREE_WAY_MATCH_DIFFERENCE",
+        "SHARED.ASSET.MAINTENANCE_COST_VARIANCE",
+        "SHARED.FINANCE.REVENUE_RECONCILIATION",
+        "SHARED.FINANCE.BUDGET_VARIANCE",
+        "MOBILITY.REVENUE.FAREBOX_RECONCILIATION",
+        "MANUFACTURING.MATERIAL.MASS_BALANCE_VARIANCE",
+        "OIL_GAS.CUSTODY.CUSTODY_TRANSFER_BALANCE",
+        "OIL_GAS.PRODUCTION.NETWORK_ALLOCATION_VARIANCE",
+        "UTILITY.WATER.DMA_WATER_BALANCE",
+    }
+
+    registered_codes = {definition.code for definition in registry.list()}
+    assert approved_codes <= registered_codes
+    assert "MINING.QUALITY.GRADE_VALUE_VARIANCE" not in registered_codes
+    assert "PORTS.VESSEL.PORT_CALL_DURATION_DECOMPOSITION" not in registered_codes
+    assert all(registry.get(code, "1.0.0").domain_owner for code in approved_codes)
+
+
+def test_approved_oikb_seed_profiles_execute_over_bounded_primitives() -> None:
+    registry = default_calculation_registry()
+    evaluator = ArithmeticEvaluator()
+
+    direct_cost = evaluator.execute(
+        registry.get("SHARED.QUALITY.DIRECT_QUALITY_COST", "1.0.0"),
+        [{"direct_cost": "100"}, {"direct_cost": None}, {"direct_cost": "25.50"}],
+        {"field": "direct_cost"},
+    )
+    outstanding = evaluator.execute(
+        registry.get("SHARED.FINANCE.OUTSTANDING_BALANCE", "1.0.0"),
+        [],
+        {"left": "1000", "right": "700"},
+    )
+    water_balance = evaluator.execute(
+        registry.get("UTILITY.WATER.DMA_WATER_BALANCE", "1.0.0"),
+        [],
+        {"left": "1000", "right": "850"},
+    )
+
+    assert direct_cost == type(direct_cost)(Decimal("125.500000"), 3, 1)
+    assert outstanding.value == Decimal("300.000000")
+    assert water_balance.value == Decimal("150.000000")

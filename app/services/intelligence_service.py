@@ -26,6 +26,7 @@ from app.models.trust import (
     TrustAssessmentStatus,
 )
 from app.registries.calculation_registry import (
+    CalculationDefinition,
     CalculationRegistry,
     default_calculation_registry,
 )
@@ -132,6 +133,7 @@ class IntelligenceExecutionService:
             return execution
         try:
             if payload.execution_type == ExecutionType.CALCULATION:
+                self._validate_oikb_measurement_policy(calculation_definition, payload)
                 outcome = self.arithmetic.execute(
                     calculation_definition, payload.records, payload.parameters
                 )
@@ -278,6 +280,40 @@ class IntelligenceExecutionService:
                     **reference.model_dump(),
                 )
             )
+
+    @staticmethod
+    def _validate_oikb_measurement_policy(
+        definition: CalculationDefinition,
+        payload: IntelligenceExecutionCreate,
+    ) -> None:
+        if "." not in definition.code:
+            return
+        if definition.supports_currency:
+            if payload.currency is None:
+                raise ArithmeticEvaluationError(
+                    f"Currency is required for OIKB definition {definition.code}"
+                )
+            record_currencies = [record.get("currency") for record in payload.records if record]
+            if record_currencies and (
+                any(currency is None for currency in record_currencies)
+                or any(str(currency).upper() != payload.currency for currency in record_currencies)
+            ):
+                raise ArithmeticEvaluationError(
+                    "OIKB currency-bearing records must use the execution currency; "
+                    "FX is unsupported"
+                )
+        elif payload.unit is None:
+            raise ArithmeticEvaluationError(
+                f"Unit is required for OIKB definition {definition.code}"
+            )
+        if payload.unit is not None:
+            record_units = [
+                record.get("unit") for record in payload.records if record.get("unit") is not None
+            ]
+            if any(str(unit) != payload.unit for unit in record_units):
+                raise ArithmeticEvaluationError(
+                    "OIKB records must use the execution unit; implicit conversion is unsupported"
+                )
 
     @staticmethod
     def _json_safe(value: dict[str, object]) -> dict[str, object]:

@@ -81,6 +81,12 @@ def _definition_read(definition: object, operation: str) -> DefinitionRead:
         required_parameters=list(definition.required_parameters),  # type: ignore[attr-defined]
         analytical_level=definition.analytical_level,  # type: ignore[attr-defined]
         status=definition.status,  # type: ignore[attr-defined]
+        canonical_fields=list(getattr(definition, "canonical_fields", ())),
+        evidence_contract=getattr(definition, "evidence_contract", None),
+        unit_policy=getattr(definition, "unit_policy", None),
+        currency_policy=getattr(definition, "currency_policy", None),
+        scope_correction=getattr(definition, "scope_correction", None),
+        domain_owner=getattr(definition, "domain_owner", None),
     )
 
 

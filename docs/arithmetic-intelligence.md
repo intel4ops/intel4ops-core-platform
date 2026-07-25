@@ -30,6 +30,25 @@ and reconciliation difference. Representative deterministic rules cover threshol
 breaches, unmet thresholds, outside-range checks, and reconciliation mismatches.
 Industry packs can register future typed definitions without changing the evaluator.
 
+## Approved OIKB seed library
+
+The governance-approved WP-2.07 seed library registers 13 immutable version `1.0.0`
+profiles over the bounded primitives above. `SHARED.QUALITY.DIRECT_QUALITY_COST` is
+the first implementation seed, followed by shared scalar variances, shared
+reconciliations, and industry balance specializations. Definition-list responses
+include canonical fields, evidence contract, unit and currency policies, corrected
+v1 scope, and accountable domain-owner role.
+
+Composite preparation remains the caller's governed responsibility: filtering,
+matching, grouping, unit normalization, and construction of input totals occur
+before the registered primitive executes. The engine does not infer joins, convert
+units or currencies, evaluate dates, or perform fuzzy matching.
+
+`MINING.QUALITY.GRADE_VALUE_VARIANCE` and
+`PORTS.VESSEL.PORT_CALL_DURATION_DECOMPOSITION` remain deferred and are not
+registered in WP-2.07 because they require composite valuation or date arithmetic
+outside the approved primitive boundary.
+
 ## Progressive Intelligence
 
 An execution resolves a completed Trust assessment for the same organization and
