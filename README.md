@@ -79,6 +79,11 @@ mechanism.
 - `POST /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions/{version_id}/transition`
 - `PATCH /api/v1/organizations/{organization_id}/datasets/{dataset_id}/versions/{version_id}/counts`
 - `POST /api/v1/trust/profile`
+- `POST /api/v1/organizations/{organization_id}/intelligence-executions`
+- `GET /api/v1/organizations/{organization_id}/intelligence-executions`
+- `GET /api/v1/organizations/{organization_id}/intelligence-executions/{execution_id}`
+- `GET /api/v1/organizations/{organization_id}/calculation-definitions`
+- `GET /api/v1/organizations/{organization_id}/rule-definitions`
 - `POST /api/v1/intelligence/maintenance/analyze?organization_id={uuid}`
 - `GET /api/v1/command/findings?organization_id={uuid}`
 - `POST /api/v1/recovery/actions?organization_id={uuid}`
@@ -94,6 +99,9 @@ Raw artifact identity, integrity, retention, processing history, and bounded lin
 are documented in [Raw storage and lineage](docs/raw-storage-lineage.md).
 Shared data-quality rules, scoring, evidence sampling, and Progressive Intelligence
 readiness gates are documented in [Shared Trust Engine](docs/trust-engine.md).
+Decimal-safe arithmetic, deterministic rules, readiness enforcement, and execution
+evidence are documented in
+[Arithmetic and Rule-Based Intelligence](docs/arithmetic-intelligence.md).
 
 ## Migrations
 
@@ -102,7 +110,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260724_0006`.
+Current head revision: `20260724_0007`.
 
 ## Tests and quality checks
 
