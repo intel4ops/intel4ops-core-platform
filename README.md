@@ -110,7 +110,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260725_0010`.
+Current head revision: `20260725_0011`.
 
 ## Tests and quality checks
 
@@ -172,6 +172,15 @@ WP-2.09 arithmetic-first method selection, explicit engine adapters,
 sufficiency and escalation policy, idempotency, and explainability are
 documented in
 [`docs/progressive-intelligence-orchestrator.md`](docs/progressive-intelligence-orchestrator.md).
+
+## Statistical intelligence
+
+WP-2.11 adds a bounded, explainable statistical method registry, explicit statistical
+readiness enforcement, reproducible baselines, anomaly scoring, false-positive
+controls, tenant-safe execution APIs, and OIKB/orchestrator integration. See
+[`docs/statistical-intelligence/architecture.md`](docs/statistical-intelligence/architecture.md).
+An anomaly is a governed deviation from a baseline and is not a causal, fraud,
+misconduct, or safety conclusion.
 
 ## Operational Intelligence Knowledge Base
 

@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_statistical_service import execution_payload, statistical_foundation
 
 from app.models.entities import (
     Finding,
@@ -56,6 +57,7 @@ from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
 )
+from app.services.statistical_service import statistical_execution_service
 from app.services.trust_service import TrustAssessmentService
 
 MANAGED_TABLES = {
@@ -103,6 +105,14 @@ MANAGED_TABLES = {
     "oikb_approvals",
     "oikb_change_log",
     "oikb_relationships",
+    "statistical_executions",
+    "statistical_baselines",
+    "statistical_observations",
+    "statistical_score_components",
+    "statistical_execution_steps",
+    "statistical_method_registry",
+    "anomaly_suppression_records",
+    "anomaly_review_feedback",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -537,14 +547,30 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert {"oikb_definitions", "oikb_definition_versions"} <= finding_foreign_tables
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 10
-        assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 56
+        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 22
+        assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 308
+        assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
 
 
 @pytest.mark.postgres
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_211_tables = {
+        "statistical_executions",
+        "statistical_baselines",
+        "statistical_observations",
+        "statistical_score_components",
+        "statistical_execution_steps",
+        "statistical_method_registry",
+        "anomaly_suppression_records",
+        "anomaly_review_feedback",
+    }
+    command.downgrade(config, "20260725_0010")
+    assert not (wp_211_tables & set(inspect(postgres_engine).get_table_names()))
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -641,6 +667,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_208_tables
         - wp_209_tables
         - wp_210_tables
+        - wp_211_tables
         <= wp_203_tables
     )
 
@@ -1250,3 +1277,33 @@ def test_orchestration_uuid_jsonb_idempotency_and_tenant_scope_on_postgres(
             )
             is None
         )
+
+
+@pytest.mark.postgres
+def test_statistical_uuid_jsonb_tenancy_and_execution_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, _, trust_id, readiness_id, actor = statistical_foundation(
+            session, f"postgres-statistical-{uuid4().hex[:8]}"
+        )
+        execution = statistical_execution_service.execute(
+            session,
+            organization_id,
+            execution_payload(
+                trust_id,
+                readiness_id,
+                key=f"postgres-statistical-{uuid4().hex}",
+            ),
+            actor,
+        )
+        assert execution.status == "succeeded"
+        observations = statistical_execution_service.observations_for(
+            session, organization_id, execution.id
+        )
+        assert observations[0].is_anomaly
+        metadata = observations[0].method_trace["metadata"]
+        assert isinstance(metadata, dict)
+        assert metadata["method_code"] == "MODIFIED_Z_SCORE"
+        assert observations[0].evidence_references[0]["aggregate_only"] is True

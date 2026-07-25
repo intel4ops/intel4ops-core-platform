@@ -36,6 +36,16 @@ from app.models.raw_lineage import (
     RawRecordReference,
     RawStorageObject,
 )
+from app.models.statistics import (
+    AnomalyReviewFeedback,
+    AnomalySuppressionRecord,
+    StatisticalBaseline,
+    StatisticalExecution,
+    StatisticalExecutionStep,
+    StatisticalMethodRegistration,
+    StatisticalObservation,
+    StatisticalScoreComponent,
+)
 from app.models.trust import (
     AnalyticalReadinessDecision,
     TrustAssessment,
@@ -79,4 +89,12 @@ __all__ = [
     "OIKBSource",
     "OIKBValidationCase",
     "OIKBValidationResult",
+    "AnomalyReviewFeedback",
+    "AnomalySuppressionRecord",
+    "StatisticalBaseline",
+    "StatisticalExecution",
+    "StatisticalExecutionStep",
+    "StatisticalMethodRegistration",
+    "StatisticalObservation",
+    "StatisticalScoreComponent",
 ]

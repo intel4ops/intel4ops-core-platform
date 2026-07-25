@@ -765,7 +765,7 @@ class KnowledgeValidationService:
 
 
 class ExecutionPackageExportService:
-    executable_levels = {"arithmetic", "rule_based"}
+    executable_levels = {"arithmetic", "rule_based", "statistical"}
 
     def export(
         self,
