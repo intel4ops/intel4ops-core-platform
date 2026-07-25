@@ -113,6 +113,17 @@ MANAGED_TABLES = {
     "statistical_method_registry",
     "anomaly_suppression_records",
     "anomaly_review_feedback",
+    "forecast_executions",
+    "forecast_candidates",
+    "forecast_backtests",
+    "forecast_metrics",
+    "forecast_points",
+    "forecast_scenarios",
+    "forecast_revisions",
+    "forecast_actuals",
+    "forecast_accuracy_results",
+    "forecast_method_registry",
+    "forecast_execution_steps",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -547,15 +558,49 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert {"oikb_definitions", "oikb_definition_versions"} <= finding_foreign_tables
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 22
-        assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 308
+        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 34
+        assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 320
         assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
+        assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
+    forecast_columns = {
+        column["name"]: column for column in inspector.get_columns("forecast_executions")
+    }
+    assert str(forecast_columns["id"]["type"]) == "UUID"
+    assert str(forecast_columns["readiness_snapshot"]["type"]) == "JSONB"
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("forecast_executions")
+    } >= {
+        "organizations",
+        "oikb_definitions",
+        "oikb_definition_versions",
+        "trust_assessments",
+        "analytical_readiness_decisions",
+    }
 
 
 @pytest.mark.postgres
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_212_tables = {
+        "forecast_executions",
+        "forecast_candidates",
+        "forecast_backtests",
+        "forecast_metrics",
+        "forecast_points",
+        "forecast_scenarios",
+        "forecast_revisions",
+        "forecast_actuals",
+        "forecast_accuracy_results",
+        "forecast_method_registry",
+        "forecast_execution_steps",
+    }
+    command.downgrade(config, "20260725_0011")
+    assert not (wp_212_tables & set(inspect(postgres_engine).get_table_names()))
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -668,6 +713,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_209_tables
         - wp_210_tables
         - wp_211_tables
+        - wp_212_tables
         <= wp_203_tables
     )
 
@@ -911,7 +957,7 @@ def test_raw_storage_uuid_scope_and_foreign_keys_on_postgres(
         assert isinstance(assessment.id, UUID)
         assert assessment.overall_score == 100
         assert len(trust_service.rule_results(session, organization.id, assessment.id)) == 2
-        assert len(trust_service.readiness(session, organization.id, assessment.id)) == 5
+        assert len(trust_service.readiness(session, organization.id, assessment.id)) == 6
 
 
 @pytest.mark.postgres

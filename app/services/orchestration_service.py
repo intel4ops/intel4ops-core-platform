@@ -42,6 +42,7 @@ from app.registries.engine_registry import (
     EngineExecutionResult,
     EngineRegistry,
 )
+from app.schemas.forecasting import ForecastExecutionCreate, ForecastObservationInput
 from app.schemas.intelligence import ExecutionType, IntelligenceExecutionCreate
 from app.schemas.orchestration import (
     AnalyticalOutputReference,
@@ -53,6 +54,7 @@ from app.schemas.orchestration import (
 )
 from app.schemas.statistics import StatisticalExecutionCreate, StatisticalObservationInput
 from app.services.finding_platform_service import FindingPlatformError, finding_publication_service
+from app.services.forecasting_service import forecast_execution_service
 from app.services.intelligence_service import intelligence_execution_service
 from app.services.statistical_service import statistical_execution_service
 
@@ -257,6 +259,145 @@ class StatisticalEngineAdapter:
         )
 
 
+class ForecastingEngineAdapter:
+    capability = EngineCapability(
+        engine_code="FORECASTING_INTELLIGENCE_ENGINE",
+        engine_name="Intel4Ops Forecasting Intelligence Engine",
+        engine_version="1.0",
+        analytical_level=OrchestrationAnalyticalLevel.FORECASTING,
+        capability_code="bounded_forecasting_intelligence",
+        implementation_reference="app.services.forecasting_service",
+    )
+
+    def can_execute(self, definition_level: OrchestrationAnalyticalLevel) -> bool:
+        return definition_level == self.capability.analytical_level
+
+    def execute(
+        self,
+        db: Session,
+        organization_id: UUID,
+        payload: OrchestrationCreate,
+        actor_user_id: UUID,
+        execution_idempotency_key: str,
+    ) -> EngineExecutionResult:
+        del execution_idempotency_key
+        observations = [
+            ForecastObservationInput(
+                timestamp=record["timestamp"],
+                value=record.get("value"),
+                status=record.get("period_status", "complete"),
+                unit=payload.unit or "count",
+                currency_code=payload.currency,
+                entity_reference=(
+                    str(record["entity_reference"])
+                    if record.get("entity_reference") is not None
+                    else None
+                ),
+            )
+            for record in payload.records
+        ]
+        forecast = forecast_execution_service.execute(
+            db,
+            organization_id,
+            ForecastExecutionCreate(
+                definition_code=payload.definition_code,
+                definition_version=payload.definition_version,
+                trust_assessment_id=payload.trust_assessment_id,
+                readiness_assessment_id=payload.analytical_readiness_id,
+                orchestration_request_id=None,
+                dataset_reference=payload.dataset_reference,
+                dataset_fingerprint=str(
+                    payload.request_context.get("dataset_fingerprint")
+                    or _hash({"dataset": payload.dataset_reference, "records": payload.records})
+                ),
+                source_lineage_reference=str(
+                    payload.request_context.get("source_lineage_reference")
+                    or f"dataset:{payload.dataset_reference}"
+                ),
+                target_code=str(payload.request_context.get("target_code") or "forecast_target"),
+                source_time_grain=str(payload.parameters.get("source_time_grain", "MONTHLY")),
+                forecast_time_grain=str(payload.parameters.get("forecast_time_grain", "MONTHLY")),
+                forecast_horizon=_forecast_horizon(payload.parameters),
+                candidate_methods=_forecast_methods(payload.parameters),
+                primary_metric=str(payload.parameters.get("primary_metric", "WAPE")),
+                observations=observations,
+                parameters=dict(payload.parameters),
+                correlation_id=payload.correlation_id,
+            ),
+            actor_user_id,
+        )
+        point = next(
+            (
+                item
+                for item in forecast.points
+                if item.scenario_code == "BASE" and item.horizon_step == 1
+            ),
+            None,
+        )
+        bridge = IntelligenceExecution(
+            organization_id=organization_id,
+            dataset_id=payload.dataset_id,
+            dataset_version_id=payload.dataset_version_id,
+            trust_assessment_id=payload.trust_assessment_id,
+            readiness_decision_id=payload.analytical_readiness_id,
+            execution_type=ExecutionType.CALCULATION.value,
+            definition_code=payload.definition_code,
+            definition_version=payload.definition_version,
+            definition_fingerprint=forecast.execution_package_fingerprint,
+            input_fingerprint=forecast.reproducibility_fingerprint,
+            status=(
+                IntelligenceExecutionStatus.COMPLETED.value
+                if forecast.status == "succeeded"
+                else IntelligenceExecutionStatus.BLOCKED.value
+            ),
+            idempotency_key=f"forecast:{forecast.id}:bridge",
+            parameters_json=dict(payload.parameters),
+            result_value=Decimal(str(point.point_forecast)) if point else None,
+            unit=forecast.target_unit,
+            checked_record_count=len(observations),
+            excluded_record_count=0,
+            affected_record_count=0,
+            blocking_rule_codes=[],
+            warning_rule_codes=[],
+            warnings=list(forecast.warnings),
+            limitations=[*forecast.limitations, f"Forecast execution reference: {forecast.id}"],
+            non_execution_reason=forecast.failure_message,
+            evaluation_time=datetime.now(UTC),
+            created_by_user_id=actor_user_id,
+            completed_at=forecast.completed_at,
+        )
+        db.add(bridge)
+        db.commit()
+        db.refresh(bridge)
+        return EngineExecutionResult(
+            execution=bridge,
+            output=AnalyticalOutputReference(
+                execution_id=bridge.id,
+                result_id=forecast.id,
+                result_locator=f"forecast-execution:{forecast.id}",
+                result_summary={
+                    "status": forecast.status,
+                    "selected_method": forecast.selected_method_code,
+                },
+                output_index=0,
+            ),
+        )
+
+
+def _forecast_horizon(parameters: dict[str, object]) -> int:
+    value = parameters.get("forecast_horizon", 3)
+    if not isinstance(value, (int, float, str)):
+        raise OrchestrationError("INVALID_FORECAST_HORIZON", "Forecast horizon is invalid")
+    return int(value)
+
+
+def _forecast_methods(parameters: dict[str, object]) -> list[str]:
+    value = parameters.get("candidate_methods", ["NAIVE", "HOLT_LINEAR_TREND"])
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise OrchestrationError("INVALID_FORECAST_METHODS", "Candidate methods are invalid")
+    return [str(item) for item in value]
+
+
 def _embedded_output(execution: IntelligenceExecution) -> EngineExecutionResult:
     return EngineExecutionResult(
         execution=execution,
@@ -300,6 +441,7 @@ def default_engine_registry() -> EngineRegistry:
     registry.register(ArithmeticEngineAdapter())
     registry.register(DeterministicRuleEngineAdapter())
     registry.register(StatisticalEngineAdapter())
+    registry.register(ForecastingEngineAdapter())
     return registry
 
 
@@ -347,8 +489,13 @@ class ReadinessCompatibilityPolicy:
                     "through an explicit compatibility policy.",
                 ),
             )
+        if requested_level == OrchestrationAnalyticalLevel.FORECASTING:
+            return ReadinessResolution(
+                evaluated_level="forecasting",
+                mapping_policy_code="FORECASTING_READINESS_V1",
+                mapping_policy_version="1.0",
+            )
         if requested_level in {
-            OrchestrationAnalyticalLevel.FORECASTING,
             OrchestrationAnalyticalLevel.RELIABILITY,
             OrchestrationAnalyticalLevel.SIMULATION,
         }:
@@ -841,10 +988,10 @@ class OrchestrationService:
         )
         engine_payload = payload
         governed_operation = definition.scope_metadata.get("operation")
-        if (
-            definition.scope_metadata.get("legacy_fallback") is False
-            and definition_level != OrchestrationAnalyticalLevel.STATISTICAL
-        ):
+        if definition.scope_metadata.get("legacy_fallback") is False and definition_level not in {
+            OrchestrationAnalyticalLevel.STATISTICAL,
+            OrchestrationAnalyticalLevel.FORECASTING,
+        }:
             if not isinstance(governed_operation, str):
                 raise OrchestrationError(
                     "DEFINITION_PACKAGE_INVALID",
@@ -865,10 +1012,10 @@ class OrchestrationService:
         )
         execution = engine_result.execution
         output = engine_result.output
-        if (
-            definition.scope_metadata.get("legacy_fallback") is False
-            and definition_level != OrchestrationAnalyticalLevel.STATISTICAL
-        ):
+        if definition.scope_metadata.get("legacy_fallback") is False and definition_level not in {
+            OrchestrationAnalyticalLevel.STATISTICAL,
+            OrchestrationAnalyticalLevel.FORECASTING,
+        }:
             execution.definition_code = definition.code
             execution.definition_version = definition.version
             execution.definition_fingerprint = definition.definition_fingerprint

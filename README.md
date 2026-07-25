@@ -110,7 +110,15 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260725_0011`.
+Current head revision: `20260725_0012`.
+
+## Forecasting intelligence
+
+WP-2.12 provides tenant-safe governed forecasting with a bounded method registry, explicit
+forecast readiness, deterministic preparation, rolling-origin and holdout backtesting, safe
+error metrics, empirical intervals, deterministic model selection, scenarios, revisions,
+actual-versus-forecast monitoring, and OIKB/orchestrator/evidence integration. See
+`docs/forecasting-intelligence/architecture.md`.
 
 ## Tests and quality checks
 
