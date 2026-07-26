@@ -690,3 +690,46 @@ def test_api_queries_are_tenant_scoped_paginated_and_authorized(
     identity.is_platform_admin = False
     engines = client.get("/api/v1/intelligence/engines")
     assert engines.status_code == 403
+
+
+def test_actions_reject_cross_tenant_orchestration_sources(
+    client: TestClient,
+    db: Session,
+) -> None:
+    first, dataset_id, assessment_id, readiness_id = foundation(db, "action-orchestration-source")
+    orchestration = client.post(
+        f"/api/v1/organizations/{first}/intelligence/orchestrations",
+        json=request(
+            dataset_id,
+            assessment_id,
+            readiness_id,
+            key="action-source",
+        ).model_dump(mode="json"),
+    )
+    assert orchestration.status_code == 201
+    orchestration_id = orchestration.json()["id"]
+    second = foundation(db, "action-orchestration-source-other")[0]
+    payload = {
+        "source_type": "manual",
+        "source_reference": f"orchestration:{orchestration_id}",
+        "orchestration_request_id": orchestration_id,
+        "recommendation_type": "inspection",
+        "recommendation_rule_version": "1.0",
+        "title": "Inspect governed orchestration result",
+        "description": "Validate the governed result before operational execution.",
+        "rationale": "The orchestration result requires an organization-owned action.",
+    }
+
+    cross_tenant = client.post(
+        f"/api/v1/organizations/{second}/actions",
+        json=payload,
+    )
+    assert cross_tenant.status_code == 404
+    assert cross_tenant.json()["detail"]["code"] == "SOURCE_NOT_FOUND"
+
+    same_tenant = client.post(
+        f"/api/v1/organizations/{first}/actions",
+        json=payload,
+    )
+    assert same_tenant.status_code == 201
+    assert same_tenant.json()["organization_id"] == str(first)
