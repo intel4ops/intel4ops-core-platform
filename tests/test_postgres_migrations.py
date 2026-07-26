@@ -130,6 +130,14 @@ MANAGED_TABLES = {
     "reliability_execution_steps",
     "reliability_method_registry",
     "reliability_review_feedback",
+    "operational_actions",
+    "action_plan_steps",
+    "action_dependencies",
+    "action_resource_requirements",
+    "action_events",
+    "action_evidence",
+    "action_outcomes",
+    "action_model_feedback",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -610,6 +618,33 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_214_tables = {
+        "operational_actions",
+        "action_plan_steps",
+        "action_dependencies",
+        "action_resource_requirements",
+        "action_events",
+        "action_evidence",
+        "action_outcomes",
+        "action_model_feedback",
+    }
+    action_columns = {
+        column["name"]: column
+        for column in inspect(postgres_engine).get_columns("operational_actions")
+    }
+    assert str(action_columns["id"]["type"]) == "UUID"
+    assert str(action_columns["priority_components"]["type"]) == "JSONB"
+    assert str(action_columns["expected_avoided_cost"]["type"]) == "NUMERIC(38, 12)"
+    assert "uq_action_idempotency" in {
+        item["name"]
+        for item in inspect(postgres_engine).get_unique_constraints("operational_actions")
+    }
+    command.downgrade(config, "20260725_0013")
+    assert not (wp_214_tables & set(inspect(postgres_engine).get_table_names()))
+    assert "reliability_executions" in inspect(postgres_engine).get_table_names()
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     wp_213_tables = {
         "reliability_executions",
         "reliability_metrics",
@@ -758,6 +793,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_211_tables
         - wp_212_tables
         - wp_213_tables
+        - wp_214_tables
         <= wp_203_tables
     )
 
