@@ -49,6 +49,14 @@ from app.models.raw_lineage import (
     RawRecordReference,
     RawStorageObject,
 )
+from app.models.reliability import (
+    ReliabilityExecution,
+    ReliabilityExecutionStep,
+    ReliabilityMethodRegistration,
+    ReliabilityMetric,
+    ReliabilityModelResult,
+    ReliabilityReviewFeedback,
+)
 from app.models.statistics import (
     AnomalyReviewFeedback,
     AnomalySuppressionRecord,
@@ -73,6 +81,12 @@ __all__ = [
     "ProcessingRun",
     "RawRecordReference",
     "RawStorageObject",
+    "ReliabilityExecution",
+    "ReliabilityExecutionStep",
+    "ReliabilityMethodRegistration",
+    "ReliabilityMetric",
+    "ReliabilityModelResult",
+    "ReliabilityReviewFeedback",
     "AnalyticalReadinessDecision",
     "TrustAssessment",
     "TrustEvidence",

@@ -691,6 +691,7 @@ class ProgressiveReadinessPolicy:
         AnalyticalLevel.ARITHMETIC: 1,
         AnalyticalLevel.STATISTICAL: 30,
         AnalyticalLevel.FORECASTING: 24,
+        AnalyticalLevel.RELIABILITY: 10,
         AnalyticalLevel.PREDICTIVE: 100,
         AnalyticalLevel.OPTIMIZATION: 20,
         AnalyticalLevel.ECONOMIC_RECOVERY: 1,
@@ -706,6 +707,11 @@ class ProgressiveReadinessPolicy:
             TrustDimension.CONSISTENCY,
             TrustDimension.TIMELINESS,
             TrustDimension.LINEAGE,
+        },
+        AnalyticalLevel.RELIABILITY: {
+            TrustDimension.COMPLETENESS,
+            TrustDimension.VALIDITY,
+            TrustDimension.CONSISTENCY,
         },
         AnalyticalLevel.PREDICTIVE: {
             TrustDimension.COMPLETENESS,
@@ -727,6 +733,7 @@ class ProgressiveReadinessPolicy:
         AnalyticalLevel.ARITHMETIC: 60.0,
         AnalyticalLevel.STATISTICAL: 70.0,
         AnalyticalLevel.FORECASTING: 75.0,
+        AnalyticalLevel.RELIABILITY: 75.0,
         AnalyticalLevel.PREDICTIVE: 80.0,
         AnalyticalLevel.OPTIMIZATION: 80.0,
         AnalyticalLevel.ECONOMIC_RECOVERY: 85.0,

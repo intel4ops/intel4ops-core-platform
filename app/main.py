@@ -12,6 +12,7 @@ from app.api.oikb_routes import router as oikb_router
 from app.api.orchestration_routes import engine_router
 from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
+from app.api.reliability_routes import router as reliability_router
 from app.api.routes import router
 from app.api.source_system_routes import router as source_system_router
 from app.api.statistical_routes import router as statistical_router
@@ -52,3 +53,4 @@ app.include_router(engine_router)
 app.include_router(oikb_router)
 app.include_router(statistical_router)
 app.include_router(forecasting_router)
+app.include_router(reliability_router)

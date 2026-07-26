@@ -124,7 +124,7 @@ def test_assessment_orchestration_scores_evidence_and_readiness(db: Session) -> 
     assert total == 1
     assert evidence[0].field_name == "amount"
     decisions = service.readiness(db, organization_id, assessment.id)
-    assert len(decisions) == 6
+    assert len(decisions) == 7
     assert service.latest(db, organization_id, dataset_id).id == assessment.id
 
 

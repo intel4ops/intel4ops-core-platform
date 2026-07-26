@@ -124,6 +124,12 @@ MANAGED_TABLES = {
     "forecast_accuracy_results",
     "forecast_method_registry",
     "forecast_execution_steps",
+    "reliability_executions",
+    "reliability_metrics",
+    "reliability_model_results",
+    "reliability_execution_steps",
+    "reliability_method_registry",
+    "reliability_review_feedback",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -558,7 +564,25 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert {"oikb_definitions", "oikb_definition_versions"} <= finding_foreign_tables
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 34
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM oikb_definitions WHERE scope_key = 'shared_core'")
+            )
+            == 34
+        )
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM ("
+                    "SELECT stable_code, count(*) "
+                    "FROM oikb_definitions "
+                    "WHERE scope_key = 'shared_core' "
+                    "GROUP BY stable_code HAVING count(*) > 1"
+                    ") duplicate_shared_core_codes"
+                )
+            )
+            == 0
+        )
         assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 320
         assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
         assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
@@ -583,6 +607,25 @@ def assert_schema_at_head(engine: Engine) -> None:
 def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     config = alembic_config(require_disposable_postgres_url())
 
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
+    wp_213_tables = {
+        "reliability_executions",
+        "reliability_metrics",
+        "reliability_model_results",
+        "reliability_execution_steps",
+        "reliability_method_registry",
+        "reliability_review_feedback",
+    }
+    command.downgrade(config, "20260725_0012")
+    tables_at_wp_212 = set(inspect(postgres_engine).get_table_names())
+    assert not (wp_213_tables & tables_at_wp_212)
+    assert {
+        "forecast_executions",
+        "forecast_method_registry",
+        "forecast_execution_steps",
+    } <= tables_at_wp_212
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
@@ -714,6 +757,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_210_tables
         - wp_211_tables
         - wp_212_tables
+        - wp_213_tables
         <= wp_203_tables
     )
 
@@ -993,7 +1037,7 @@ def test_raw_storage_uuid_scope_and_foreign_keys_on_postgres(
         assert isinstance(assessment.id, UUID)
         assert assessment.overall_score == 100
         assert len(trust_service.rule_results(session, organization.id, assessment.id)) == 2
-        assert len(trust_service.readiness(session, organization.id, assessment.id)) == 6
+        assert len(trust_service.readiness(session, organization.id, assessment.id)) == 7
 
 
 @pytest.mark.postgres
