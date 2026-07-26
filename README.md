@@ -110,7 +110,15 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260725_0014`.
+Current head revision: `20260726_0015`.
+
+## Exposure, prioritization, and recovery economics
+
+WP-2.15 converts tenant findings and proposed actions into governed recovery
+opportunities with Decimal-safe scenarios, versioned assumptions, expected economics,
+explainable priority, overlap allocation, currency-separated portfolios, approval
+decisions, and immutable baseline versions. Expected economics are not realized or
+verified value. See [Recovery economics](docs/recovery-economics.md).
 
 ## Predictive-to-action orchestration
 

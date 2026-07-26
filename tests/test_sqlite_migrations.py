@@ -78,7 +78,21 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "action_outcomes",
             "action_model_feedback",
         }
-        assert wp_210_tables | wp_211_tables | wp_212_tables <= set(
+        wp_215_tables = {
+            "recovery_opportunities",
+            "opportunity_findings",
+            "opportunity_actions",
+            "economic_scenarios",
+            "economic_assumptions",
+            "economic_calculations",
+            "prioritization_assessments",
+            "opportunity_overlap_groups",
+            "opportunity_overlap_members",
+            "opportunity_decisions",
+            "economic_audit_events",
+            "economic_baseline_versions",
+        }
+        assert wp_210_tables | wp_211_tables | wp_212_tables | wp_215_tables <= set(
             inspect(engine).get_table_names()
         )
         with engine.connect() as connection:
@@ -86,6 +100,11 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 320
             assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
             assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
+        command.downgrade(config, "20260725_0014")
+        assert not (wp_215_tables & set(inspect(engine).get_table_names()))
+        assert wp_212_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_215_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260725_0011")
         assert not (wp_212_tables & set(inspect(engine).get_table_names()))
         with engine.connect() as connection:

@@ -138,6 +138,18 @@ MANAGED_TABLES = {
     "action_evidence",
     "action_outcomes",
     "action_model_feedback",
+    "recovery_opportunities",
+    "opportunity_findings",
+    "opportunity_actions",
+    "economic_scenarios",
+    "economic_assumptions",
+    "economic_calculations",
+    "prioritization_assessments",
+    "opportunity_overlap_groups",
+    "opportunity_overlap_members",
+    "opportunity_decisions",
+    "economic_audit_events",
+    "economic_baseline_versions",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -618,6 +630,60 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_215_tables = {
+        "recovery_opportunities",
+        "opportunity_findings",
+        "opportunity_actions",
+        "economic_scenarios",
+        "economic_assumptions",
+        "economic_calculations",
+        "prioritization_assessments",
+        "opportunity_overlap_groups",
+        "opportunity_overlap_members",
+        "opportunity_decisions",
+        "economic_audit_events",
+        "economic_baseline_versions",
+    }
+    economics_inspector = inspect(postgres_engine)
+    opportunity_columns = {
+        column["name"]: column
+        for column in economics_inspector.get_columns("recovery_opportunities")
+    }
+    calculation_columns = {
+        column["name"]: column
+        for column in economics_inspector.get_columns("economic_calculations")
+    }
+    assert str(opportunity_columns["id"]["type"]) == "UUID"
+    assert str(opportunity_columns["organization_id"]["type"]) == "UUID"
+    assert str(opportunity_columns["limitations"]["type"]) == "JSONB"
+    assert str(calculation_columns["gross_exposure"]["type"]) == "NUMERIC(38, 12)"
+    assert str(calculation_columns["expected_roi"]["type"]) == "NUMERIC(38, 12)"
+    assert str(calculation_columns["input_snapshot"]["type"]) == "JSONB"
+    assert {
+        "uq_recovery_opportunity_idempotency",
+        "uq_recovery_opportunity_source",
+    } <= {
+        item["name"]
+        for item in economics_inspector.get_unique_constraints("recovery_opportunities")
+    }
+    assert "ck_scenario_rates" in {
+        item["name"] for item in economics_inspector.get_check_constraints("economic_scenarios")
+    }
+    assert {
+        "organizations",
+        "findings",
+        "recovery_opportunities",
+    } <= {
+        foreign_key["referred_table"]
+        for table in ("recovery_opportunities", "opportunity_findings")
+        for foreign_key in economics_inspector.get_foreign_keys(table)
+    }
+    command.downgrade(config, "20260725_0014")
+    assert not (wp_215_tables & set(inspect(postgres_engine).get_table_names()))
+    assert "operational_actions" in inspect(postgres_engine).get_table_names()
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     wp_214_tables = {
         "operational_actions",
         "action_plan_steps",
@@ -794,6 +860,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_212_tables
         - wp_213_tables
         - wp_214_tables
+        - wp_215_tables
         <= wp_203_tables
     )
 
