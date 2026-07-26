@@ -92,16 +92,30 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "economic_audit_events",
             "economic_baseline_versions",
         }
-        assert wp_210_tables | wp_211_tables | wp_212_tables | wp_215_tables <= set(
+        wp_216_tables = {
+            "recovery_cases",
+            "recovery_executions",
+            "recovery_value_measurements",
+            "recovery_evidence_links",
+            "recovery_finance_verifications",
+            "verified_value_ledger_entries",
+            "recovery_audit_events",
+        }
+        assert wp_210_tables | wp_211_tables | wp_212_tables | wp_215_tables | wp_216_tables <= set(
             inspect(engine).get_table_names()
         )
+        command.downgrade(config, "20260726_0015")
+        assert not (wp_216_tables & set(inspect(engine).get_table_names()))
+        assert wp_215_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_216_tables <= set(inspect(engine).get_table_names())
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM oikb_definitions")) == 34
             assert connection.scalar(text("SELECT count(*) FROM oikb_validation_cases")) == 320
             assert connection.scalar(text("SELECT count(*) FROM statistical_method_registry")) == 40
             assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
         command.downgrade(config, "20260725_0014")
-        assert not (wp_215_tables & set(inspect(engine).get_table_names()))
+        assert not ((wp_215_tables | wp_216_tables) & set(inspect(engine).get_table_names()))
         assert wp_212_tables <= set(inspect(engine).get_table_names())
         command.upgrade(config, "head")
         assert wp_215_tables <= set(inspect(engine).get_table_names())

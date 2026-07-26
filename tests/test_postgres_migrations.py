@@ -150,6 +150,13 @@ MANAGED_TABLES = {
     "opportunity_decisions",
     "economic_audit_events",
     "economic_baseline_versions",
+    "recovery_cases",
+    "recovery_executions",
+    "recovery_value_measurements",
+    "recovery_evidence_links",
+    "recovery_finance_verifications",
+    "verified_value_ledger_entries",
+    "recovery_audit_events",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -630,6 +637,46 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_216_tables = {
+        "recovery_cases",
+        "recovery_executions",
+        "recovery_value_measurements",
+        "recovery_evidence_links",
+        "recovery_finance_verifications",
+        "verified_value_ledger_entries",
+        "recovery_audit_events",
+    }
+    ledger_inspector = inspect(postgres_engine)
+    ledger_columns = {
+        column["name"]: column
+        for column in ledger_inspector.get_columns("verified_value_ledger_entries")
+    }
+    measurement_columns = {
+        column["name"]: column
+        for column in ledger_inspector.get_columns("recovery_value_measurements")
+    }
+    assert str(ledger_columns["id"]["type"]) == "UUID"
+    assert str(ledger_columns["amount"]["type"]) == "NUMERIC(38, 12)"
+    assert str(measurement_columns["calculation_inputs"]["type"]) == "JSONB"
+    assert {
+        "recovery_cases",
+        "recovery_value_measurements",
+        "recovery_finance_verifications",
+        "verified_value_ledger_entries",
+    } <= {
+        foreign_key["referred_table"]
+        for foreign_key in ledger_inspector.get_foreign_keys("verified_value_ledger_entries")
+    }
+    assert "uq_verified_ledger_idempotency" in {
+        item["name"]
+        for item in ledger_inspector.get_unique_constraints("verified_value_ledger_entries")
+    }
+    command.downgrade(config, "20260726_0015")
+    assert not (wp_216_tables & set(inspect(postgres_engine).get_table_names()))
+    assert "economic_baseline_versions" in inspect(postgres_engine).get_table_names()
+    command.upgrade(config, "head")
+    assert wp_216_tables <= set(inspect(postgres_engine).get_table_names())
+
     wp_215_tables = {
         "recovery_opportunities",
         "opportunity_findings",
@@ -861,6 +908,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_213_tables
         - wp_214_tables
         - wp_215_tables
+        - wp_216_tables
         <= wp_203_tables
     )
 

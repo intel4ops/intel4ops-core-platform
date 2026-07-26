@@ -49,6 +49,15 @@ from app.models.raw_lineage import (
     RawRecordReference,
     RawStorageObject,
 )
+from app.models.recovery_ledger import (
+    RecoveryAuditEvent,
+    RecoveryCase,
+    RecoveryEvidenceLink,
+    RecoveryExecution,
+    RecoveryFinanceVerification,
+    RecoveryValueMeasurement,
+    VerifiedValueLedgerEntry,
+)
 from app.models.reliability import (
     ReliabilityExecution,
     ReliabilityExecutionStep,
@@ -87,6 +96,13 @@ __all__ = [
     "OpportunityOverlapMember",
     "PrioritizationAssessment",
     "RecoveryOpportunity",
+    "RecoveryAuditEvent",
+    "RecoveryCase",
+    "RecoveryEvidenceLink",
+    "RecoveryExecution",
+    "RecoveryFinanceVerification",
+    "RecoveryValueMeasurement",
+    "VerifiedValueLedgerEntry",
     "ActionDependency",
     "ActionEvent",
     "ActionEvidence",
