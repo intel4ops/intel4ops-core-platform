@@ -421,6 +421,34 @@ class EconomicsService:
         db.refresh(row)
         return row
 
+    def revise_assumption(
+        self,
+        db: Session,
+        organization_id: UUID,
+        opportunity_id: UUID,
+        assumption_id: UUID,
+        payload: AssumptionCreate,
+        actor: UUID,
+    ) -> EconomicAssumption:
+        previous = db.scalar(
+            select(EconomicAssumption).where(
+                EconomicAssumption.id == assumption_id,
+                EconomicAssumption.opportunity_id == opportunity_id,
+                EconomicAssumption.organization_id == organization_id,
+                EconomicAssumption.superseded.is_(False),
+            )
+        )
+        if previous is None:
+            raise EconomicsServiceError(
+                "ASSUMPTION_NOT_FOUND", "Active tenant assumption not found", 404
+            )
+        if payload.assumption_code != previous.assumption_code:
+            raise EconomicsServiceError(
+                "ASSUMPTION_CODE_MISMATCH",
+                "A revision must preserve the assumption code",
+            )
+        return self.add_assumption(db, organization_id, opportunity_id, payload, actor)
+
     def calculate(
         self,
         db: Session,

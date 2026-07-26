@@ -139,6 +139,36 @@ def test_recovery_economics_end_to_end_and_baseline_immutability(
         },
     )
     assert assumption.status_code == 201
+    revised = client.patch(
+        f"/api/v1/organizations/{organization_id}/recovery-opportunities/"
+        f"{opportunity_id}/assumptions/{assumption.json()['id']}",
+        json={
+            "scenario_id": case["id"],
+            "assumption_code": "DOWNTIME_COST",
+            "value": "10500",
+            "unit": "currency_per_day",
+            "currency_code": "USD",
+            "source": "finding_evidence",
+            "evidence_reference": "evidence:downtime-ledger-revised",
+            "confidence_score": "0.85",
+            "model_version": "1.0",
+        },
+    )
+    assert revised.status_code == 200
+    assert revised.json()["version"] == 2
+    missing_revision = client.patch(
+        f"/api/v1/organizations/{organization_id}/recovery-opportunities/"
+        f"{opportunity_id}/assumptions/{uuid4()}",
+        json={
+            "assumption_code": "DOWNTIME_COST",
+            "value": "1",
+            "unit": "currency_per_day",
+            "currency_code": "USD",
+            "source": "manual",
+            "confidence_score": "1",
+        },
+    )
+    assert missing_revision.status_code == 404
     calculated, prioritized = calculate_and_prioritize(
         client, organization_id, opportunity_id, case["id"]
     )

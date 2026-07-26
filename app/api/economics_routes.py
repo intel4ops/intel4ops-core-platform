@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import NoReturn
 from uuid import UUID
 
@@ -71,12 +72,10 @@ def list_opportunities(
     status: str | None = None,
     priority: str | None = None,
     currency: str | None = Query(default=None, pattern=r"^[A-Z]{3}$"),
-    minimum_net_benefit: float | None = None,
+    minimum_net_benefit: Decimal | None = None,
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*ECONOMICS_READ_ROLES)),
 ) -> OpportunityPage:
-    from decimal import Decimal
-
     rows, total = economics_service.list_opportunities(
         db,
         organization_id,
@@ -85,9 +84,7 @@ def list_opportunities(
         status=status,
         priority=priority,
         currency=currency,
-        minimum_net_benefit=(
-            Decimal(str(minimum_net_benefit)) if minimum_net_benefit is not None else None
-        ),
+        minimum_net_benefit=minimum_net_benefit,
     )
     return OpportunityPage(items=rows, page=page, page_size=page_size, total=total)
 
@@ -215,21 +212,41 @@ def get_scenario(
     response_model=AssumptionRead,
     status_code=201,
 )
-@router.patch(
-    "/recovery-opportunities/{opportunity_id}/assumptions/{_assumption_id}",
-    response_model=AssumptionRead,
-)
-def create_assumption_version(
+def create_assumption(
     organization_id: UUID,
     opportunity_id: UUID,
     payload: AssumptionCreate,
-    _assumption_id: UUID | None = None,
     db: Session = Depends(get_db),
     access: OrganizationAccess = Depends(require_organization_roles(*ECONOMICS_WRITE_ROLES)),
 ) -> object:
     try:
         return economics_service.add_assumption(
             db, organization_id, opportunity_id, payload, access.user.user_id
+        )
+    except EconomicsServiceError as exc:
+        _raise(exc)
+
+
+@router.patch(
+    "/recovery-opportunities/{opportunity_id}/assumptions/{assumption_id}",
+    response_model=AssumptionRead,
+)
+def revise_assumption(
+    organization_id: UUID,
+    opportunity_id: UUID,
+    assumption_id: UUID,
+    payload: AssumptionCreate,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(require_organization_roles(*ECONOMICS_WRITE_ROLES)),
+) -> object:
+    try:
+        return economics_service.revise_assumption(
+            db,
+            organization_id,
+            opportunity_id,
+            assumption_id,
+            payload,
+            access.user.user_id,
         )
     except EconomicsServiceError as exc:
         _raise(exc)
