@@ -110,7 +110,19 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260725_0012`.
+Current head revision: `20260725_0013`.
+
+## Reliability intelligence
+
+WP-2.13 provides a governed reliability-method registry, explicit lifecycle, exposure and
+censoring controls, basic reliability and availability metrics, Kaplan–Meier survival,
+bounded two-parameter Weibull analysis, composite risk/health methods, immutable execution
+fingerprints, tenant-safe APIs, and evidence-ready explanations. See
+[`docs/reliability-intelligence/architecture.md`](docs/reliability-intelligence/architecture.md).
+
+Reliability APIs use
+`/api/v1/organizations/{organization_id}/reliability`. Reliability scores are not exact
+failure probabilities, and safety-critical or maintenance-policy outputs require human review.
 
 ## Forecasting intelligence
 

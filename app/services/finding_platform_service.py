@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import Finding, FindingStatus, Organization, OrganizationStatus
@@ -818,7 +818,20 @@ class FindingLifecycleService:
                     FindingStatusHistory.organization_id == organization_id,
                     FindingStatusHistory.finding_id == finding_id,
                 )
-                .order_by(FindingStatusHistory.changed_at, FindingStatusHistory.id)
+                .order_by(
+                    FindingStatusHistory.changed_at,
+                    case(
+                        (FindingStatusHistory.new_status == "published", 1),
+                        (FindingStatusHistory.new_status == "under_review", 2),
+                        (FindingStatusHistory.new_status == "confirmed", 3),
+                        (FindingStatusHistory.new_status == "dismissed", 3),
+                        (FindingStatusHistory.new_status == "resolved", 4),
+                        (FindingStatusHistory.new_status == "superseded", 4),
+                        (FindingStatusHistory.new_status == "archived", 5),
+                        else_=99,
+                    ),
+                    FindingStatusHistory.id,
+                )
             ).all()
         )
 

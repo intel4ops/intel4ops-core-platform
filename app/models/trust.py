@@ -77,6 +77,7 @@ class AnalyticalLevel(StrEnum):
     ARITHMETIC = "arithmetic"
     STATISTICAL = "statistical"
     FORECASTING = "forecasting"
+    RELIABILITY = "reliability"
     PREDICTIVE = "predictive"
     OPTIMIZATION = "optimization"
     ECONOMIC_RECOVERY = "economic_recovery"
