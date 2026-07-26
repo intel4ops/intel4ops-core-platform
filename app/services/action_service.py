@@ -31,6 +31,7 @@ from app.models.actions import (
 )
 from app.models.entities import Finding, OrganizationMembership
 from app.models.forecasting import ForecastExecution
+from app.models.orchestration import IntelligenceOrchestrationRequest
 from app.models.reliability import ReliabilityExecution
 from app.schemas.actions import (
     ActionAssignmentCreate,
@@ -134,6 +135,7 @@ class ActionService:
             (payload.reliability_execution_id, ReliabilityExecution),
             (payload.finding_id, Finding),
             (payload.forecast_execution_id, ForecastExecution),
+            (payload.orchestration_request_id, IntelligenceOrchestrationRequest),
         )
         for identifier, model in pairs:
             if (
