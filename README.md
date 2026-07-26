@@ -2,6 +2,11 @@
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
+WP-2.16 carries approved recovery economics into evidence-backed execution, realized-value
+measurement, privileged finance verification, and an append-only verified-value ledger. Expected,
+realized, verified, and net verified values remain distinct, and mixed currencies are never
+aggregated. See [Recovery execution and verified-value ledger](docs/recovery-ledger.md).
+
 ## Local setup
 
 Python 3.12+ and a local or otherwise disposable PostgreSQL instance are required.
