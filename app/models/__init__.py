@@ -75,6 +75,14 @@ from app.models.trust import (
 )
 
 __all__ = [
+    "ActionDependency",
+    "ActionEvent",
+    "ActionEvidence",
+    "ActionModelFeedback",
+    "ActionOutcome",
+    "ActionPlanStep",
+    "ActionResourceRequirement",
+    "OperationalAction",
     "LineageEdge",
     "LineageEvent",
     "LineageNode",
@@ -136,3 +144,13 @@ __all__ = [
     "StatisticalObservation",
     "StatisticalScoreComponent",
 ]
+from app.models.actions import (
+    ActionDependency,
+    ActionEvent,
+    ActionEvidence,
+    ActionModelFeedback,
+    ActionOutcome,
+    ActionPlanStep,
+    ActionResourceRequirement,
+    OperationalAction,
+)

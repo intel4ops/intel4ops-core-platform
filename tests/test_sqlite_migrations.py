@@ -69,6 +69,14 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "forecast_accuracy_results",
             "forecast_method_registry",
             "forecast_execution_steps",
+            "operational_actions",
+            "action_plan_steps",
+            "action_dependencies",
+            "action_resource_requirements",
+            "action_events",
+            "action_evidence",
+            "action_outcomes",
+            "action_model_feedback",
         }
         assert wp_210_tables | wp_211_tables | wp_212_tables <= set(
             inspect(engine).get_table_names()

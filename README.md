@@ -110,7 +110,16 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260725_0013`.
+Current head revision: `20260725_0014`.
+
+## Predictive-to-action orchestration
+
+WP-2.14 preserves predictive assessments and connects them to governed operational actions,
+recommendations, approvals, plans, assignments, dependencies, resource confirmations, execution
+evidence, separate completion and verification, expected and realized value, and structured model
+feedback. Organization-scoped APIs use
+`/api/v1/organizations/{organization_id}/actions`. See
+[`docs/predictive-action-orchestration/architecture.md`](docs/predictive-action-orchestration/architecture.md).
 
 ## Reliability intelligence
 
