@@ -63,6 +63,42 @@ def _linear(values: list[float]) -> tuple[float, float]:
     return y_mean - slope * x_mean, slope
 
 
+def _quadratic(values: list[float]) -> tuple[float, float, float]:
+    count = len(values)
+    xs = [float(index) for index in range(count)]
+    matrix = [
+        [float(count), sum(xs), sum(x**2 for x in xs), sum(values)],
+        [
+            sum(xs),
+            sum(x**2 for x in xs),
+            sum(x**3 for x in xs),
+            sum(x * y for x, y in zip(xs, values, strict=True)),
+        ],
+        [
+            sum(x**2 for x in xs),
+            sum(x**3 for x in xs),
+            sum(x**4 for x in xs),
+            sum(x**2 * y for x, y in zip(xs, values, strict=True)),
+        ],
+    ]
+    for column in range(3):
+        pivot = max(range(column, 3), key=lambda row: abs(matrix[row][column]))
+        if abs(matrix[pivot][column]) < 1e-12:
+            raise ForecastingMethodError("SINGULAR_QUADRATIC_FIT")
+        matrix[column], matrix[pivot] = matrix[pivot], matrix[column]
+        divisor = matrix[column][column]
+        matrix[column] = [value / divisor for value in matrix[column]]
+        for row in range(3):
+            if row == column:
+                continue
+            factor = matrix[row][column]
+            matrix[row] = [
+                value - factor * pivot_value
+                for value, pivot_value in zip(matrix[row], matrix[column], strict=True)
+            ]
+    return matrix[0][3], matrix[1][3], matrix[2][3]
+
+
 def _residuals(values: list[float], fitted: list[float]) -> list[float]:
     return [actual - estimate for actual, estimate in zip(values, fitted, strict=True)]
 
@@ -131,10 +167,26 @@ class BoundedForecastingMethod:
                 level = alpha * value + (1 - alpha) * level
                 fitted.append(level)
             forecasts = [level] * horizon
-        elif code in {"DRIFT", "LINEAR_TIME_TREND", "POLYNOMIAL_TIME_TREND_DEGREE_2"}:
+        elif code == "DRIFT":
+            slope = (values[-1] - values[0]) / (len(values) - 1)
+            fitted = [values[0] + slope * index for index in range(len(values))]
+            forecasts = [values[-1] + slope * (step + 1) for step in range(horizon)]
+        elif code == "LINEAR_TIME_TREND":
             intercept, slope = _linear(values)
             fitted = [intercept + slope * index for index in range(len(values))]
             forecasts = [intercept + slope * (len(values) + step) for step in range(horizon)]
+        elif code == "POLYNOMIAL_TIME_TREND_DEGREE_2":
+            intercept, linear_coefficient, quadratic_coefficient = _quadratic(values)
+            fitted = [
+                intercept + linear_coefficient * index + quadratic_coefficient * index**2
+                for index in range(len(values))
+            ]
+            forecasts = [
+                intercept
+                + linear_coefficient * (len(values) + step)
+                + quadratic_coefficient * (len(values) + step) ** 2
+                for step in range(horizon)
+            ]
         elif code in {"HOLT_LINEAR_TREND", "HOLT_DAMPED_TREND"}:
             alpha = _number(parameters, "alpha", 0.4)
             beta = _number(parameters, "beta", 0.2)

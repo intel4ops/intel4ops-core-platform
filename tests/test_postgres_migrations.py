@@ -728,6 +728,42 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
 
 
 @pytest.mark.postgres
+def test_forecasting_downgrade_maps_readiness_to_supported_level(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    with Session(postgres_engine) as session:
+        organization_id, _, trust_id, _, _ = statistical_foundation(
+            session, f"postgres-forecast-downgrade-{uuid4().hex[:8]}"
+        )
+        session.add(
+            AnalyticalReadinessDecision(
+                organization_id=organization_id,
+                trust_assessment_id=trust_id,
+                analytical_level="forecasting",
+                readiness_status="ready",
+                blocking_rule_codes=[],
+                warning_rule_codes=[],
+                explanation="Forecast-ready history.",
+            )
+        )
+        session.commit()
+
+    command.downgrade(config, "20260725_0011")
+    with postgres_engine.connect() as connection:
+        forecasting_count = connection.scalar(
+            text(
+                "SELECT count(*) FROM analytical_readiness_decisions "
+                "WHERE analytical_level = 'forecasting'"
+            )
+        )
+    assert forecasting_count == 0
+    command.upgrade(config, "head")
+    assert "forecast_executions" in inspect(postgres_engine).get_table_names()
+
+
+@pytest.mark.postgres
 def test_source_system_uuid_scope_and_constraints(postgres_engine: Engine) -> None:
     command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
     organization_service = OrganizationService()

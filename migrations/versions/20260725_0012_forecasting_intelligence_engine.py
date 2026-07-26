@@ -794,6 +794,13 @@ def downgrade() -> None:
     op.drop_table("forecast_executions")
     op.drop_index("ix_forecast_method_supported", table_name="forecast_method_registry")
     op.drop_table("forecast_method_registry")
+    op.execute(
+        sa.text(
+            "UPDATE analytical_readiness_decisions "
+            "SET analytical_level = 'statistical' "
+            "WHERE analytical_level = 'forecasting'"
+        )
+    )
     with op.batch_alter_table("analytical_readiness_decisions") as batch_op:
         batch_op.drop_constraint("ck_readiness_level", type_="check")
         batch_op.create_check_constraint(

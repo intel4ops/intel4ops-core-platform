@@ -58,6 +58,21 @@ def test_supported_methods_are_deterministic_and_finite(
     assert all(math.isfinite(value) for value in first.values)
 
 
+def test_trend_methods_use_distinct_numerically_correct_algorithms() -> None:
+    registry = default_forecasting_method_registry()
+
+    drift = registry.get("DRIFT").forecast([1, 2, 4, 8, 16], 2, {})
+    assert drift.values == pytest.approx([19.75, 23.5])
+
+    linear = registry.get("LINEAR_TIME_TREND").forecast([1, 2, 4, 8, 16], 2, {})
+    assert linear.values != pytest.approx(drift.values)
+
+    quadratic = registry.get("POLYNOMIAL_TIME_TREND_DEGREE_2").forecast([0, 1, 4, 9, 16], 2, {})
+    assert quadratic.values == pytest.approx([25, 36])
+    quadratic_linear = registry.get("LINEAR_TIME_TREND").forecast([0, 1, 4, 9, 16], 2, {})
+    assert quadratic.values != pytest.approx(quadratic_linear.values)
+
+
 def test_intervals_and_undefined_configuration_have_structured_results() -> None:
     result = forecast_execution_service.evaluate(
         ForecastEvaluateRequest(method_code="NAIVE", values=[1, 2, 3, 4], horizon=2)
