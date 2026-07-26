@@ -75,6 +75,18 @@ from app.models.trust import (
 )
 
 __all__ = [
+    "EconomicAssumption",
+    "EconomicAuditEvent",
+    "EconomicBaselineVersion",
+    "EconomicCalculation",
+    "EconomicScenario",
+    "OpportunityAction",
+    "OpportunityDecision",
+    "OpportunityFinding",
+    "OpportunityOverlapGroup",
+    "OpportunityOverlapMember",
+    "PrioritizationAssessment",
+    "RecoveryOpportunity",
     "ActionDependency",
     "ActionEvent",
     "ActionEvidence",
@@ -153,4 +165,18 @@ from app.models.actions import (
     ActionPlanStep,
     ActionResourceRequirement,
     OperationalAction,
+)
+from app.models.economics import (
+    EconomicAssumption,
+    EconomicAuditEvent,
+    EconomicBaselineVersion,
+    EconomicCalculation,
+    EconomicScenario,
+    OpportunityAction,
+    OpportunityDecision,
+    OpportunityFinding,
+    OpportunityOverlapGroup,
+    OpportunityOverlapMember,
+    PrioritizationAssessment,
+    RecoveryOpportunity,
 )

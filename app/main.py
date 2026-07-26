@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.action_routes import router as action_router
+from app.api.economics_routes import router as economics_router
 from app.api.finding_routes import router as finding_router
 from app.api.forecasting_routes import router as forecasting_router
 from app.api.ingestion_routes import router as ingestion_router
@@ -56,3 +57,4 @@ app.include_router(statistical_router)
 app.include_router(forecasting_router)
 app.include_router(reliability_router)
 app.include_router(action_router)
+app.include_router(economics_router)
