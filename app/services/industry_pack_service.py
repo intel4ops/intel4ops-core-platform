@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.industry_packs.runtime import pack_runtime_registry
 from app.models.commercial import (
     CommercialAuditEvent,
     Entitlement,
@@ -15,7 +16,7 @@ from app.models.commercial import (
     IndustryPackDefinition,
     UsageEvent,
 )
-from app.models.entities import Finding, FindingEvidence, Organization
+from app.models.entities import Finding, FindingEvidence, Organization, RecoveryAction
 from app.models.industry_packs import (
     IndustryPackAssignmentState,
     IndustryPackComponent,
@@ -24,6 +25,7 @@ from app.models.industry_packs import (
     IndustryPackValidationResult,
     IndustryPackVersion,
 )
+from app.schemas.economics import FindingLinkCreate, OpportunityCreate
 from app.schemas.industry_packs import (
     PackAssignmentRequest,
     PackComponentWrite,
@@ -32,6 +34,7 @@ from app.schemas.industry_packs import (
     PackVersionCreate,
 )
 from app.services.commercial_service import CommercialServiceError, entitlement_service
+from app.services.economics_service import economics_service
 
 TRANSITIONS = {
     "draft": {"validated"},
@@ -293,7 +296,7 @@ class TenantIndustryPackService:
         self, db: Session, org: UUID, payload: PackAssignmentRequest, actor: UUID
     ) -> IndustryPackAssignmentState:
         pack = governance_service._pack(db, payload.pack_code)
-        entitlement = entitlement_service.require(db, org, pack.entitlement_key)
+        entitlement = self._require_entitlement(db, org, pack.entitlement_key)
         version = db.scalar(
             select(IndustryPackVersion).where(
                 IndustryPackVersion.pack_id == pack.id,
@@ -313,7 +316,7 @@ class TenantIndustryPackService:
         )
         snapshot: dict[str, object] = {
             "entitlement_key": pack.entitlement_key,
-            "entitlement_id": str(entitlement.id) if entitlement else "legacy",
+            "entitlement_id": str(entitlement.id),
         }
         if row is None:
             row = IndustryPackAssignment(
@@ -451,7 +454,7 @@ class TenantIndustryPackService:
             raise CommercialServiceError(
                 "PACK_VERSION_UNAVAILABLE", "Pack version is unavailable", 409
             )
-        entitlement_service.require(db, org, pack.entitlement_key)
+        self._require_entitlement(db, org, pack.entitlement_key)
         rule = db.scalar(
             select(IndustryPackComponent).where(
                 IndustryPackComponent.pack_version_id == version.id,
@@ -461,8 +464,40 @@ class TenantIndustryPackService:
         )
         if rule is None:
             raise CommercialServiceError("PACK_RULE_NOT_FOUND", "Pack rule is not registered", 404)
+        runtime = pack_runtime_registry.resolve(pack.code)
         if payload.readiness == "blocked":
             status, result, error = "blocked", {}, "TRUST_READINESS_BLOCKED"
+        elif runtime is not None:
+            result = runtime(db, org, payload, actor)
+            result["rule_code"] = rule.code
+            result["recovery_playbook_code"] = (
+                f"{rule.code}.RECOVERY" if result.get("finding_count", 0) else None
+            )
+            recovery_action_ids: list[str] = []
+            finding_ids = result.get("finding_ids", [])
+            if isinstance(finding_ids, list):
+                for finding_id in finding_ids:
+                    finding = db.scalar(
+                        select(Finding).where(
+                            Finding.id == UUID(str(finding_id)),
+                            Finding.organization_id == org,
+                        )
+                    )
+                    if finding is None:
+                        continue
+                    action = RecoveryAction(
+                        organization_id=org,
+                        finding_id=finding.id,
+                        title=f"Execute {rule.code} recovery playbook",
+                        owner="unassigned",
+                        status="planned",
+                        expected_recovery=finding.exposure_high,
+                    )
+                    db.add(action)
+                    db.flush()
+                    recovery_action_ids.append(str(action.id))
+            result["recovery_action_ids"] = recovery_action_ids
+            status, error = "completed", None
         else:
             record = payload.record
             value = Decimal(str(record.get("value", 0)))
@@ -551,6 +586,40 @@ class TenantIndustryPackService:
                 )
             )
             result["finding_id"] = str(finding.id)
+            opportunity = economics_service.create(
+                db,
+                org,
+                OpportunityCreate(
+                    idempotency_key=f"pack:{row.id}:opportunity",
+                    economic_source_key=f"industry-pack:{row.id}",
+                    title=finding.title,
+                    description=finding.summary,
+                    currency_code=currency,
+                    business_domain=finding.domain,
+                    industry_pack_code=pack.code,
+                    capability_code=rule.code,
+                ),
+                actor,
+            )
+            economics_service.add_finding(
+                db,
+                org,
+                opportunity.id,
+                FindingLinkCreate(finding_id=finding.id),
+                actor,
+            )
+            recovery = RecoveryAction(
+                organization_id=org,
+                finding_id=finding.id,
+                title=f"Execute {rule.code} recovery playbook",
+                owner="unassigned",
+                status="planned",
+                expected_recovery=float(exposure),
+            )
+            db.add(recovery)
+            db.flush()
+            result["opportunity_id"] = str(opportunity.id)
+            result["recovery_action_id"] = str(recovery.id)
             row.result_json = result
         db.add(
             UsageEvent(
@@ -567,6 +636,85 @@ class TenantIndustryPackService:
         db.commit()
         db.refresh(row)
         return row
+
+    def effective_components(
+        self,
+        db: Session,
+        org: UUID,
+        assignment_id: UUID,
+        component_type: str | None = None,
+    ) -> list[IndustryPackComponent]:
+        _, state = self._assignment(db, org, assignment_id)
+        query = select(IndustryPackComponent).where(
+            IndustryPackComponent.pack_version_id == state.pack_version_id
+        )
+        if component_type is not None:
+            query = query.where(IndustryPackComponent.component_type == component_type)
+        return list(
+            db.scalars(
+                query.order_by(
+                    IndustryPackComponent.component_type,
+                    IndustryPackComponent.code,
+                )
+            )
+        )
+
+    def effective_configuration(
+        self, db: Session, org: UUID, assignment_id: UUID
+    ) -> dict[str, object]:
+        _, state = self._assignment(db, org, assignment_id)
+        version = governance_service._version(db, state.pack_version_id)
+        return {
+            "pack_version_id": str(version.id),
+            "semantic_version": version.semantic_version,
+            "lifecycle_status": version.lifecycle_status,
+            "minimum_platform_revision": version.minimum_platform_revision,
+            "manifest": version.manifest_json,
+            "configuration_overrides": state.configuration_overrides,
+        }
+
+    def executions(
+        self, db: Session, org: UUID, assignment_id: UUID
+    ) -> list[IndustryPackExecution]:
+        self._assignment(db, org, assignment_id)
+        return list(
+            db.scalars(
+                select(IndustryPackExecution)
+                .where(
+                    IndustryPackExecution.organization_id == org,
+                    IndustryPackExecution.assignment_id == assignment_id,
+                )
+                .order_by(IndustryPackExecution.created_at.desc())
+            )
+        )
+
+    def execution(
+        self, db: Session, org: UUID, assignment_id: UUID, execution_id: UUID
+    ) -> IndustryPackExecution:
+        self._assignment(db, org, assignment_id)
+        row = db.scalar(
+            select(IndustryPackExecution).where(
+                IndustryPackExecution.id == execution_id,
+                IndustryPackExecution.organization_id == org,
+                IndustryPackExecution.assignment_id == assignment_id,
+            )
+        )
+        if row is None:
+            raise CommercialServiceError(
+                "PACK_EXECUTION_NOT_FOUND", "Pack execution not found", 404
+            )
+        return row
+
+    @staticmethod
+    def _require_entitlement(db: Session, org: UUID, entitlement_key: str) -> Entitlement:
+        entitlement = entitlement_service.require(db, org, entitlement_key)
+        if entitlement is None:
+            raise CommercialServiceError(
+                "ENTITLEMENT_REQUIRED",
+                f"Entitlement {entitlement_key} is required",
+                403,
+            )
+        return entitlement
 
     @staticmethod
     def _assignment(

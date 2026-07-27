@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import NoReturn
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from app.auth.authorization import (
     require_organization_roles,
     require_platform_admin,
 )
+from app.auth.commercial import require_registered_application_client
 from app.auth.identity import AuthenticatedUser
 from app.auth.permissions import COMMERCIAL_ADMIN_ROLES, COMMERCIAL_READ_ROLES
 from app.db.session import get_db
@@ -28,9 +30,15 @@ from app.schemas.industry_packs import (
 from app.services.commercial_service import CommercialServiceError
 from app.services.industry_pack_service import governance_service, tenant_industry_pack_service
 
-catalog_router = APIRouter(prefix="/api/v1/industry-packs", tags=["industry-packs"])
+catalog_router = APIRouter(
+    prefix="/api/v1/industry-packs",
+    tags=["industry-packs"],
+    dependencies=[Depends(require_registered_application_client)],
+)
 tenant_router = APIRouter(
-    prefix="/api/v1/organizations/{organization_id}/industry-packs", tags=["industry-packs"]
+    prefix="/api/v1/organizations/{organization_id}/industry-packs",
+    tags=["industry-packs"],
+    dependencies=[Depends(require_registered_application_client)],
 )
 
 
@@ -180,6 +188,74 @@ def assignment_status(
         _raise(exc)
 
 
+@tenant_router.get("/{assignment_id}/components", response_model=list[PackComponentRead])
+def effective_components(
+    organization_id: UUID,
+    assignment_id: UUID,
+    component_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*COMMERCIAL_READ_ROLES)),
+) -> object:
+    try:
+        return tenant_industry_pack_service.effective_components(
+            db, organization_id, assignment_id, component_type
+        )
+    except CommercialServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get("/{assignment_id}/capabilities")
+def effective_capabilities(
+    organization_id: UUID,
+    assignment_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*COMMERCIAL_READ_ROLES)),
+) -> object:
+    try:
+        return tenant_industry_pack_service.effective_configuration(
+            db, organization_id, assignment_id
+        )
+    except CommercialServiceError as exc:
+        _raise(exc)
+
+
+def _metadata_route(component_type: str) -> Callable[..., object]:
+    def route(
+        organization_id: UUID,
+        assignment_id: UUID,
+        db: Session = Depends(get_db),
+        _: OrganizationAccess = Depends(require_organization_roles(*COMMERCIAL_READ_ROLES)),
+    ) -> object:
+        try:
+            return tenant_industry_pack_service.effective_components(
+                db, organization_id, assignment_id, component_type
+            )
+        except CommercialServiceError as exc:
+            _raise(exc)
+
+    return route
+
+
+tenant_router.add_api_route(
+    "/{assignment_id}/metrics",
+    _metadata_route("metric_definition"),
+    methods=["GET"],
+    response_model=list[PackComponentRead],
+)
+tenant_router.add_api_route(
+    "/{assignment_id}/rules",
+    _metadata_route("rule_binding"),
+    methods=["GET"],
+    response_model=list[PackComponentRead],
+)
+tenant_router.add_api_route(
+    "/{assignment_id}/playbooks",
+    _metadata_route("recovery_playbook"),
+    methods=["GET"],
+    response_model=list[PackComponentRead],
+)
+
+
 @tenant_router.post(
     "/{assignment_id}/executions", response_model=PackExecutionRead, status_code=201
 )
@@ -193,6 +269,38 @@ def execute(
     try:
         return tenant_industry_pack_service.execute(
             db, organization_id, assignment_id, payload, access.user.user_id
+        )
+    except CommercialServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get("/{assignment_id}/executions", response_model=list[PackExecutionRead])
+def executions(
+    organization_id: UUID,
+    assignment_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*COMMERCIAL_READ_ROLES)),
+) -> object:
+    try:
+        return tenant_industry_pack_service.executions(db, organization_id, assignment_id)
+    except CommercialServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get(
+    "/{assignment_id}/executions/{execution_id}",
+    response_model=PackExecutionRead,
+)
+def execution(
+    organization_id: UUID,
+    assignment_id: UUID,
+    execution_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*COMMERCIAL_READ_ROLES)),
+) -> object:
+    try:
+        return tenant_industry_pack_service.execution(
+            db, organization_id, assignment_id, execution_id
         )
     except CommercialServiceError as exc:
         _raise(exc)
