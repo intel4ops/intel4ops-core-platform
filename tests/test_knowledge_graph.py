@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.knowledge_graph.catalog import definition_hash, graph_id
@@ -13,9 +15,15 @@ from app.models.entities import Finding, Organization
 from app.models.gateway import ApplicationClient
 from app.models.knowledge_graph import (
     KnowledgeGraphChange,
+    KnowledgeGraphEdge,
+    KnowledgeGraphEdgeEvidence,
     KnowledgeGraphEntityType,
     KnowledgeGraphEntityTypeVersion,
     KnowledgeGraphGovernanceEvent,
+    KnowledgeGraphNode,
+    KnowledgeGraphRelationshipType,
+    KnowledgeGraphRelationshipTypeVersion,
+    KnowledgeGraphVersion,
 )
 from app.schemas.knowledge_graph import (
     FindingProjectionCreate,
@@ -265,3 +273,236 @@ def test_type_governance_transition_is_append_only_and_idempotent(
         )
         == 1
     )
+
+
+def test_projection_carries_forward_the_active_snapshot(db: Session) -> None:
+    organization, first_finding = _foundation(db)
+    actor = uuid4()
+    first = graph_projection_service.project_finding(
+        db,
+        organization.id,
+        FindingProjectionCreate(
+            idempotency_key="snapshot-first",
+            finding_id=first_finding.id,
+            source_event_id="snapshot-event-first",
+        ),
+        actor,
+    )
+    second_finding = Finding(
+        organization_id=organization.id,
+        rule_id="GRAPH.SECOND",
+        title="Second governed finding",
+        summary="A second authoritative finding.",
+        domain="quality",
+        confidence_score=0.8,
+        status="published",
+    )
+    db.add(second_finding)
+    db.commit()
+    second = graph_projection_service.project_finding(
+        db,
+        organization.id,
+        FindingProjectionCreate(
+            idempotency_key="snapshot-second",
+            finding_id=second_finding.id,
+            source_event_id="snapshot-event-second",
+        ),
+        actor,
+    )
+    first_version = db.get(KnowledgeGraphVersion, first.graph_version_id)
+    second_version = db.get(KnowledgeGraphVersion, second.graph_version_id)
+    assert first_version is not None and first_version.status == "superseded"
+    assert second_version is not None and second_version.status == "active"
+    assert second_version.node_count == 2
+    assert (
+        db.scalar(
+            select(func.count())
+            .select_from(KnowledgeGraphNode)
+            .where(KnowledgeGraphNode.graph_version_id == second.graph_version_id)
+        )
+        == 2
+    )
+
+
+def test_tenant_reads_require_an_active_entitlement(db: Session) -> None:
+    organization, _finding = _foundation(db, entitled=False)
+    with pytest.raises(KnowledgeGraphServiceError) as exc:
+        graph_query_service.versions(db, organization.id)
+    assert exc.value.status == 403
+
+
+def test_source_registry_allowlist_is_database_enforced(db: Session) -> None:
+    organization, finding = _foundation(db)
+    change = graph_projection_service.project_finding(
+        db,
+        organization.id,
+        FindingProjectionCreate(
+            idempotency_key="registry-foundation",
+            finding_id=finding.id,
+            source_event_id="registry-foundation-event",
+        ),
+        uuid4(),
+    )
+    db.add(
+        KnowledgeGraphNode(
+            organization_id=organization.id,
+            graph_version_id=change.graph_version_id,
+            entity_type_version_id=graph_id("entity_type_version", "finding"),
+            source_registry="arbitrary_customer_table",
+            source_object_id=uuid4(),
+            source_version_key="",
+            reference_fingerprint="a" * 64,
+            status="active",
+            metadata_json={},
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_shortest_path_requires_accessible_current_evidence(db: Session) -> None:
+    organization, finding = _foundation(db)
+    actor = uuid4()
+    change = graph_projection_service.project_finding(
+        db,
+        organization.id,
+        FindingProjectionCreate(
+            idempotency_key="path-foundation",
+            finding_id=finding.id,
+            source_event_id="path-foundation-event",
+        ),
+        actor,
+    )
+    start = db.scalar(
+        select(KnowledgeGraphNode).where(
+            KnowledgeGraphNode.graph_version_id == change.graph_version_id
+        )
+    )
+    assert start is not None
+    relationship = KnowledgeGraphRelationshipType(
+        id=graph_id("relationship_type", "correlated_with"),
+        code="correlated_with",
+        name="Correlated With",
+        description="Explicitly non-causal correlation.",
+        lifecycle_status="active",
+        directed=False,
+        symmetric=True,
+        owner="Enterprise Intelligence Architecture",
+        security_classification="internal",
+        documentation_reference="docs/phase3/wp-3.01-knowledge-graph-specification.md",
+    )
+    db.add(relationship)
+    db.add(
+        KnowledgeGraphRelationshipTypeVersion(
+            id=graph_id("relationship_type_version", "correlated_with"),
+            relationship_type_id=relationship.id,
+            semantic_version="1.0.0",
+            allowed_from_entity_codes=["finding"],
+            allowed_to_entity_codes=["finding"],
+            evidence_contract={"minimum_references": 1},
+            confidence_policy={"minimum": 0, "maximum": 1},
+            temporal_policy={"point_in_time": True},
+            revalidation_policy={"on_source_change": True},
+            known_limitations=["Non-causal."],
+            definition_hash=definition_hash("relationship_type", "correlated_with"),
+            approved_at=datetime.now(UTC),
+        )
+    )
+    target = KnowledgeGraphNode(
+        organization_id=organization.id,
+        graph_version_id=change.graph_version_id,
+        entity_type_version_id=graph_id("entity_type_version", "finding"),
+        source_registry="findings",
+        source_object_id=uuid4(),
+        source_version_key="",
+        display_label="Target finding",
+        reference_fingerprint="b" * 64,
+        status="active",
+        metadata_json={},
+    )
+    unsupported = KnowledgeGraphNode(
+        organization_id=organization.id,
+        graph_version_id=change.graph_version_id,
+        entity_type_version_id=graph_id("entity_type_version", "finding"),
+        source_registry="findings",
+        source_object_id=uuid4(),
+        source_version_key="",
+        display_label="Unsupported finding",
+        reference_fingerprint="c" * 64,
+        status="active",
+        metadata_json={},
+    )
+    db.add_all([target, unsupported])
+    db.flush()
+    supported_edge = KnowledgeGraphEdge(
+        organization_id=organization.id,
+        graph_version_id=change.graph_version_id,
+        relationship_type_version_id=graph_id("relationship_type_version", "correlated_with"),
+        from_node_id=start.id,
+        to_node_id=target.id,
+        assertion_kind="calculated",
+        derivation_method="test_adapter",
+        derivation_version="1.0.0",
+        derivation_fingerprint="d" * 64,
+        confidence_score=Decimal("0.9"),
+        confidence_method="test",
+        validity_key="current",
+        valid_from=datetime.now(UTC) - timedelta(days=1),
+        valid_to=datetime.now(UTC) + timedelta(days=1),
+        status="active",
+        definition_fingerprint="e" * 64,
+        content_fingerprint="f" * 64,
+        properties_json={},
+        created_by_user_id=actor,
+    )
+    unsupported_edge = KnowledgeGraphEdge(
+        organization_id=organization.id,
+        graph_version_id=change.graph_version_id,
+        relationship_type_version_id=graph_id("relationship_type_version", "correlated_with"),
+        from_node_id=start.id,
+        to_node_id=unsupported.id,
+        assertion_kind="calculated",
+        derivation_method="test_adapter",
+        derivation_version="1.0.0",
+        derivation_fingerprint="1" * 64,
+        confidence_score=Decimal("0.9"),
+        confidence_method="test",
+        validity_key="unsupported",
+        status="active",
+        definition_fingerprint="2" * 64,
+        content_fingerprint="3" * 64,
+        properties_json={},
+        created_by_user_id=actor,
+    )
+    db.add_all([supported_edge, unsupported_edge])
+    db.flush()
+    db.add(
+        KnowledgeGraphEdgeEvidence(
+            organization_id=organization.id,
+            graph_version_id=change.graph_version_id,
+            edge_id=supported_edge.id,
+            source_type="finding_evidence_bundle",
+            source_identifier="bundle:test",
+            integrity_fingerprint="4" * 64,
+            relevance="supporting",
+            observed_at=datetime.now(UTC),
+            metadata_json={},
+        )
+    )
+    db.commit()
+    result = graph_query_service.traverse(
+        db,
+        organization.id,
+        GraphTraversalCreate(
+            idempotency_key="shortest-path",
+            start_node_id=start.id,
+            target_node_id=target.id,
+            graph_version_id=change.graph_version_id,
+            operation="shortest_governed_path",
+        ),
+        actor,
+    )
+    assert result.paths == [[start.id, target.id]]
+    assert [edge.id for edge in result.edges] == [supported_edge.id]
+    assert unsupported.id not in {node.id for node in result.nodes}

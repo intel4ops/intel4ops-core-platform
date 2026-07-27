@@ -22,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.knowledge_graph.catalog import EVIDENCE_SOURCE_TYPES, SOURCE_REGISTRIES
 from app.models.entities import portable_json, utc_now
 
 GOVERNANCE_LIFECYCLE = (
@@ -206,6 +207,12 @@ class KnowledgeGraphNode(Base):
             "status IN ('active','superseded','unavailable','retired')",
             name="ck_kg_node_status",
         ),
+        CheckConstraint(
+            "source_registry IN ("
+            + ",".join(f"'{registry}'" for registry in sorted(SOURCE_REGISTRIES))
+            + ")",
+            name="ck_kg_node_source_registry",
+        ),
         Index(
             "ix_kg_node_org_graph_type",
             "organization_id",
@@ -353,6 +360,12 @@ class KnowledgeGraphEdgeEvidence(Base):
             "source_identifier",
             "integrity_fingerprint",
             name="uq_kg_edge_evidence_reference",
+        ),
+        CheckConstraint(
+            "source_type IN ("
+            + ",".join(f"'{source_type}'" for source_type in sorted(EVIDENCE_SOURCE_TYPES))
+            + ")",
+            name="ck_kg_edge_evidence_source_type",
         ),
         Index("ix_kg_edge_evidence_org_edge", "organization_id", "edge_id"),
     )

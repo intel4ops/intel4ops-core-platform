@@ -1,7 +1,7 @@
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import (
@@ -117,7 +117,10 @@ def versions(
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*KNOWLEDGE_GRAPH_READ_ROLES)),
 ) -> object:
-    return graph_query_service.versions(db, organization_id)
+    try:
+        return graph_query_service.versions(db, organization_id)
+    except KnowledgeGraphServiceError as exc:
+        _raise(exc)
 
 
 @tenant_router.get("/nodes", response_model=list[GraphNodeRead])
@@ -126,7 +129,10 @@ def nodes(
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*KNOWLEDGE_GRAPH_READ_ROLES)),
 ) -> object:
-    return graph_query_service.nodes(db, organization_id)
+    try:
+        return graph_query_service.nodes(db, organization_id)
+    except KnowledgeGraphServiceError as exc:
+        _raise(exc)
 
 
 @tenant_router.get("/nodes/{node_id}", response_model=GraphNodeRead)
@@ -138,6 +144,38 @@ def node(
 ) -> object:
     try:
         return graph_query_service.node(db, organization_id, node_id)
+    except KnowledgeGraphServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get("/nodes/{node_id}/neighbors", response_model=GraphTraversalRead)
+def neighbors(
+    organization_id: UUID,
+    node_id: UUID,
+    direction: Literal["outbound", "inbound", "both"] = "both",
+    relationship_codes: list[str] = Query(default=[]),
+    minimum_confidence: float = Query(default=0, ge=0, le=1),
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(
+        require_organization_roles(*KNOWLEDGE_GRAPH_TRAVERSAL_ROLES)
+    ),
+) -> object:
+    try:
+        node_record = graph_query_service.node(db, organization_id, node_id)
+        payload = GraphTraversalCreate(
+            idempotency_key=(
+                f"neighbors:{node_id}:{direction}:"
+                f"{','.join(sorted(relationship_codes))}:{minimum_confidence}"
+            ),
+            start_node_id=node_id,
+            graph_version_id=node_record.graph_version_id,
+            operation="neighborhood",
+            direction=direction,
+            relationship_codes=relationship_codes,
+            max_depth=1,
+            minimum_confidence=minimum_confidence,
+        )
+        return graph_query_service.traverse(db, organization_id, payload, access.user.user_id)
     except KnowledgeGraphServiceError as exc:
         _raise(exc)
 
@@ -206,4 +244,7 @@ def health(
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*KNOWLEDGE_GRAPH_READ_ROLES)),
 ) -> object:
-    return graph_query_service.health(db, organization_id)
+    try:
+        return graph_query_service.health(db, organization_id)
+    except KnowledgeGraphServiceError as exc:
+        _raise(exc)

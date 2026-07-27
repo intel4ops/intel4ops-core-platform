@@ -712,6 +712,12 @@ def assert_schema_at_head(engine: Engine) -> None:
     assert str(graph_node_columns["metadata_json"]["type"]) == "JSONB"
     assert str(graph_edge_columns["id"]["type"]) == "UUID"
     assert str(graph_edge_columns["properties_json"]["type"]) == "JSONB"
+    assert "ck_kg_node_source_registry" in {
+        item["name"] for item in inspector.get_check_constraints("knowledge_graph_nodes")
+    }
+    assert "ck_kg_edge_evidence_source_type" in {
+        item["name"] for item in inspector.get_check_constraints("knowledge_graph_edge_evidence")
+    }
     node_foreign_keys = {
         item["name"]: item for item in inspector.get_foreign_keys("knowledge_graph_nodes")
     }

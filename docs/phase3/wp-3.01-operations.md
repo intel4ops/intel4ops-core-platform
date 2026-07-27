@@ -33,6 +33,12 @@ different source fingerprint returns a conflict.
 
 Manual assertions are not accepted in this release.
 
+Each successful projection publishes a cumulative immutable graph snapshot.
+The initial implementation copies the prior snapshot transactionally before
+applying the source change. This is suitable for the certified initial profile;
+incremental physical-version storage or partitioned projection is required
+before claiming the medium or large architecture targets.
+
 ## Traversal safety
 
 Traversal requests use approved operations and relationship codes. Hard
@@ -52,6 +58,15 @@ non-causal.
 - Governance and certification evidence: seven years.
 
 Legal hold overrides normal expiry.
+
+## Known limitations
+
+- `finding_evidence@1.0.0` is the only write adapter in the initial release.
+- Traversals are synchronous and enforce the five-second hard ceiling.
+- Shortest-path returns the first governed path found within the approved
+  budget; multi-path ranking is deferred.
+- Medium and large performance profiles require dedicated certification before
+  production claims.
 
 ## Validation
 

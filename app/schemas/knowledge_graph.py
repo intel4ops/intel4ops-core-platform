@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GraphEntityTypeRead(BaseModel):
@@ -110,6 +110,7 @@ class ProjectionRead(BaseModel):
 class GraphTraversalCreate(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=255)
     start_node_id: UUID
+    target_node_id: UUID | None = None
     graph_version_id: UUID | None = None
     operation: Literal[
         "neighborhood",
@@ -127,6 +128,13 @@ class GraphTraversalCreate(BaseModel):
     max_paths: int = Field(default=25, ge=1, le=100)
     timeout_ms: int = Field(default=2000, ge=1, le=5000)
     minimum_confidence: float = Field(default=0, ge=0, le=1)
+    point_in_time: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_contract(self) -> GraphTraversalCreate:
+        if self.operation == "shortest_governed_path" and self.target_node_id is None:
+            raise ValueError("target_node_id is required for shortest_governed_path")
+        return self
 
 
 class GraphTraversalRead(BaseModel):
@@ -134,6 +142,7 @@ class GraphTraversalRead(BaseModel):
     graph_version_id: UUID
     nodes: list[GraphNodeRead]
     edges: list[GraphEdgeRead]
+    paths: list[list[UUID]]
     truncated: bool
     warnings: list[str]
 

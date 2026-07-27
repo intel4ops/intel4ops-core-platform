@@ -19,6 +19,7 @@ from app.db.session import Base
 from app.knowledge_graph.catalog import (
     ENTITY_SOURCE_REGISTRIES,
     ENTITY_TYPE_CODES,
+    RELATIONSHIP_ENDPOINTS,
     RELATIONSHIP_TYPE_CODES,
     definition_hash,
     graph_id,
@@ -156,8 +157,8 @@ def upgrade() -> None:
                     "id": graph_id("relationship_type_version", code),
                     "relationship_type_id": relationship_id,
                     "semantic_version": "1.0.0",
-                    "allowed_from_entity_codes": _json(list(ENTITY_TYPE_CODES)),
-                    "allowed_to_entity_codes": _json(list(ENTITY_TYPE_CODES)),
+                    "allowed_from_entity_codes": _json(list(RELATIONSHIP_ENDPOINTS[code][0])),
+                    "allowed_to_entity_codes": _json(list(RELATIONSHIP_ENDPOINTS[code][1])),
                     "evidence_contract": _json({"minimum_references": 1}),
                     "confidence_policy": _json({"minimum": 0, "maximum": 1}),
                     "temporal_policy": _json({"point_in_time": True}),
