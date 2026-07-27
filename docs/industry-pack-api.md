@@ -8,6 +8,14 @@ Authorized tenant users use
 assignments, activate or suspend them, and submit executions at
 `/{assignment_id}/executions`.
 
+Tenant metadata is available from `/{assignment_id}/capabilities`,
+`/{assignment_id}/metrics`, `/{assignment_id}/rules`, and
+`/{assignment_id}/playbooks`. Execution history and individual execution retrieval
+use `/{assignment_id}/executions` and
+`/{assignment_id}/executions/{execution_id}`. Every industry-pack endpoint requires
+an active registered client through `X-Intel4Ops-Client`; the default first-party
+client is `intel4ops-web`.
+
 Errors return stable codes including `PACK_NOT_FOUND`, `PACK_VERSION_NOT_ASSIGNABLE`,
 `INVALID_PACK_TRANSITION`, `PACK_VERSION_IN_USE`, `PACK_NOT_ACTIVE`,
 `PACK_RULE_NOT_FOUND`, and commercial entitlement denial codes. Execution retries use

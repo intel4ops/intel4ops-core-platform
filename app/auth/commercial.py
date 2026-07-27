@@ -1,12 +1,14 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
 from app.db.session import get_db
 from app.models.entities import MembershipRole
+from app.models.gateway import ApplicationClient
 from app.services.commercial_service import CommercialServiceError, entitlement_service
 
 
@@ -32,3 +34,25 @@ def require_commercial_entitlement(
         return access
 
     return dependency
+
+
+def require_registered_application_client(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ApplicationClient:
+    client_code = request.state.gateway_transport_context["client_code"]
+    client = db.scalar(
+        select(ApplicationClient).where(
+            ApplicationClient.client_code == client_code,
+            ApplicationClient.status == "active",
+        )
+    )
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CLIENT_NOT_REGISTERED",
+                "message": "Application client is not registered",
+            },
+        )
+    return client

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -7,8 +7,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.industry_packs.catalog import MANIFESTS, PACKS, components
-from app.models.commercial import IndustryPackDefinition, UsageEvent, UsageMeterDefinition
-from app.models.entities import Finding, FindingEvidence, Organization
+from app.models.commercial import (
+    Entitlement,
+    IndustryPackDefinition,
+    Plan,
+    PlanVersion,
+    Subscription,
+    UsageEvent,
+    UsageMeterDefinition,
+)
+from app.models.economics import RecoveryOpportunity
+from app.models.entities import Finding, FindingEvidence, Organization, RecoveryAction
+from app.models.gateway import ApplicationClient, JobToCashRun
 from app.models.industry_packs import (
     IndustryPackComponent,
     IndustryPackGovernanceEvent,
@@ -35,14 +45,56 @@ def _foundation(db: Session) -> Organization:
         is_demo=True,
     )
     db.add(organization)
+    db.flush()
+    plan = Plan(
+        code="PACK-TEST-PLAN",
+        name="Pack Test Plan",
+        plan_type="enterprise",
+        status="active",
+    )
+    db.add(plan)
+    db.flush()
+    plan_version = PlanVersion(
+        plan_id=plan.id,
+        version=1,
+        effective_date=date(2026, 1, 1),
+        migration_policy="explicit",
+        terms={},
+    )
+    db.add(plan_version)
+    db.flush()
+    now = datetime.now(UTC)
+    subscription = Subscription(
+        organization_id=organization.id,
+        plan_version_id=plan_version.id,
+        idempotency_key="pack-test-subscription",
+        status="active",
+        starts_at=now - timedelta(days=1),
+        current_period_start=now - timedelta(days=1),
+        current_period_end=now + timedelta(days=30),
+        created_by_user_id=uuid4(),
+    )
+    db.add(subscription)
+    db.flush()
+    db.add_all(
+        [
+            UsageMeterDefinition(
+                code=code,
+                product="Intelligence",
+                meter_kind="event",
+                unit="executions" if code == "rule_executions" else "rows",
+                aggregation="sum",
+                currency_behavior="not_applicable",
+            )
+            for code in ("rule_executions", "rows_processed")
+        ]
+    )
     db.add(
-        UsageMeterDefinition(
-            code="rule_executions",
-            product="Intelligence",
-            meter_kind="event",
-            unit="executions",
-            aggregation="sum",
-            currency_behavior="not_applicable",
+        ApplicationClient(
+            client_code="intel4ops-web",
+            name="Intel4Ops Web",
+            client_type="first_party",
+            status="active",
         )
     )
     for code, name, _industry, entitlement in PACKS:
@@ -71,6 +123,19 @@ def _foundation(db: Session) -> Organization:
                     configuration=item["config"],
                 )
             )
+        db.add(
+            Entitlement(
+                organization_id=organization.id,
+                subscription_id=subscription.id,
+                entitlement_type="industry_pack",
+                entitlement_key=entitlement,
+                enabled=True,
+                source="plan",
+                effective_at=now - timedelta(days=1),
+                idempotency_key=f"entitlement:{code}",
+                granted_by_user_id=uuid4(),
+            )
+        )
     db.commit()
     db.refresh(organization)
     return organization
@@ -162,16 +227,34 @@ def test_four_pack_execution_is_tenant_scoped_idempotent_and_metered(db: Session
             actor,
             "test activation",
         )
+        record: dict[str, object] = {
+            "record_id": f"record:{code}",
+            "observed_at": "2026-07-27T00:00:00Z",
+            "value": "12",
+            "threshold": "10",
+        }
+        if code == "PACK-J2C":
+            record = {
+                "currency_code": "USD",
+                "as_of": "2026-03-01",
+                "records": [
+                    {
+                        "type": "job",
+                        "id": "J1",
+                        "data": {
+                            "status": "completed",
+                            "completed_at": "2026-01-01",
+                            "billing_window_days": 5,
+                            "contractual_charges": "100",
+                        },
+                    }
+                ],
+            }
         payload = PackExecutionCreate(
             idempotency_key=f"execute:{code}",
             readiness="ready",
             rule_code=rule_code,
-            record={
-                "record_id": f"record:{code}",
-                "observed_at": "2026-07-27T00:00:00Z",
-                "value": "12",
-                "threshold": "10",
-            },
+            record=record,
         )
         first = tenant_industry_pack_service.execute(
             db, organization.id, assignment.assignment_id, payload, actor
@@ -181,12 +264,19 @@ def test_four_pack_execution_is_tenant_scoped_idempotent_and_metered(db: Session
         )
         assert repeated.id == first.id
         assert first.status == "completed"
-        assert first.result_json["triggered"] is True
+        if code == "PACK-J2C":
+            assert first.result_json["runtime"] == "wp_2_18_job_to_cash"
+            assert first.result_json["finding_count"] == 1
+        else:
+            assert first.result_json["triggered"] is True
         assert first.result_json["recovery_playbook_code"] == f"{rule_code}.RECOVERY"
 
-    assert db.scalar(select(func.count()).select_from(UsageEvent)) == 4
+    assert db.scalar(select(func.count()).select_from(UsageEvent)) == 6
     assert db.scalar(select(func.count()).select_from(Finding)) == 4
     assert db.scalar(select(func.count()).select_from(FindingEvidence)) == 4
+    assert db.scalar(select(func.count()).select_from(RecoveryOpportunity)) == 4
+    assert db.scalar(select(func.count()).select_from(RecoveryAction)) == 4
+    assert db.scalar(select(func.count()).select_from(JobToCashRun)) == 1
     with pytest.raises(CommercialServiceError, match="not found"):
         tenant_industry_pack_service.execute(db, uuid4(), assignment.assignment_id, payload, actor)
 
@@ -226,6 +316,33 @@ def test_blocked_readiness_does_not_run_rule(db: Session) -> None:
     )
     assert execution.status == "blocked"
     assert execution.error_code == "TRUST_READINESS_BLOCKED"
+
+
+def test_pack_assignment_requires_explicit_commercial_entitlement(db: Session) -> None:
+    _foundation(db)
+    unentitled = Organization(
+        name="Unentitled Tenant",
+        slug="unentitled-pack-tenant",
+        country_code="US",
+        default_currency="USD",
+        timezone="UTC",
+        status="active",
+        is_demo=True,
+    )
+    db.add(unentitled)
+    db.commit()
+    with pytest.raises(CommercialServiceError) as exc:
+        tenant_industry_pack_service.assign(
+            db,
+            unentitled.id,
+            PackAssignmentRequest(
+                pack_code="PACK-MFG",
+                semantic_version="1.0.0",
+                effective_at=datetime.now(UTC),
+            ),
+            uuid4(),
+        )
+    assert exc.value.code == "ENTITLEMENT_REQUIRED"
 
 
 def test_industry_pack_api_catalog_assignment_activation_and_execution(
@@ -271,6 +388,39 @@ def test_industry_pack_api_catalog_assignment_activation_and_execution(
     )
     assert executed.status_code == 201, executed.text
     assert executed.json()["result_json"]["recovery_playbook_code"] == "PORT-BERTH.RECOVERY"
+    for path, expected_type, expected_count in (
+        ("metrics", "metric_definition", 1),
+        ("rules", "rule_binding", 6),
+        ("playbooks", "recovery_playbook", 6),
+    ):
+        metadata = client.get(
+            f"/api/v1/organizations/{organization.id}/industry-packs/{assignment_id}/{path}"
+        )
+        assert metadata.status_code == 200, metadata.text
+        assert len(metadata.json()) == expected_count
+        assert {item["component_type"] for item in metadata.json()} == {expected_type}
+    capabilities = client.get(
+        f"/api/v1/organizations/{organization.id}/industry-packs/{assignment_id}/capabilities"
+    )
+    assert capabilities.status_code == 200
+    assert capabilities.json()["semantic_version"] == "1.0.0"
+    history = client.get(
+        f"/api/v1/organizations/{organization.id}/industry-packs/{assignment_id}/executions"
+    )
+    assert history.status_code == 200
+    assert [item["id"] for item in history.json()] == [executed.json()["id"]]
+    detail = client.get(
+        f"/api/v1/organizations/{organization.id}/industry-packs/"
+        f"{assignment_id}/executions/{executed.json()['id']}"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["id"] == executed.json()["id"]
+    unregistered = client.get(
+        "/api/v1/industry-packs",
+        headers={"X-Intel4Ops-Client": "unregistered-client"},
+    )
+    assert unregistered.status_code == 400
+    assert unregistered.json()["detail"]["code"] == "CLIENT_NOT_REGISTERED"
     other_tenant = uuid4()
     assert (
         client.post(
