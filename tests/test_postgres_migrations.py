@@ -994,6 +994,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_215_tables
         - wp_216_tables
         - wp_217_tables
+        - wp_218_tables
         <= wp_203_tables
     )
 
