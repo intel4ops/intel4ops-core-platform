@@ -11,6 +11,8 @@ from app.api.economics_routes import router as economics_router
 from app.api.finding_routes import router as finding_router
 from app.api.forecasting_routes import router as forecasting_router
 from app.api.gateway_routes import router as gateway_router
+from app.api.industry_pack_routes import catalog_router as industry_pack_catalog_router
+from app.api.industry_pack_routes import tenant_router as industry_pack_tenant_router
 from app.api.ingestion_routes import router as ingestion_router
 from app.api.intelligence_routes import router as intelligence_router
 from app.api.job_to_cash_routes import router as job_to_cash_router
@@ -114,6 +116,8 @@ app.include_router(economics_router)
 app.include_router(recovery_ledger_router)
 app.include_router(commercial_catalog_router)
 app.include_router(commercial_tenant_router)
+app.include_router(industry_pack_catalog_router)
+app.include_router(industry_pack_tenant_router)
 app.include_router(command_router)
 app.include_router(job_to_cash_router)
 app.include_router(gateway_router)

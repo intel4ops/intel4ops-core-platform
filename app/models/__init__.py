@@ -46,6 +46,14 @@ from app.models.gateway import (
     JobToCashRecord,
     JobToCashRun,
 )
+from app.models.industry_packs import (
+    IndustryPackAssignmentState,
+    IndustryPackComponent,
+    IndustryPackExecution,
+    IndustryPackGovernanceEvent,
+    IndustryPackValidationResult,
+    IndustryPackVersion,
+)
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
 from app.models.oikb import (
     OIKBApproval,
@@ -118,7 +126,13 @@ __all__ = [
     "Feature",
     "FeatureFlag",
     "IndustryPackAssignment",
+    "IndustryPackAssignmentState",
     "IndustryPackDefinition",
+    "IndustryPackComponent",
+    "IndustryPackExecution",
+    "IndustryPackGovernanceEvent",
+    "IndustryPackValidationResult",
+    "IndustryPackVersion",
     "LimitDefinition",
     "LimitEvaluation",
     "Plan",
