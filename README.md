@@ -2,6 +2,10 @@
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
+WP-2.17 adds versioned products and plans, subscriptions, contracts, tenant entitlements,
+append-only usage metering, limits, feature flags, and governed industry-pack activation.
+See [Commercial platform](docs/commercial-platform.md).
+
 WP-2.16 carries approved recovery economics into evidence-backed execution, realized-value
 measurement, privileged finance verification, and an append-only verified-value ledger. Expected,
 realized, verified, and net verified values remain distinct, and mixed currencies are never
@@ -115,7 +119,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260726_0015`.
+Current head revision: `20260726_0017`.
 
 ## Exposure, prioritization, and recovery economics
 

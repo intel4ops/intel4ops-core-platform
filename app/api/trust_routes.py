@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import TRUST_EXECUTION_ROLES, TRUST_READ_ROLES
 from app.db.session import get_db
 from app.schemas.trust import (
@@ -26,7 +27,12 @@ from app.services.trust_service import (
     trust_assessment_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}",
+    dependencies=[
+        Depends(require_commercial_entitlement("trust.rule_execution", *TRUST_READ_ROLES))
+    ],
+)
 
 
 def _translate(exc: Exception) -> NoReturn:

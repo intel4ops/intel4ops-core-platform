@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     STATISTICAL_EXECUTION_READ_ROLES,
     STATISTICAL_EXECUTION_RUN_ROLES,
@@ -35,7 +36,16 @@ from app.services.statistical_service import (
     statistical_execution_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/statistics")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/statistics",
+    dependencies=[
+        Depends(
+            require_commercial_entitlement(
+                "intelligence.statistics", *STATISTICAL_EXECUTION_READ_ROLES
+            )
+        )
+    ],
+)
 
 
 def _raise(exc: StatisticalServiceError) -> NoReturn:

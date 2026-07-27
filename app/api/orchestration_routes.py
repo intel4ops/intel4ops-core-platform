@@ -10,6 +10,7 @@ from app.auth.authorization import (
     require_organization_roles,
     require_platform_admin,
 )
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.identity import AuthenticatedUser
 from app.auth.permissions import (
     INTELLIGENCE_OPERATOR_ROLES,
@@ -31,7 +32,14 @@ from app.schemas.orchestration import (
 )
 from app.services.orchestration_service import OrchestrationError, orchestration_service
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/intelligence")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/intelligence",
+    dependencies=[
+        Depends(
+            require_commercial_entitlement("intelligence.orchestrator", *INTELLIGENCE_READ_ROLES)
+        )
+    ],
+)
 engine_router = APIRouter(prefix="/api/v1/intelligence/engines")
 
 
