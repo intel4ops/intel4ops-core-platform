@@ -2,6 +2,13 @@
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
+Phase 3 architecture is documentation-only pending explicit approval. See the
+[Enterprise Intelligence Network blueprint](docs/phase3/enterprise-intelligence-network-architecture.md)
+and [WP-3.01 Knowledge Graph specification](docs/phase3/wp-3.01-knowledge-graph-specification.md).
+The [WP-3.01 architecture approval record](docs/phase3/wp-3.01-architecture-approval-record.md)
+resolves the implementation-boundary decisions.
+The certified Phase 2 Core Platform remains frozen.
+
 WP-2.21 completes the governed operational feature and proprietary signature
 platform and closes the Phase 2 structural assessment. See
 [Operational Signatures](docs/operational-signatures.md),
