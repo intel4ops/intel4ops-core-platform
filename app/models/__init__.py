@@ -113,6 +113,19 @@ from app.models.reliability import (
     ReliabilityModelResult,
     ReliabilityReviewFeedback,
 )
+from app.models.signatures import (
+    OperationalFeatureDefinition,
+    OperationalFeatureVersion,
+    OperationalSignatureDefinition,
+    OperationalSignatureDeployment,
+    OperationalSignatureExecution,
+    OperationalSignatureExecutionEvidence,
+    OperationalSignatureLifecycleEvent,
+    OperationalSignatureMonitoringResult,
+    OperationalSignaturePerformanceSnapshot,
+    OperationalSignatureValidation,
+    OperationalSignatureVersion,
+)
 from app.models.statistics import (
     AnomalyReviewFeedback,
     AnomalySuppressionRecord,
@@ -257,6 +270,17 @@ __all__ = [
     "StatisticalMethodRegistration",
     "StatisticalObservation",
     "StatisticalScoreComponent",
+    "OperationalFeatureDefinition",
+    "OperationalFeatureVersion",
+    "OperationalSignatureDefinition",
+    "OperationalSignatureDeployment",
+    "OperationalSignatureExecution",
+    "OperationalSignatureExecutionEvidence",
+    "OperationalSignatureLifecycleEvent",
+    "OperationalSignatureMonitoringResult",
+    "OperationalSignaturePerformanceSnapshot",
+    "OperationalSignatureValidation",
+    "OperationalSignatureVersion",
 ]
 from app.models.actions import (
     ActionDependency,

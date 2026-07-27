@@ -2,6 +2,12 @@
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
+WP-2.21 completes the governed operational feature and proprietary signature
+platform and closes the Phase 2 structural assessment. See
+[Operational Signatures](docs/operational-signatures.md),
+[Enterprise Readiness](docs/wp-2.21-enterprise-readiness.md), and the
+[Phase 2 Certification](docs/wp-2.21-phase-2-certification.md).
+
 WP-2.18 adds a multi-application request context, Executive Command APIs, and the first
 deterministic Job-to-Cash vertical slice. See [API gateway](docs/api-gateway.md),
 [Executive Command](docs/executive-command.md), and
@@ -262,3 +268,7 @@ resilience checks, release gates, time-bounded waivers, and commit-bound JSON/Ma
 certification evidence. See
 [`docs/wp-2.20-release-certification-architecture.md`](docs/wp-2.20-release-certification-architecture.md)
 and [`docs/release-certification-runbook.md`](docs/release-certification-runbook.md).
+
+WP-2.21 adds the mandatory, non-waivable `OPERATIONAL_SIGNATURES` release gate.
+The gate covers deterministic replay, evidence completeness, tenant isolation,
+lifecycle governance, and exact version linkage.

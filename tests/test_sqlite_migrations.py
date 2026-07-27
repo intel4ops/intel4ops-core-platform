@@ -148,6 +148,19 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "release_waivers",
             "release_certifications",
         }
+        wp_221_tables = {
+            "operational_feature_definitions",
+            "operational_feature_versions",
+            "operational_signature_definitions",
+            "operational_signature_versions",
+            "operational_signature_validations",
+            "operational_signature_lifecycle_events",
+            "operational_signature_deployments",
+            "operational_signature_executions",
+            "operational_signature_execution_evidence",
+            "operational_signature_performance_history",
+            "operational_signature_monitoring_results",
+        }
         assert (
             wp_210_tables
             | wp_211_tables
@@ -158,12 +171,13 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_218_tables
             | wp_219_tables
             | wp_220_tables
+            | wp_221_tables
             <= set(inspect(engine).get_table_names())
         )
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM products")) == 6
             assert connection.scalar(text("SELECT count(*) FROM plans")) == 5
-            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
+            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
             assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
@@ -172,10 +186,35 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
                 connection.scalar(text("SELECT count(*) FROM validation_scenario_versions")) == 36
             )
             assert connection.scalar(text("SELECT count(*) FROM validation_oracle_versions")) == 36
+            assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 13
+            assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 13
+            assert (
+                connection.scalar(text("SELECT count(*) FROM operational_feature_definitions")) == 7
+            )
+            assert connection.scalar(text("SELECT count(*) FROM operational_feature_versions")) == 7
+            assert (
+                connection.scalar(text("SELECT count(*) FROM operational_signature_definitions"))
+                == 2
+            )
+            assert (
+                connection.scalar(text("SELECT count(*) FROM operational_signature_versions")) == 2
+            )
+            assert (
+                connection.scalar(text("SELECT count(*) FROM operational_signature_validations"))
+                == 2
+            )
+            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
+        command.downgrade(config, "20260727_0020")
+        assert not (wp_221_tables & set(inspect(engine).get_table_names()))
+        assert wp_220_tables <= set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
             assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 12
             assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 12
+        command.upgrade(config, "head")
+        assert wp_221_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260727_0019")
-        assert not (wp_220_tables & set(inspect(engine).get_table_names()))
+        assert not ((wp_220_tables | wp_221_tables) & set(inspect(engine).get_table_names()))
         assert wp_219_tables <= set(inspect(engine).get_table_names())
         command.upgrade(config, "head")
         assert wp_220_tables <= set(inspect(engine).get_table_names())

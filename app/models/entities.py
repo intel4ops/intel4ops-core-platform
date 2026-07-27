@@ -177,6 +177,11 @@ class Finding(Base):
             "oikb_definition_id",
             "oikb_definition_version_id",
         ),
+        Index(
+            "ix_findings_org_signature",
+            "organization_id",
+            "signature_version_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -251,6 +256,18 @@ class Finding(Base):
     )
     oikb_definition_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("oikb_definition_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    signature_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("operational_signature_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    signature_execution_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "operational_signature_executions.id",
+            name="fk_findings_signature_execution_id",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
     )
     trust_assessment_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("trust_assessments.id", ondelete="RESTRICT"), nullable=True
