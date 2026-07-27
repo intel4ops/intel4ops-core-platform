@@ -244,3 +244,12 @@ OIKB APIs use the `/api/v1/oikb` prefix. Private operations require
 `organization_id`; shared system knowledge requires platform administration.
 The migration installs ten active provisional seed definitions and retains an
 explicit code-backed compatibility fallback for definitions not yet governed.
+
+## Governed industry packs
+
+WP-2.19 adds semantic-versioned, entitlement-controlled manifests for Job-to-Cash,
+Manufacturing, Ports and Terminals, and Mobility and Public Transport. Packs extend
+the shared Trust, OIKB, findings, economics, recovery, command, and commercial
+contracts; they do not create separate vertical platforms. See
+[`docs/wp-2.19-industry-pack-architecture.md`](docs/wp-2.19-industry-pack-architecture.md)
+and [`docs/industry-packs/README.md`](docs/industry-packs/README.md).

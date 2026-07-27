@@ -128,6 +128,14 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "job_to_cash_runs",
             "job_to_cash_records",
         }
+        wp_219_tables = {
+            "industry_pack_versions",
+            "industry_pack_assignment_states",
+            "industry_pack_components",
+            "industry_pack_validation_results",
+            "industry_pack_executions",
+            "industry_pack_governance_events",
+        }
         assert (
             wp_210_tables
             | wp_211_tables
@@ -136,6 +144,7 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_216_tables
             | wp_217_tables
             | wp_218_tables
+            | wp_219_tables
             <= set(inspect(engine).get_table_names())
         )
         with engine.connect() as connection:
@@ -144,6 +153,13 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
             assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
+            assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
+            assert connection.scalar(text("SELECT count(*) FROM industry_pack_components")) == 76
+        command.downgrade(config, "20260726_0018")
+        assert not (wp_219_tables & set(inspect(engine).get_table_names()))
+        assert wp_218_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_219_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260726_0017")
         assert not (wp_218_tables & set(inspect(engine).get_table_names()))
         assert wp_217_tables <= set(inspect(engine).get_table_names())
@@ -166,7 +182,7 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             assert connection.scalar(text("SELECT count(*) FROM forecast_method_registry")) == 19
         command.downgrade(config, "20260725_0014")
         assert not (
-            (wp_215_tables | wp_216_tables | wp_217_tables | wp_218_tables)
+            (wp_215_tables | wp_216_tables | wp_217_tables | wp_218_tables | wp_219_tables)
             & set(inspect(engine).get_table_names())
         )
         assert wp_212_tables <= set(inspect(engine).get_table_names())

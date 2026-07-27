@@ -88,6 +88,12 @@ MANAGED_TABLES = {
     "finding_rule_traces",
     "finding_reviews",
     "finding_status_history",
+    "industry_pack_versions",
+    "industry_pack_assignment_states",
+    "industry_pack_components",
+    "industry_pack_validation_results",
+    "industry_pack_executions",
+    "industry_pack_governance_events",
     "intelligence_orchestration_requests",
     "intelligence_orchestration_decisions",
     "intelligence_orchestration_steps",
@@ -687,6 +693,14 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "job_to_cash_runs",
         "job_to_cash_records",
     }
+    wp_219_tables = {
+        "industry_pack_versions",
+        "industry_pack_assignment_states",
+        "industry_pack_components",
+        "industry_pack_validation_results",
+        "industry_pack_executions",
+        "industry_pack_governance_events",
+    }
     commercial_inspector = inspect(postgres_engine)
     usage_columns = {
         column["name"]: column for column in commercial_inspector.get_columns("usage_events")
@@ -710,6 +724,13 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
         assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
+        assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
+        assert connection.scalar(text("SELECT count(*) FROM industry_pack_components")) == 76
+    command.downgrade(config, "20260726_0018")
+    assert not (wp_219_tables & set(inspect(postgres_engine).get_table_names()))
+    assert wp_218_tables <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert wp_219_tables <= set(inspect(postgres_engine).get_table_names())
     command.downgrade(config, "20260726_0017")
     assert not (wp_218_tables & set(inspect(postgres_engine).get_table_names()))
     assert wp_217_tables <= set(inspect(postgres_engine).get_table_names())
@@ -995,6 +1016,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_216_tables
         - wp_217_tables
         - wp_218_tables
+        - wp_219_tables
         <= wp_203_tables
     )
 
