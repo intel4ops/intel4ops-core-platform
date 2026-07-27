@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
@@ -16,6 +17,7 @@ from app.models.commercial import (
 )
 from app.models.entities import Finding, FindingEvidence, Organization
 from app.models.industry_packs import IndustryPackAssignmentState, IndustryPackVersion
+from app.models.raw_lineage import LineageNode
 from app.models.signatures import (
     OperationalFeatureDefinition,
     OperationalFeatureVersion,
@@ -229,6 +231,7 @@ class TenantSignatureService:
         payload: SignatureExecutionCreate,
         actor: UUID,
     ) -> OperationalSignatureExecution:
+        request_fingerprint = self._request_fingerprint(deployment_id, payload)
         prior = db.scalar(
             select(OperationalSignatureExecution).where(
                 OperationalSignatureExecution.organization_id == organization_id,
@@ -236,7 +239,20 @@ class TenantSignatureService:
             )
         )
         if prior:
-            return prior
+            legacy_fingerprint = self._legacy_input_fingerprint(payload)
+            legacy_replay = (
+                prior.input_fingerprint == legacy_fingerprint
+                and prior.result_json.get("input_fingerprint") == legacy_fingerprint
+            )
+            if prior.deployment_id == deployment_id and (
+                prior.input_fingerprint == request_fingerprint or legacy_replay
+            ):
+                return prior
+            raise SignatureServiceError(
+                "SIGNATURE_IDEMPOTENCY_CONFLICT",
+                "Idempotency key was already used with a different signature request",
+                409,
+            )
         deployment = db.scalar(
             select(OperationalSignatureDeployment).where(
                 OperationalSignatureDeployment.id == deployment_id,
@@ -251,6 +267,8 @@ class TenantSignatureService:
             )
         version, signature = self._production_version(db, deployment.signature_version_id)
         self._entitlement(db, organization_id)
+        self._applicable_pack(db, organization_id, version.applicable_pack_versions)
+        self._validate_lineage_nodes(db, organization_id, payload)
         evaluation = self.evaluator.evaluate(
             {
                 "required_conditions": version.required_conditions,
@@ -267,7 +285,7 @@ class TenantSignatureService:
             deployment_id=deployment.id,
             signature_version_id=version.id,
             idempotency_key=payload.idempotency_key,
-            input_fingerprint=evaluation.input_fingerprint,
+            input_fingerprint=request_fingerprint,
             status="completed",
             matched=evaluation.matched,
             confidence=evaluation.confidence,
@@ -320,6 +338,59 @@ class TenantSignatureService:
         db.commit()
         db.refresh(execution)
         return execution
+
+    @staticmethod
+    def _request_fingerprint(
+        deployment_id: UUID,
+        payload: SignatureExecutionCreate,
+    ) -> str:
+        canonical = json.dumps(
+            {
+                "deployment_id": str(deployment_id),
+                "payload": payload.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return sha256(canonical.encode()).hexdigest()
+
+    @staticmethod
+    def _legacy_input_fingerprint(payload: SignatureExecutionCreate) -> str:
+        canonical = json.dumps(
+            {
+                "observations": payload.observations,
+                "evidence_types": sorted({item.evidence_type for item in payload.evidence}),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return sha256(canonical.encode()).hexdigest()
+
+    @staticmethod
+    def _validate_lineage_nodes(
+        db: Session,
+        organization_id: UUID,
+        payload: SignatureExecutionCreate,
+    ) -> None:
+        requested = {
+            item.lineage_node_id for item in payload.evidence if item.lineage_node_id is not None
+        }
+        if not requested:
+            return
+        owned = set(
+            db.scalars(
+                select(LineageNode.id).where(
+                    LineageNode.id.in_(requested),
+                    LineageNode.organization_id == organization_id,
+                )
+            )
+        )
+        if owned != requested:
+            raise SignatureServiceError(
+                "EVIDENCE_LINEAGE_TENANT_MISMATCH",
+                "Every evidence lineage node must belong to the organization",
+                403,
+            )
 
     def executions(
         self, db: Session, organization_id: UUID, deployment_id: UUID

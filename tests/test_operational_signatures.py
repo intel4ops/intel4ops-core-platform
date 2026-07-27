@@ -20,6 +20,7 @@ from app.models.commercial import (
 from app.models.entities import Finding, Organization
 from app.models.gateway import ApplicationClient
 from app.models.industry_packs import IndustryPackAssignmentState, IndustryPackVersion
+from app.models.raw_lineage import LineageNode
 from app.models.signatures import (
     OperationalSignatureDefinition,
     OperationalSignatureExecution,
@@ -412,3 +413,146 @@ def test_signature_api_catalog_deployment_and_execution(
     assert execution.status_code == 201, execution.text
     assert execution.json()["matched"] is True
     assert execution.json()["finding_id"] is not None
+
+
+def test_execution_rejects_cross_tenant_evidence_lineage(db: Session) -> None:
+    organization, _signature, version, actor = _foundation(db)
+    deployment = tenant_signature_service.deploy(
+        db,
+        organization.id,
+        SignatureDeploymentCreate(signature_version_id=version.id),
+        actor,
+    )
+    other = Organization(
+        name="Other Signature Tenant",
+        slug=f"other-signature-{uuid4()}",
+        country_code="US",
+        default_currency="USD",
+        timezone="UTC",
+        status="active",
+        is_demo=True,
+    )
+    db.add(other)
+    db.flush()
+    foreign_node = LineageNode(
+        organization_id=other.id,
+        node_type="dataset",
+        entity_id=uuid4(),
+        status="active",
+    )
+    db.add(foreign_node)
+    db.commit()
+    payload = _execution_payload("cross-tenant-lineage")
+    payload.evidence[0] = payload.evidence[0].model_copy(
+        update={"lineage_node_id": foreign_node.id}
+    )
+
+    with pytest.raises(
+        SignatureServiceError,
+        match="lineage node must belong to the organization",
+    ) as error:
+        tenant_signature_service.execute(
+            db,
+            organization.id,
+            deployment.id,
+            payload,
+            actor,
+        )
+    assert error.value.status == 403
+    assert error.value.code == "EVIDENCE_LINEAGE_TENANT_MISMATCH"
+
+
+def test_execution_rechecks_active_applicable_pack(db: Session) -> None:
+    organization, _signature, version, actor = _foundation(db)
+    deployment = tenant_signature_service.deploy(
+        db,
+        organization.id,
+        SignatureDeploymentCreate(signature_version_id=version.id),
+        actor,
+    )
+    assignment_state = db.scalar(
+        select(IndustryPackAssignmentState).where(
+            IndustryPackAssignmentState.organization_id == organization.id
+        )
+    )
+    assert assignment_state is not None
+    assignment_state.status = "suspended"
+    db.commit()
+
+    with pytest.raises(SignatureServiceError, match="No active applicable") as error:
+        tenant_signature_service.execute(
+            db,
+            organization.id,
+            deployment.id,
+            _execution_payload("revoked-pack"),
+            actor,
+        )
+    assert error.value.status == 403
+    assert error.value.code == "SIGNATURE_PACK_NOT_APPLICABLE"
+
+
+def test_execution_idempotency_rejects_changed_request_or_deployment(db: Session) -> None:
+    organization, _signature, version, actor = _foundation(db)
+    production = tenant_signature_service.deploy(
+        db,
+        organization.id,
+        SignatureDeploymentCreate(signature_version_id=version.id),
+        actor,
+    )
+    pilot = tenant_signature_service.deploy(
+        db,
+        organization.id,
+        SignatureDeploymentCreate(
+            signature_version_id=version.id,
+            environment="pilot",
+        ),
+        actor,
+    )
+    initial = _execution_payload("idempotency-conflict")
+    created = tenant_signature_service.execute(
+        db,
+        organization.id,
+        production.id,
+        initial,
+        actor,
+    )
+    created.input_fingerprint = str(created.result_json["input_fingerprint"])
+    db.commit()
+    replay = tenant_signature_service.execute(
+        db,
+        organization.id,
+        production.id,
+        initial,
+        actor,
+    )
+    assert replay.id == created.id
+
+    changed = initial.model_copy(
+        update={
+            "observations": {
+                **initial.observations,
+                "billing_variance": "1500.00",
+            }
+        }
+    )
+    with pytest.raises(SignatureServiceError) as changed_error:
+        tenant_signature_service.execute(
+            db,
+            organization.id,
+            production.id,
+            changed,
+            actor,
+        )
+    assert changed_error.value.status == 409
+    assert changed_error.value.code == "SIGNATURE_IDEMPOTENCY_CONFLICT"
+
+    with pytest.raises(SignatureServiceError) as deployment_error:
+        tenant_signature_service.execute(
+            db,
+            organization.id,
+            pilot.id,
+            initial,
+            actor,
+        )
+    assert deployment_error.value.status == 409
+    assert deployment_error.value.code == "SIGNATURE_IDEMPOTENCY_CONFLICT"
