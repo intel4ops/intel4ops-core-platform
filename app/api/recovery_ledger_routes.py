@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     RECOVERY_FINANCE_ROLES,
     RECOVERY_LEDGER_READ_ROLES,
@@ -29,7 +30,14 @@ from app.schemas.recovery_ledger import (
 )
 from app.services.recovery_ledger_service import RecoveryLedgerError, recovery_ledger_service
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}",
+    dependencies=[
+        Depends(
+            require_commercial_entitlement("recovery.value_ledger", *RECOVERY_LEDGER_READ_ROLES)
+        )
+    ],
+)
 
 
 def _raise(exc: RecoveryLedgerError) -> NoReturn:

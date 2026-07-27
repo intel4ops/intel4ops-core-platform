@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     SOURCE_SYSTEM_ADMIN_ROLES,
     SOURCE_SYSTEM_OPERATIONS_ROLES,
@@ -35,7 +36,12 @@ from app.services.source_system_service import (
     source_system_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/source-systems")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/source-systems",
+    dependencies=[
+        Depends(require_commercial_entitlement("connect.source_systems", *SOURCE_SYSTEM_READ_ROLES))
+    ],
+)
 
 
 def _translate_error(exc: Exception) -> NoReturn:

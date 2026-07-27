@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     ACTION_APPROVE_ROLES,
     ACTION_ASSIGN_ROLES,
@@ -35,7 +36,12 @@ from app.schemas.actions import (
 )
 from app.services.action_service import ActionServiceError, action_service
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/actions")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/actions",
+    dependencies=[
+        Depends(require_commercial_entitlement("recovery.action_orchestration", *ACTION_READ_ROLES))
+    ],
+)
 
 
 def _role(access: OrganizationAccess) -> str:

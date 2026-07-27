@@ -6,6 +6,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     RELIABILITY_ASSESSMENT_REVIEW_ROLES,
     RELIABILITY_EXECUTION_READ_ROLES,
@@ -32,7 +33,16 @@ from app.services.reliability_service import (
     reliability_execution_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/reliability")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/reliability",
+    dependencies=[
+        Depends(
+            require_commercial_entitlement(
+                "intelligence.reliability", *RELIABILITY_EXECUTION_READ_ROLES
+            )
+        )
+    ],
+)
 
 
 def _raise(exc: ReliabilityServiceError) -> NoReturn:

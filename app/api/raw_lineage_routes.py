@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     RAW_LINEAGE_ANALYSIS_ROLES,
     RAW_LINEAGE_GOVERNANCE_ROLES,
@@ -62,7 +63,12 @@ from app.services.raw_lineage_service import (
     RawStorageObjectService,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}",
+    dependencies=[
+        Depends(require_commercial_entitlement("connect.lineage", *RAW_LINEAGE_READ_ROLES))
+    ],
+)
 events = LineageEventService()
 lineage = LineageService(events)
 raw_objects = RawStorageObjectService(lineage, events)

@@ -157,6 +157,25 @@ MANAGED_TABLES = {
     "recovery_finance_verifications",
     "verified_value_ledger_entries",
     "recovery_audit_events",
+    "products",
+    "product_versions",
+    "features",
+    "plans",
+    "plan_versions",
+    "plan_version_entitlements",
+    "subscriptions",
+    "contracts",
+    "contract_overrides",
+    "entitlements",
+    "usage_meter_definitions",
+    "usage_events",
+    "usage_periods",
+    "industry_pack_definitions",
+    "industry_pack_assignments",
+    "feature_flags",
+    "limit_definitions",
+    "limit_evaluations",
+    "commercial_audit_events",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -637,6 +656,55 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_217_tables = {
+        "products",
+        "product_versions",
+        "features",
+        "plans",
+        "plan_versions",
+        "plan_version_entitlements",
+        "subscriptions",
+        "contracts",
+        "contract_overrides",
+        "entitlements",
+        "usage_meter_definitions",
+        "usage_events",
+        "usage_periods",
+        "industry_pack_definitions",
+        "industry_pack_assignments",
+        "feature_flags",
+        "limit_definitions",
+        "limit_evaluations",
+        "commercial_audit_events",
+    }
+    commercial_inspector = inspect(postgres_engine)
+    usage_columns = {
+        column["name"]: column for column in commercial_inspector.get_columns("usage_events")
+    }
+    assert str(usage_columns["id"]["type"]) == "UUID"
+    assert str(usage_columns["quantity"]["type"]) == "NUMERIC(38, 12)"
+    assert str(usage_columns["metadata_json"]["type"]) == "JSONB"
+    assert {
+        "organizations",
+        "usage_meter_definitions",
+    } <= {
+        foreign_key["referred_table"]
+        for foreign_key in commercial_inspector.get_foreign_keys("usage_events")
+    }
+    assert "uq_usage_event_key" in {
+        item["name"] for item in commercial_inspector.get_unique_constraints("usage_events")
+    }
+    with postgres_engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM products")) == 6
+        assert connection.scalar(text("SELECT count(*) FROM plans")) == 5
+        assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
+        assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
+    command.downgrade(config, "20260726_0016")
+    assert not (wp_217_tables & set(inspect(postgres_engine).get_table_names()))
+    assert "verified_value_ledger_entries" in inspect(postgres_engine).get_table_names()
+    command.upgrade(config, "head")
+    assert wp_217_tables <= set(inspect(postgres_engine).get_table_names())
+
     wp_216_tables = {
         "recovery_cases",
         "recovery_executions",
@@ -909,6 +977,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_214_tables
         - wp_215_tables
         - wp_216_tables
+        - wp_217_tables
         <= wp_203_tables
     )
 

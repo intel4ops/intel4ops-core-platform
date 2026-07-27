@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     FINDING_ADMIN_ROLES,
     FINDING_READ_ROLES,
@@ -43,7 +44,12 @@ from app.services.finding_platform_service import (
     finding_review_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/findings")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/findings",
+    dependencies=[
+        Depends(require_commercial_entitlement("intelligence.findings", *FINDING_READ_ROLES))
+    ],
+)
 
 
 def _error(exc: FindingPlatformError) -> HTTPException:

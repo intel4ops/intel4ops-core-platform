@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import INTELLIGENCE_EXECUTION_ROLES, INTELLIGENCE_READ_ROLES
 from app.db.session import get_db
 from app.registries.calculation_registry import DefinitionNotFoundError
@@ -17,7 +18,12 @@ from app.services.intelligence_service import (
     intelligence_execution_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}",
+    dependencies=[
+        Depends(require_commercial_entitlement("intelligence.arithmetic", *INTELLIGENCE_READ_ROLES))
+    ],
+)
 
 
 @router.post(

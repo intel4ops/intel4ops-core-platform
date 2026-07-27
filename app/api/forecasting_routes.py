@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     FORECAST_ACCURACY_READ_ROLES,
     FORECAST_ACTUAL_REGISTER_ROLES,
@@ -47,7 +48,16 @@ from app.services.forecasting_service import (
     forecast_execution_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}/forecasts")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/forecasts",
+    dependencies=[
+        Depends(
+            require_commercial_entitlement(
+                "intelligence.forecasting", *FORECAST_EXECUTION_READ_ROLES
+            )
+        )
+    ],
+)
 
 
 def _raise(exc: ForecastingServiceError) -> NoReturn:

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.permissions import (
     INGESTION_ADMIN_ROLES,
     INGESTION_OPERATION_ROLES,
@@ -51,7 +52,12 @@ from app.services.ingestion_service import (
     ingestion_batch_service,
 )
 
-router = APIRouter(prefix="/api/v1/organizations/{organization_id}")
+router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}",
+    dependencies=[
+        Depends(require_commercial_entitlement("connect.ingestion_batches", *INGESTION_READ_ROLES))
+    ],
+)
 
 
 def _translate_error(exc: Exception) -> NoReturn:
