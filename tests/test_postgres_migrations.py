@@ -176,6 +176,10 @@ MANAGED_TABLES = {
     "limit_definitions",
     "limit_evaluations",
     "commercial_audit_events",
+    "application_clients",
+    "api_request_audit_events",
+    "job_to_cash_runs",
+    "job_to_cash_records",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -677,6 +681,12 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "limit_evaluations",
         "commercial_audit_events",
     }
+    wp_218_tables = {
+        "application_clients",
+        "api_request_audit_events",
+        "job_to_cash_runs",
+        "job_to_cash_records",
+    }
     commercial_inspector = inspect(postgres_engine)
     usage_columns = {
         column["name"]: column for column in commercial_inspector.get_columns("usage_events")
@@ -699,6 +709,12 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         assert connection.scalar(text("SELECT count(*) FROM plans")) == 5
         assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 18
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
+        assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
+    command.downgrade(config, "20260726_0017")
+    assert not (wp_218_tables & set(inspect(postgres_engine).get_table_names()))
+    assert wp_217_tables <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert wp_218_tables <= set(inspect(postgres_engine).get_table_names())
     command.downgrade(config, "20260726_0016")
     assert not (wp_217_tables & set(inspect(postgres_engine).get_table_names()))
     assert "verified_value_ledger_entries" in inspect(postgres_engine).get_table_names()

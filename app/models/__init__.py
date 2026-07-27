@@ -40,6 +40,12 @@ from app.models.forecasting import (
     ForecastRevision,
     ForecastScenario,
 )
+from app.models.gateway import (
+    ApiRequestAuditEvent,
+    ApplicationClient,
+    JobToCashRecord,
+    JobToCashRun,
+)
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
 from app.models.oikb import (
     OIKBApproval,
@@ -191,6 +197,10 @@ __all__ = [
     "ForecastPoint",
     "ForecastRevision",
     "ForecastScenario",
+    "ApiRequestAuditEvent",
+    "ApplicationClient",
+    "JobToCashRecord",
+    "JobToCashRun",
     "OIKBApproval",
     "OIKBChangeLog",
     "OIKBDefinition",
