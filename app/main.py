@@ -24,6 +24,8 @@ from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.recovery_ledger_routes import router as recovery_ledger_router
 from app.api.reliability_routes import router as reliability_router
 from app.api.routes import router
+from app.api.signature_routes import catalog_router as signature_catalog_router
+from app.api.signature_routes import tenant_router as signature_tenant_router
 from app.api.source_system_routes import router as source_system_router
 from app.api.statistical_routes import router as statistical_router
 from app.api.trust_routes import router as trust_router
@@ -121,3 +123,5 @@ app.include_router(industry_pack_tenant_router)
 app.include_router(command_router)
 app.include_router(job_to_cash_router)
 app.include_router(gateway_router)
+app.include_router(signature_catalog_router)
+app.include_router(signature_tenant_router)
