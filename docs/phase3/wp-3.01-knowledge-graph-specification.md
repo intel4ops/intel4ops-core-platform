@@ -2,7 +2,7 @@
 
 ## Status and baseline
 
-- Document status: **architecture proposal — implementation not authorized**
+- Document status: **approved architecture — implementation requires merged approval PR**
 - Certified Core baseline: merge commit `9f459ed`
 - Certified Alembic head: `20260727_0021`
 - Proposed next revision after approval: `20260728_0022`
@@ -525,19 +525,21 @@ WP-3.01 is complete only when:
   pass;
 - documentation, runbooks, API contracts and known limitations are approved.
 
-## 18. Approval decisions required before code
+## 18. Approved architecture decisions
 
-1. Approve PostgreSQL as the authoritative graph store for WP-3.01.
-2. Approve the proposed entity and relationship vocabulary, including exclusion
-   of `caused_by`.
-3. Select database enforcement for same-tenant edge endpoints: composite
-   foreign keys or validated trigger plus service checks.
-4. Approve initial traversal limits and performance profiles.
-5. Approve commercial feature, meter and limit keys.
-6. Approve graph evidence retention and query-run retention periods.
-7. Confirm whether reviewed manual assertions are included in the first release
-   or deferred behind projection-only graph construction.
-8. Approve the proposed migration identifier only when implementation begins.
+The eight architecture decisions are resolved in
+[`wp-3.01-architecture-approval-record.md`](wp-3.01-architecture-approval-record.md):
 
-No implementation code or migration should be created until these decisions and
-the Phase 3 blueprint are reviewed and explicitly approved.
+1. PostgreSQL is authoritative; any specialized graph engine is a read-only,
+   rebuildable projection.
+2. The bounded initial entity and relationship vocabulary is approved.
+3. `caused_by` is excluded.
+4. Composite foreign keys enforce same-tenant, same-graph-version endpoints.
+5. The traversal ceilings and three performance profiles are approved.
+6. The feature, meter, and limit keys are approved without pricing assumptions.
+7. Evidence, query, audit, projection, governance, and legal-hold retention
+   defaults are approved.
+8. Manual assertion creation is deferred from the first release.
+
+No implementation code or migration should be created until the approval record
+and architecture documents are merged into `main`.
