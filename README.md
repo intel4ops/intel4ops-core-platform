@@ -253,3 +253,12 @@ the shared Trust, OIKB, findings, economics, recovery, command, and commercial
 contracts; they do not create separate vertical platforms. See
 [`docs/wp-2.19-industry-pack-architecture.md`](docs/wp-2.19-industry-pack-architecture.md)
 and [`docs/industry-packs/README.md`](docs/industry-packs/README.md).
+
+## Release certification
+
+WP-2.20 adds deterministic pack-aware simulations, approved scenario oracles,
+analytical-artifact governance, golden validation for all four packs, security and
+resilience checks, release gates, time-bounded waivers, and commit-bound JSON/Markdown
+certification evidence. See
+[`docs/wp-2.20-release-certification-architecture.md`](docs/wp-2.20-release-certification-architecture.md)
+and [`docs/release-certification-runbook.md`](docs/release-certification-runbook.md).

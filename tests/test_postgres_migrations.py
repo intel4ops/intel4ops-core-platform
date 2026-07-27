@@ -94,6 +94,16 @@ MANAGED_TABLES = {
     "industry_pack_validation_results",
     "industry_pack_executions",
     "industry_pack_governance_events",
+    "validation_scenario_versions",
+    "validation_oracle_versions",
+    "validation_suites",
+    "analytical_artifact_versions",
+    "release_candidates",
+    "validation_runs",
+    "release_gate_definitions",
+    "release_gate_results",
+    "release_waivers",
+    "release_certifications",
     "intelligence_orchestration_requests",
     "intelligence_orchestration_decisions",
     "intelligence_orchestration_steps",
@@ -701,6 +711,18 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "industry_pack_executions",
         "industry_pack_governance_events",
     }
+    wp_220_tables = {
+        "validation_scenario_versions",
+        "validation_oracle_versions",
+        "validation_suites",
+        "analytical_artifact_versions",
+        "release_candidates",
+        "validation_runs",
+        "release_gate_definitions",
+        "release_gate_results",
+        "release_waivers",
+        "release_certifications",
+    }
     commercial_inspector = inspect(postgres_engine)
     usage_columns = {
         column["name"]: column for column in commercial_inspector.get_columns("usage_events")
@@ -726,8 +748,17 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_components")) == 76
+        assert connection.scalar(text("SELECT count(*) FROM validation_scenario_versions")) == 36
+        assert connection.scalar(text("SELECT count(*) FROM validation_oracle_versions")) == 36
+        assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 12
+        assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 12
+    command.downgrade(config, "20260727_0019")
+    assert not (wp_220_tables & set(inspect(postgres_engine).get_table_names()))
+    assert wp_219_tables <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert wp_220_tables <= set(inspect(postgres_engine).get_table_names())
     command.downgrade(config, "20260726_0018")
-    assert not (wp_219_tables & set(inspect(postgres_engine).get_table_names()))
+    assert not ((wp_219_tables | wp_220_tables) & set(inspect(postgres_engine).get_table_names()))
     assert wp_218_tables <= set(inspect(postgres_engine).get_table_names())
     command.upgrade(config, "head")
     assert wp_219_tables <= set(inspect(postgres_engine).get_table_names())
@@ -1017,6 +1048,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_217_tables
         - wp_218_tables
         - wp_219_tables
+        - wp_220_tables
         <= wp_203_tables
     )
 
