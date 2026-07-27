@@ -204,6 +204,22 @@ def test_recovery_execution_verification_and_append_only_ledger(
     assert values["realized_value"] == "28000.000000000000"
     assert values["verified_value"] == "27500.000000000000"
     assert values["net_verified_value"] == "25500.000000000000"
+    command = client.get(
+        f"/api/v1/organizations/{organization_id}/command/executive-summary",
+        params={
+            "period_start": start.isoformat(),
+            "period_end": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert command.status_code == 200, command.text
+    command_values = command.json()["currencies"][0]
+    assert command_values["exposure"] == "100000.000000000000"
+    assert command_values["addressable_exposure"] == "80000.000000000000"
+    assert command_values["expected_recoverable_value"] == "60000.000000000000"
+    assert command_values["realized_value"] == "28000.000000000000"
+    assert command_values["verified_value"] == "27500.000000000000"
+    assert command_values["adjustments"] == "500.000000000000"
+    assert command_values["reversals"] == "-2500.000000000000"
     assert submitter != identity.user_id
     posted = db.scalar(
         select(VerifiedValueLedgerEntry).where(VerifiedValueLedgerEntry.id == UUID(original_id))

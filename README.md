@@ -2,6 +2,11 @@
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
+WP-2.18 adds a multi-application request context, Executive Command APIs, and the first
+deterministic Job-to-Cash vertical slice. See [API gateway](docs/api-gateway.md),
+[Executive Command](docs/executive-command.md), and
+[Job-to-Cash vertical slice](docs/job-to-cash-vertical-slice.md).
+
 WP-2.17 adds versioned products and plans, subscriptions, contracts, tenant entitlements,
 append-only usage metering, limits, feature flags, and governed industry-pack activation.
 See [Commercial platform](docs/commercial-platform.md).
@@ -119,7 +124,7 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260726_0017`.
+Current head revision: `20260726_0018`.
 
 ## Exposure, prioritization, and recovery economics
 
