@@ -74,3 +74,20 @@ jobs:
 
       - name: Generate Alembic offline SQL
         run: python -m alembic upgrade head --sql > "${RUNNER_TEMP}/alembic-upgrade.sql"
+
+      - name: Generate release certification evidence
+        run: >-
+          python -m app.cli.certify
+          --commit "${GITHUB_SHA}"
+          --branch "${GITHUB_REF_NAME}"
+          --migration-head "20260727_0020"
+          --environment "github-actions"
+          --output "build/certification"
+
+      - name: Upload release certification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-certification-${{ github.sha }}
+          path: build/certification/
+          if-no-files-found: error
+          retention-days: 30

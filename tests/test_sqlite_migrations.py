@@ -136,6 +136,18 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "industry_pack_executions",
             "industry_pack_governance_events",
         }
+        wp_220_tables = {
+            "validation_scenario_versions",
+            "validation_oracle_versions",
+            "validation_suites",
+            "analytical_artifact_versions",
+            "release_candidates",
+            "validation_runs",
+            "release_gate_definitions",
+            "release_gate_results",
+            "release_waivers",
+            "release_certifications",
+        }
         assert (
             wp_210_tables
             | wp_211_tables
@@ -145,6 +157,7 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_217_tables
             | wp_218_tables
             | wp_219_tables
+            | wp_220_tables
             <= set(inspect(engine).get_table_names())
         )
         with engine.connect() as connection:
@@ -155,8 +168,19 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_components")) == 76
+            assert (
+                connection.scalar(text("SELECT count(*) FROM validation_scenario_versions")) == 36
+            )
+            assert connection.scalar(text("SELECT count(*) FROM validation_oracle_versions")) == 36
+            assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 12
+            assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 12
+        command.downgrade(config, "20260727_0019")
+        assert not (wp_220_tables & set(inspect(engine).get_table_names()))
+        assert wp_219_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert wp_220_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260726_0018")
-        assert not (wp_219_tables & set(inspect(engine).get_table_names()))
+        assert not ((wp_219_tables | wp_220_tables) & set(inspect(engine).get_table_names()))
         assert wp_218_tables <= set(inspect(engine).get_table_names())
         command.upgrade(config, "head")
         assert wp_219_tables <= set(inspect(engine).get_table_names())

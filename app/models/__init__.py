@@ -1,3 +1,15 @@
+from app.models.certification import (
+    AnalyticalArtifactVersion,
+    ReleaseCandidate,
+    ReleaseCertification,
+    ReleaseGateDefinition,
+    ReleaseGateResult,
+    ReleaseWaiver,
+    ValidationOracleVersion,
+    ValidationRun,
+    ValidationScenarioVersion,
+    ValidationSuite,
+)
 from app.models.commercial import (
     CommercialAuditEvent,
     CommercialContract,
@@ -119,6 +131,16 @@ from app.models.trust import (
 )
 
 __all__ = [
+    "AnalyticalArtifactVersion",
+    "ReleaseCandidate",
+    "ReleaseCertification",
+    "ReleaseGateDefinition",
+    "ReleaseGateResult",
+    "ReleaseWaiver",
+    "ValidationOracleVersion",
+    "ValidationRun",
+    "ValidationScenarioVersion",
+    "ValidationSuite",
     "CommercialAuditEvent",
     "CommercialContract",
     "ContractOverride",
