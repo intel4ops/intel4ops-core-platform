@@ -161,6 +161,21 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "operational_signature_performance_history",
             "operational_signature_monitoring_results",
         }
+        wp_301_tables = {
+            "knowledge_graph_entity_types",
+            "knowledge_graph_entity_type_versions",
+            "knowledge_graph_relationship_types",
+            "knowledge_graph_relationship_type_versions",
+            "knowledge_graph_governance_events",
+            "knowledge_graph_versions",
+            "knowledge_graph_nodes",
+            "knowledge_graph_edges",
+            "knowledge_graph_edge_evidence",
+            "knowledge_graph_changes",
+            "knowledge_graph_query_runs",
+            "knowledge_graph_query_steps",
+            "knowledge_graph_projection_checkpoints",
+        }
         assert (
             wp_210_tables
             | wp_211_tables
@@ -172,12 +187,13 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_219_tables
             | wp_220_tables
             | wp_221_tables
+            | wp_301_tables
             <= set(inspect(engine).get_table_names())
         )
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM products")) == 6
             assert connection.scalar(text("SELECT count(*) FROM plans")) == 5
-            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
+            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 22
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
             assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
             assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
@@ -186,8 +202,8 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
                 connection.scalar(text("SELECT count(*) FROM validation_scenario_versions")) == 36
             )
             assert connection.scalar(text("SELECT count(*) FROM validation_oracle_versions")) == 36
-            assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 13
-            assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 13
+            assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 14
+            assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 14
             assert (
                 connection.scalar(text("SELECT count(*) FROM operational_feature_definitions")) == 7
             )
@@ -203,7 +219,32 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
                 connection.scalar(text("SELECT count(*) FROM operational_signature_validations"))
                 == 2
             )
+            assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 22
+            assert (
+                connection.scalar(text("SELECT count(*) FROM knowledge_graph_entity_types")) == 25
+            )
+            assert (
+                connection.scalar(text("SELECT count(*) FROM knowledge_graph_relationship_types"))
+                == 26
+            )
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM knowledge_graph_relationship_types "
+                        "WHERE code = 'caused_by'"
+                    )
+                )
+                == 0
+            )
+        command.downgrade(config, "20260727_0021")
+        assert not (wp_301_tables & set(inspect(engine).get_table_names()))
+        assert wp_221_tables <= set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
             assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
+            assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 13
+            assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 13
+        command.upgrade(config, "head")
+        assert wp_301_tables <= set(inspect(engine).get_table_names())
         command.downgrade(config, "20260727_0020")
         assert not (wp_221_tables & set(inspect(engine).get_table_names()))
         assert wp_220_tables <= set(inspect(engine).get_table_names())

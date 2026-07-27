@@ -1,13 +1,14 @@
-# Intel4Ops Core Platform — Phase 2
+# Intel4Ops Enterprise Operational Intelligence Platform
 
 Executable foundation for Connect, Trust, Intelligence, Command, and Recovery.
 
-Phase 3 architecture is documentation-only pending explicit approval. See the
+Phase 3 architecture is approved. WP-3.01 implements the initial governed
+Enterprise Operational Knowledge Graph while the certified Phase 2 contracts
+remain frozen. See the
 [Enterprise Intelligence Network blueprint](docs/phase3/enterprise-intelligence-network-architecture.md)
-and [WP-3.01 Knowledge Graph specification](docs/phase3/wp-3.01-knowledge-graph-specification.md).
-The [WP-3.01 architecture approval record](docs/phase3/wp-3.01-architecture-approval-record.md)
-resolves the implementation-boundary decisions.
-The certified Phase 2 Core Platform remains frozen.
+and [WP-3.01 Knowledge Graph specification](docs/phase3/wp-3.01-knowledge-graph-specification.md),
+[architecture approval record](docs/phase3/wp-3.01-architecture-approval-record.md), and
+[operations guide](docs/phase3/wp-3.01-operations.md).
 
 WP-2.21 completes the governed operational feature and proprietary signature
 platform and closes the Phase 2 structural assessment. See
