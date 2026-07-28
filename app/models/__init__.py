@@ -67,6 +67,21 @@ from app.models.industry_packs import (
     IndustryPackVersion,
 )
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
+from app.models.knowledge_graph import (
+    KnowledgeGraphChange,
+    KnowledgeGraphEdge,
+    KnowledgeGraphEdgeEvidence,
+    KnowledgeGraphEntityType,
+    KnowledgeGraphEntityTypeVersion,
+    KnowledgeGraphGovernanceEvent,
+    KnowledgeGraphNode,
+    KnowledgeGraphProjectionCheckpoint,
+    KnowledgeGraphQueryRun,
+    KnowledgeGraphQueryStep,
+    KnowledgeGraphRelationshipType,
+    KnowledgeGraphRelationshipTypeVersion,
+    KnowledgeGraphVersion,
+)
 from app.models.oikb import (
     OIKBApproval,
     OIKBChangeLog,
@@ -281,6 +296,19 @@ __all__ = [
     "OperationalSignaturePerformanceSnapshot",
     "OperationalSignatureValidation",
     "OperationalSignatureVersion",
+    "KnowledgeGraphChange",
+    "KnowledgeGraphEdge",
+    "KnowledgeGraphEdgeEvidence",
+    "KnowledgeGraphEntityType",
+    "KnowledgeGraphEntityTypeVersion",
+    "KnowledgeGraphGovernanceEvent",
+    "KnowledgeGraphNode",
+    "KnowledgeGraphProjectionCheckpoint",
+    "KnowledgeGraphQueryRun",
+    "KnowledgeGraphQueryStep",
+    "KnowledgeGraphRelationshipType",
+    "KnowledgeGraphRelationshipTypeVersion",
+    "KnowledgeGraphVersion",
 ]
 from app.models.actions import (
     ActionDependency,

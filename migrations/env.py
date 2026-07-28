@@ -11,6 +11,7 @@ from app.models import (
     forecasting,  # noqa: F401
     ingestion,  # noqa: F401
     intelligence,  # noqa: F401
+    knowledge_graph,  # noqa: F401
     oikb,  # noqa: F401
     orchestration,  # noqa: F401
     raw_lineage,  # noqa: F401

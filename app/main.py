@@ -16,6 +16,8 @@ from app.api.industry_pack_routes import tenant_router as industry_pack_tenant_r
 from app.api.ingestion_routes import router as ingestion_router
 from app.api.intelligence_routes import router as intelligence_router
 from app.api.job_to_cash_routes import router as job_to_cash_router
+from app.api.knowledge_graph_routes import catalog_router as knowledge_graph_catalog_router
+from app.api.knowledge_graph_routes import tenant_router as knowledge_graph_tenant_router
 from app.api.membership_routes import router as membership_router
 from app.api.oikb_routes import router as oikb_router
 from app.api.orchestration_routes import engine_router
@@ -125,3 +127,5 @@ app.include_router(job_to_cash_router)
 app.include_router(gateway_router)
 app.include_router(signature_catalog_router)
 app.include_router(signature_tenant_router)
+app.include_router(knowledge_graph_catalog_router)
+app.include_router(knowledge_graph_tenant_router)

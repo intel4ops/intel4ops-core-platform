@@ -207,6 +207,19 @@ MANAGED_TABLES = {
     "api_request_audit_events",
     "job_to_cash_runs",
     "job_to_cash_records",
+    "knowledge_graph_entity_types",
+    "knowledge_graph_entity_type_versions",
+    "knowledge_graph_relationship_types",
+    "knowledge_graph_relationship_type_versions",
+    "knowledge_graph_governance_events",
+    "knowledge_graph_versions",
+    "knowledge_graph_nodes",
+    "knowledge_graph_edges",
+    "knowledge_graph_edge_evidence",
+    "knowledge_graph_changes",
+    "knowledge_graph_query_runs",
+    "knowledge_graph_query_steps",
+    "knowledge_graph_projection_checkpoints",
 }
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
@@ -689,6 +702,42 @@ def assert_schema_at_head(engine: Engine) -> None:
         "trust_assessments",
         "analytical_readiness_decisions",
     }
+    graph_node_columns = {
+        column["name"]: column for column in inspector.get_columns("knowledge_graph_nodes")
+    }
+    graph_edge_columns = {
+        column["name"]: column for column in inspector.get_columns("knowledge_graph_edges")
+    }
+    assert str(graph_node_columns["id"]["type"]) == "UUID"
+    assert str(graph_node_columns["metadata_json"]["type"]) == "JSONB"
+    assert str(graph_edge_columns["id"]["type"]) == "UUID"
+    assert str(graph_edge_columns["properties_json"]["type"]) == "JSONB"
+    assert "ck_kg_node_source_registry" in {
+        item["name"] for item in inspector.get_check_constraints("knowledge_graph_nodes")
+    }
+    assert "ck_kg_edge_evidence_source_type" in {
+        item["name"] for item in inspector.get_check_constraints("knowledge_graph_edge_evidence")
+    }
+    node_foreign_keys = {
+        item["name"]: item for item in inspector.get_foreign_keys("knowledge_graph_nodes")
+    }
+    assert node_foreign_keys["fk_kg_node_org_graph_version"]["constrained_columns"] == [
+        "organization_id",
+        "graph_version_id",
+    ]
+    edge_foreign_keys = {
+        item["name"]: item for item in inspector.get_foreign_keys("knowledge_graph_edges")
+    }
+    assert edge_foreign_keys["fk_kg_edge_from_node_tenant"]["constrained_columns"] == [
+        "organization_id",
+        "graph_version_id",
+        "from_node_id",
+    ]
+    assert edge_foreign_keys["fk_kg_edge_to_node_tenant"]["constrained_columns"] == [
+        "organization_id",
+        "graph_version_id",
+        "to_node_id",
+    ]
 
 
 @pytest.mark.postgres
@@ -758,6 +807,21 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "operational_signature_performance_history",
         "operational_signature_monitoring_results",
     }
+    wp_301_tables = {
+        "knowledge_graph_entity_types",
+        "knowledge_graph_entity_type_versions",
+        "knowledge_graph_relationship_types",
+        "knowledge_graph_relationship_type_versions",
+        "knowledge_graph_governance_events",
+        "knowledge_graph_versions",
+        "knowledge_graph_nodes",
+        "knowledge_graph_edges",
+        "knowledge_graph_edge_evidence",
+        "knowledge_graph_changes",
+        "knowledge_graph_query_runs",
+        "knowledge_graph_query_steps",
+        "knowledge_graph_projection_checkpoints",
+    }
     commercial_inspector = inspect(postgres_engine)
     usage_columns = {
         column["name"]: column for column in commercial_inspector.get_columns("usage_events")
@@ -778,15 +842,15 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     with postgres_engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM products")) == 6
         assert connection.scalar(text("SELECT count(*) FROM plans")) == 5
-        assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
+        assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 22
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_definitions")) == 7
         assert connection.scalar(text("SELECT count(*) FROM application_clients")) == 4
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_versions")) == 4
         assert connection.scalar(text("SELECT count(*) FROM industry_pack_components")) == 76
         assert connection.scalar(text("SELECT count(*) FROM validation_scenario_versions")) == 36
         assert connection.scalar(text("SELECT count(*) FROM validation_oracle_versions")) == 36
-        assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 13
-        assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 13
+        assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 14
+        assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 14
         assert connection.scalar(text("SELECT count(*) FROM operational_feature_definitions")) == 7
         assert (
             connection.scalar(text("SELECT count(*) FROM operational_signature_definitions")) == 2
@@ -794,6 +858,28 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         assert (
             connection.scalar(text("SELECT count(*) FROM operational_signature_validations")) == 2
         )
+        assert connection.scalar(text("SELECT count(*) FROM knowledge_graph_entity_types")) == 25
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge_graph_relationship_types")) == 26
+        )
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM knowledge_graph_relationship_types "
+                    "WHERE code = 'caused_by'"
+                )
+            )
+            == 0
+        )
+    command.downgrade(config, "20260727_0021")
+    assert not (wp_301_tables & set(inspect(postgres_engine).get_table_names()))
+    assert wp_221_tables <= set(inspect(postgres_engine).get_table_names())
+    with postgres_engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM usage_meter_definitions")) == 19
+        assert connection.scalar(text("SELECT count(*) FROM validation_suites")) == 13
+        assert connection.scalar(text("SELECT count(*) FROM release_gate_definitions")) == 13
+    command.upgrade(config, "head")
+    assert wp_301_tables <= set(inspect(postgres_engine).get_table_names())
     command.downgrade(config, "20260727_0020")
     assert not (wp_221_tables & set(inspect(postgres_engine).get_table_names()))
     assert wp_220_tables <= set(inspect(postgres_engine).get_table_names())
@@ -1101,6 +1187,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_219_tables
         - wp_220_tables
         - wp_221_tables
+        - wp_301_tables
         <= wp_203_tables
     )
 
