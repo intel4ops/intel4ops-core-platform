@@ -9,6 +9,7 @@ from app.models.ingestion import (
     DatasetVersionStatus,
     IngestionBatchStatus,
 )
+from app.models.source_system import SourceSystem
 from app.schemas.contracts import OrganizationCreate
 from app.schemas.ingestion import (
     DatasetCreate,
@@ -52,6 +53,8 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID]:
         ),
         uuid4(),
     )
+    source.status = "active"
+    db.commit()
     return organization.id, source.id
 
 
@@ -215,6 +218,7 @@ def test_dataset_versions_numbering_consistency_and_reconciliation(db: Session) 
             dataset.id,
             DatasetVersionCreate(ingestion_batch_id=first_batch.id),
         )
+
     second = version_service.create(
         db,
         organization_id,
@@ -271,3 +275,54 @@ def test_dataset_versions_numbering_consistency_and_reconciliation(db: Session) 
                 rejected_record_count=0,
             ),
         )
+
+
+@pytest.mark.parametrize("source_status", ["paused", "failed", "decommissioned"])
+def test_source_lifecycle_blocks_new_downstream_but_preserves_history(
+    db: Session, source_status: str
+) -> None:
+    organization_id, source_id = foundation(db, f"source-policy-{source_status}")
+    batch_service = IngestionBatchService()
+    existing = batch_service.create(
+        db,
+        organization_id,
+        batch_payload(source_id, f"historical-{source_status}"),
+        uuid4(),
+    )
+    source = db.get(SourceSystem, source_id)
+    assert source is not None
+    source.status = source_status
+    db.commit()
+
+    with pytest.raises(IngestionConflictError):
+        batch_service.create(
+            db,
+            organization_id,
+            batch_payload(source_id, f"blocked-{source_status}"),
+            uuid4(),
+        )
+    with pytest.raises(IngestionConflictError):
+        DatasetService().create(
+            db,
+            organization_id,
+            dataset_payload(source_id, f"blocked-{source_status}"),
+            uuid4(),
+        )
+    assert batch_service.get(db, organization_id, existing.id).id == existing.id
+
+
+def test_source_lifecycle_check_remains_tenant_first(db: Session) -> None:
+    owner_id, source_id = foundation(db, "source-policy-owner")
+    other_id, _ = foundation(db, "source-policy-other")
+    source = db.get(SourceSystem, source_id)
+    assert source is not None
+    source.status = "decommissioned"
+    db.commit()
+    with pytest.raises(IngestionTenantMismatchError):
+        IngestionBatchService().create(
+            db,
+            other_id,
+            batch_payload(source_id, "cross-tenant"),
+            uuid4(),
+        )
+    assert owner_id != other_id

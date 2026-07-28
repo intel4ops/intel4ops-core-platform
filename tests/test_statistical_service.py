@@ -52,6 +52,8 @@ def statistical_foundation(
         ),
         actor,
     )
+    source.status = "active"
+    db.commit()
     dataset = DatasetService().create(
         db,
         organization.id,

@@ -86,6 +86,9 @@ class SourceSystemStatus(StrEnum):
     DECOMMISSIONED = "decommissioned"
 
 
+DOWNSTREAM_CREATION_SOURCE_STATUSES = frozenset({SourceSystemStatus.ACTIVE.value})
+
+
 class SourceHealthStatus(StrEnum):
     UNKNOWN = "unknown"
     HEALTHY = "healthy"

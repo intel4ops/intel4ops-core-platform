@@ -47,6 +47,8 @@ def foundation(db: Session, slug: str = "forecast-service") -> tuple[UUID, UUID,
         ),
         actor,
     )
+    source.status = "active"
+    db.commit()
     dataset = DatasetService().create(
         db,
         organization.id,

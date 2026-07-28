@@ -65,6 +65,8 @@ ALLOWED_TRANSITIONS: dict[SourceSystemStatus, set[SourceSystemStatus]] = {
 
 
 class SourceSystemService:
+    decommissioned_editable_fields = frozenset({"description", "owner_name", "owner_email"})
+
     def create(
         self,
         db: Session,
@@ -164,6 +166,12 @@ class SourceSystemService:
     ) -> SourceSystem:
         source_system = self.get(db, organization_id, source_system_id, for_update=True)
         changes = payload.model_dump(exclude_unset=True, mode="json")
+        if source_system.status == SourceSystemStatus.DECOMMISSIONED.value:
+            prohibited = set(changes) - self.decommissioned_editable_fields
+            if prohibited:
+                raise InvalidSourceSystemTransitionError(
+                    "Decommissioned source systems allow only description and owner contact updates"
+                )
         requested_status = changes.pop("status", None)
         if requested_status is not None:
             self._transition(source_system, SourceSystemStatus(requested_status))

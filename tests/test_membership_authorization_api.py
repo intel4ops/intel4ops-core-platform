@@ -87,6 +87,27 @@ def test_platform_admin_claim_manages_memberships_across_organizations(
         assert response.status_code == 201
 
 
+def test_platform_admin_membership_does_not_bypass_tenant_scope(
+    client: TestClient, identity: IdentityState
+) -> None:
+    first = create_organization(client, "membership-platform-first")
+    second = create_organization(client, "membership-platform-second")
+    member_id = uuid4()
+    create_member(
+        client,
+        str(first["id"]),
+        member_id,
+        MembershipRole.PLATFORM_ADMIN,
+    )
+    identity.user_id = member_id
+    identity.is_platform_admin = False
+    assert client.get(f"/api/v1/organizations/{first['id']}").status_code == 403
+    assert client.get(f"/api/v1/organizations/{second['id']}").status_code == 403
+
+    identity.is_platform_admin = True
+    assert client.get(f"/api/v1/organizations/{second['id']}").status_code == 200
+
+
 def test_nonmember_and_nonactive_members_are_forbidden(
     client: TestClient, identity: IdentityState
 ) -> None:

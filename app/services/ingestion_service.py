@@ -18,7 +18,11 @@ from app.models.ingestion import (
     SchemaStatus,
     TriggerType,
 )
-from app.models.source_system import DataClassification, SourceSystem
+from app.models.source_system import (
+    DOWNSTREAM_CREATION_SOURCE_STATUSES,
+    DataClassification,
+    SourceSystem,
+)
 from app.schemas.ingestion import (
     BatchCountsUpdate,
     DatasetCreate,
@@ -131,6 +135,17 @@ def source_for_organization(
     return source
 
 
+def source_for_downstream_creation(
+    db: Session, organization_id: UUID, source_system_id: UUID
+) -> SourceSystem:
+    source = source_for_organization(db, organization_id, source_system_id)
+    if source.status not in DOWNSTREAM_CREATION_SOURCE_STATUSES:
+        raise IngestionConflictError(
+            f"Source system status '{source.status}' does not permit new downstream data"
+        )
+    return source
+
+
 class IngestionBatchService:
     immutable_idempotency_fields = (
         "source_system_id",
@@ -149,7 +164,7 @@ class IngestionBatchService:
         payload: IngestionBatchCreate,
         actor_user_id: UUID,
     ) -> IngestionBatch:
-        source_for_organization(db, organization_id, payload.source_system_id)
+        source_for_downstream_creation(db, organization_id, payload.source_system_id)
         if payload.idempotency_key:
             existing = db.scalar(
                 select(IngestionBatch).where(
@@ -390,7 +405,7 @@ class DatasetService:
         payload: DatasetCreate,
         actor_user_id: UUID,
     ) -> Dataset:
-        source_for_organization(db, organization_id, payload.source_system_id)
+        source_for_downstream_creation(db, organization_id, payload.source_system_id)
         if db.scalar(
             select(Dataset.id).where(
                 Dataset.organization_id == organization_id,
@@ -533,6 +548,7 @@ class DatasetVersionService:
         self.batch_service._ensure_mutable(batch)
         if dataset.source_system_id != batch.source_system_id:
             raise IngestionTenantMismatchError("Dataset and batch source systems must match")
+        source_for_downstream_creation(db, organization_id, dataset.source_system_id)
         if db.scalar(
             select(DatasetVersion.id).where(
                 DatasetVersion.organization_id == organization_id,

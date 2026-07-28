@@ -143,6 +143,22 @@ def test_lifecycle_connection_health_and_terminal_state(db: Session) -> None:
         service.reactivate(db, organization_id, source.id, actor)
     with pytest.raises(InvalidSourceSystemTransitionError):
         service.record_connection_failure(db, organization_id, source.id, actor)
+    with pytest.raises(InvalidSourceSystemTransitionError):
+        service.update(
+            db,
+            organization_id,
+            source.id,
+            SourceSystemUpdate(name="Identity cannot change"),
+            actor,
+        )
+    administrative = service.update(
+        db,
+        organization_id,
+        source.id,
+        SourceSystemUpdate(description="Retained historical source", owner_name="Records"),
+        actor,
+    )
+    assert administrative.description == "Retained historical source"
 
 
 def test_invalid_transition_is_rejected(db: Session) -> None:

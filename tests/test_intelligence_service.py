@@ -38,6 +38,8 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID]:
         SourceSystemCreate(name="ERP", code="erp", system_type="erp", integration_method="api"),
         actor,
     )
+    source.status = "active"
+    db.commit()
     dataset = DatasetService().create(
         db,
         organization.id,
