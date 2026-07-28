@@ -348,6 +348,20 @@ class ProcessingRunCreate(BaseModel):
     def metadata(cls, value: dict[str, object] | None) -> dict[str, object] | None:
         return validate_metadata(value)
 
+    @model_validator(mode="after")
+    def require_data_anchor(self) -> ProcessingRunCreate:
+        infrastructure_only = {
+            ProcessingRunType.INTEGRITY_VERIFICATION,
+            ProcessingRunType.CUSTOM,
+        }
+        if (
+            self.run_type not in infrastructure_only
+            and self.ingestion_batch_id is None
+            and self.dataset_version_id is None
+        ):
+            raise ValueError("Data transformation processing runs require a data anchor")
+        return self
+
 
 class ProcessingRunResult(BaseModel):
     input_count: int = Field(default=0, ge=0)

@@ -385,6 +385,11 @@ class ProcessingRun(Base):
         CheckConstraint(
             "parent_run_id IS NULL OR parent_run_id != id", name="ck_run_not_own_parent"
         ),
+        CheckConstraint(
+            "run_type IN ('integrity_verification', 'custom') "
+            "OR ingestion_batch_id IS NOT NULL OR dataset_version_id IS NOT NULL",
+            name="ck_processing_runs_data_anchor",
+        ),
         Index("ix_processing_runs_organization_id", "organization_id"),
         Index("ix_processing_runs_batch_id", "ingestion_batch_id"),
         Index("ix_processing_runs_dataset_version_id", "dataset_version_id"),
