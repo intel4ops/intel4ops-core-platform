@@ -78,6 +78,12 @@ portable_json = JSON().with_variant(
 
 class Organization(Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_organizations_status",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(200))
@@ -158,6 +164,16 @@ class Finding(Base):
         CheckConstraint(
             "affected_record_count >= 0",
             name="ck_findings_affected_record_count",
+        ),
+        CheckConstraint(
+            "severity IN ('info', 'low', 'medium', 'high', 'critical')",
+            name="ck_findings_severity",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'under_review', 'confirmed', "
+            "'dismissed', 'superseded', 'resolved', 'archived', 'open', "
+            "'accepted', 'in_recovery', 'verified')",
+            name="ck_findings_status",
         ),
         Index("ix_findings_organization_status", "organization_id", "status"),
         Index("ix_findings_organization_type", "organization_id", "finding_type"),
@@ -318,6 +334,12 @@ class FindingEvidence(Base):
 
 class RecoveryAction(Base):
     __tablename__ = "recovery_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('planned')",
+            name="ck_recovery_actions_status",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
