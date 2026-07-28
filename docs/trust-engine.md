@@ -119,6 +119,12 @@ Migration `20260724_0006` adds `trust_assessments`, `trust_rule_results`,
 SQLite uses its portable JSON variant for isolated tests. Alembic owns managed schema
 creation and downgrade.
 
+Assessment creation accepts an optional caller idempotency key scoped to the
+organization. An identical replay returns the existing assessment without
+duplicating rule results, evidence, or readiness decisions. Reuse for a
+different request returns HTTP 409. Callers omitting a key retain prior
+behavior.
+
 ## Limitations
 
 Canonical record persistence is not yet present, so the API accepts a bounded sample
@@ -126,3 +132,7 @@ from the governed caller. The sample is not stored. Initial readiness thresholds
 shared conservative defaults, not industry policies. There is no asynchronous rule
 worker, distribution-shift analysis, statistical significance testing, learned
 quality model, or industry-pack discovery mechanism yet.
+
+The bounded sample is explicitly inline/manual input and is not represented as
+governed stored-data input. The foundation proposal describes the future
+lineage-to-Trust and canonical-mapping design.

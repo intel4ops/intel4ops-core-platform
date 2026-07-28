@@ -6,6 +6,13 @@ from fastapi.testclient import TestClient
 from app.models.entities import MembershipRole
 
 
+def activate_source(client: TestClient, organization_id: str, source_id: str) -> None:
+    base = f"/api/v1/organizations/{organization_id}/source-systems/{source_id}"
+    assert client.patch(base, json={"status": "configured"}).status_code == 200
+    assert client.patch(base, json={"status": "validating"}).status_code == 200
+    assert client.post(f"{base}/connection-success").status_code == 200
+
+
 def api_foundation(client: TestClient, slug: str) -> tuple[str, str, str]:
     organization = client.post(
         "/api/v1/organizations",
@@ -27,6 +34,7 @@ def api_foundation(client: TestClient, slug: str) -> tuple[str, str, str]:
             "integration_method": "api",
         },
     ).json()
+    activate_source(client, organization_id, source["id"])
     batch = client.post(
         f"/api/v1/organizations/{organization_id}/ingestion-batches",
         json={
@@ -122,6 +130,22 @@ def test_all_trust_endpoints_and_bounded_evidence(client: TestClient) -> None:
     )
     assert latest.status_code == 200
     assert latest.json()["id"] == assessment_id
+
+
+def test_trust_api_idempotency_replay_and_conflict(client: TestClient) -> None:
+    organization_id, batch_id, dataset_id = api_foundation(client, "trust-api-idempotency")
+    payload = api_payload(batch_id)
+    payload["idempotency_key"] = "trust-api-001"
+    url = f"/api/v1/organizations/{organization_id}/datasets/{dataset_id}/trust-assessments"
+    created = client.post(url, json=payload)
+    replay = client.post(url, json=payload)
+    assert created.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json()["id"] == created.json()["id"]
+
+    payload["records"] = [{"id": "materially-different"}]
+    conflict = client.post(url, json=payload)
+    assert conflict.status_code == 409
 
 
 def test_trust_api_tenant_isolation_and_role_authorization(

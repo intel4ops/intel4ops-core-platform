@@ -23,6 +23,7 @@ MAX_EVIDENCE_PAGE_SIZE = 200
 
 
 class TrustAssessmentCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
     ingestion_batch_id: UUID | None = None
     industry_pack_code: str | None = Field(
         default=None, min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9._-]*$"

@@ -22,6 +22,7 @@ from app.schemas.trust import (
 from app.services.trust_service import (
     NoApplicableTrustRulesError,
     TrustConfigurationError,
+    TrustConflictError,
     TrustNotFoundError,
     TrustTenantMismatchError,
     trust_assessment_service,
@@ -36,7 +37,7 @@ router = APIRouter(
 
 
 def _translate(exc: Exception) -> NoReturn:
-    if isinstance(exc, TrustConfigurationError):
+    if isinstance(exc, (TrustConfigurationError, TrustConflictError)):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, NoApplicableTrustRulesError):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -60,6 +61,7 @@ def create_trust_assessment(
     except (
         NoApplicableTrustRulesError,
         TrustConfigurationError,
+        TrustConflictError,
         TrustNotFoundError,
         TrustTenantMismatchError,
     ) as exc:
