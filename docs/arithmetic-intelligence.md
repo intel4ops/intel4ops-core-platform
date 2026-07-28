@@ -49,6 +49,20 @@ units or currencies, evaluate dates, or perform fuzzy matching.
 registered in WP-2.07 because they require composite valuation or date arithmetic
 outside the approved primitive boundary.
 
+### Work-package terminology
+
+WP-2.07 owns the bounded arithmetic and deterministic-rule runtime, including the
+early governance-reviewed "OIKB seed library" represented by immutable code-backed
+calculation profiles. That wording did not mean that WP-2.07 introduced the
+persisted governed OIKB.
+
+WP-2.10 later introduced the database-backed OIKB authority, versioned governance
+records, resolution services, and its own provisional shared-core migration seeds.
+Those governed definitions map approved expressions to the existing WP-2.07
+primitives; they do not replace or renumber the WP-2.07 executor. References to the
+WP-2.07 seed library and the WP-2.10 governed OIKB therefore describe successive,
+complementary implementation layers.
+
 ## Progressive Intelligence
 
 An execution resolves a completed Trust assessment for the same organization and

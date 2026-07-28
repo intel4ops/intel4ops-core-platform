@@ -119,6 +119,8 @@ mechanism.
 Organization-scoped endpoints require both an explicit organization UUID and an
 authenticated user authorized for that organization. Supplying an `organization_id`
 alone never grants access. See [Membership and authorization](docs/authorization.md).
+The tenant-root record and its ratified WP-2.01 contract are documented in
+[Organizations Foundation](docs/wp-2-01-organizations-foundation.md).
 The governed registry and its credential boundary are documented in
 [Source systems registry](docs/source-systems.md).
 Ingestion governance, lifecycle, idempotency, and reconciliation are documented in
@@ -138,7 +140,14 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Current head revision: `20260726_0018`.
+Resolve the current head from the migration graph rather than copying a revision
+into operational instructions:
+
+```bash
+python -m alembic heads
+```
+
+The repository requires exactly one Alembic head.
 
 ## Exposure, prioritization, and recovery economics
 

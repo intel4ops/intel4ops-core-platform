@@ -75,12 +75,23 @@ jobs:
       - name: Generate Alembic offline SQL
         run: python -m alembic upgrade head --sql > "${RUNNER_TEMP}/alembic-upgrade.sql"
 
+      - name: Resolve Alembic head
+        id: alembic-head
+        shell: bash
+        run: |
+          mapfile -t heads < <(python -m alembic heads | awk '{print $1}')
+          if [[ "${#heads[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one Alembic head; found ${#heads[@]}"
+            exit 1
+          fi
+          echo "revision=${heads[0]}" >> "${GITHUB_OUTPUT}"
+
       - name: Generate release certification evidence
         run: >-
           python -m app.cli.certify
           --commit "${GITHUB_SHA}"
           --branch "${GITHUB_REF_NAME}"
-          --migration-head "20260727_0020"
+          --migration-head "${{ steps.alembic-head.outputs.revision }}"
           --environment "github-actions"
           --output "build/certification"
 
