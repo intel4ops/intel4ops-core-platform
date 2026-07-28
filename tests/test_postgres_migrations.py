@@ -22,7 +22,11 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.models.orchestration import IntelligenceOrchestrationRequest
-from app.models.trust import AnalyticalReadinessDecision
+from app.models.trust import (
+    AnalyticalReadinessDecision,
+    TrustAssessment,
+    TrustRuleResult,
+)
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import (
@@ -1978,3 +1982,94 @@ def test_concurrent_admin_changes_cannot_remove_all_active_admins(
             )
         )
         assert active_admins == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_trust_idempotency_creates_one_assessment(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    actor = uuid4()
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Concurrent Trust",
+                slug=f"concurrent-trust-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        source = SourceSystemService().create(
+            session,
+            organization.id,
+            SourceSystemCreate(
+                name="Concurrent Trust ERP",
+                code="concurrent-trust-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            actor,
+        )
+        source.status = "active"
+        session.commit()
+        dataset = DatasetService().create(
+            session,
+            organization.id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Concurrent Trust Records",
+                code=f"concurrent-trust-{uuid4().hex[:8]}",
+                domain="operations",
+                dataset_type="transactional",
+            ),
+            actor,
+        )
+        organization_id = organization.id
+        dataset_id = dataset.id
+
+    payload = TrustAssessmentCreate(
+        idempotency_key="concurrent-assessment",
+        records=[{"id": "1"}],
+        rule_configurations={"required_field_completeness": {"required_fields": ["id"]}},
+    )
+    barrier = Barrier(2)
+
+    def execute() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            return (
+                TrustAssessmentService()
+                .create_and_execute(
+                    session,
+                    organization_id,
+                    dataset_id,
+                    payload,
+                )
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assessment_ids = list(executor.map(lambda _: execute(), range(2)))
+    assert assessment_ids[0] == assessment_ids[1]
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TrustAssessment)
+                .where(
+                    TrustAssessment.organization_id == organization_id,
+                    TrustAssessment.idempotency_key == "concurrent-assessment",
+                )
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TrustRuleResult)
+                .where(TrustRuleResult.trust_assessment_id == assessment_ids[0])
+            )
+            == 1
+        )
