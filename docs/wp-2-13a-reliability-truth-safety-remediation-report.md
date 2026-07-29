@@ -142,6 +142,58 @@ across the preceding migration boundary.
 - Reliability remains outside automatic progressive orchestration.
 - No automatic financial, maintenance, or operational action is authorized.
 
+## WP213A-IR-001 — Exact Governed-Definition Idempotency Binding
+
+Independent recertification reopened reliability idempotency after reproducing a collision
+between two distinct governed definitions that shared a permitted content fingerprint. The
+previous execution package bound the immutable version fingerprint, method/version, failure
+definition, exposure basis, and censoring policy, but it did not bind the stable definition
+code, persisted definition ID, semantic version, or persisted version ID.
+
+The execution package now binds both semantic content identity and persisted governed-object
+identity:
+
+- stable definition code and persisted definition ID;
+- semantic version, persisted version ID, and immutable version fingerprint;
+- reliability method code/version;
+- failure-definition code/version, exposure basis, and censoring policy.
+
+The tenant-scoped reproducibility fingerprint continues to bind the organization, Trust and
+readiness decisions, orchestration request, dataset reference and fingerprint, source-lineage
+reference, lifecycle state, asset scope/type, observation window, exposure unit, typed inputs,
+execution package, and engine version. Canonical hashes use SHA-256 over UTF-8 JSON with sorted
+field names and compact separators. Definition and version identity comes only from
+tenant-applicable persisted records resolved by the service.
+
+Before returning a replay, the service verifies the persisted definition ID, version ID, and
+execution-package fingerprint against the current trusted definition/version context. A
+collision or mismatched persisted identity returns deterministic
+`IDEMPOTENCY_CONFLICT` (`409`) and never returns the mismatched execution. The existing
+organization-scoped unique reproducibility constraint is handled safely under concurrent
+identical requests.
+
+Disposable PostgreSQL concurrency coverage verifies:
+
+- two concurrent identical requests resolve to one correctly bound execution;
+- a forced identical system idempotency fingerprint across different definitions yields one
+  success and one deterministic conflict without returning the winner to the loser;
+- concurrent distinct-definition requests create separate executions retaining their exact
+  definition and version identities.
+
+Bounded-remediation validation results:
+
+- Focused Reliability suite: 34 passed.
+- Default non-PostgreSQL suite: 333 passed, 14 PostgreSQL tests deselected.
+- Full PostgreSQL suite: 14 passed on PostgreSQL 17.10.
+- Alembic upgrade to `20260728_0023`, downgrade to `20260728_0022`, and re-upgrade: passed.
+- Alembic drift: none.
+- Offline PostgreSQL SQL generation: passed.
+
+Reliability does not expose a caller-supplied idempotency-key field; its idempotency key is the
+derived tenant-scoped reproducibility fingerprint. Adding a separate caller-key persistence
+contract is outside this bounded remediation and would require separate schema authorization.
+Dataset and lineage references remain caller-asserted pending WP-2.06A.
+
 ## Independent recertification instructions
 
 An independent reviewer must inspect the exact final diff and reproduce:
