@@ -86,6 +86,34 @@ def test_intervals_and_undefined_configuration_have_structured_results() -> None
     assert unsupported.error_code == "UNSUPPORTED"
 
 
+def test_intervals_use_one_step_ahead_errors_without_current_observation_leakage() -> None:
+    result = forecast_execution_service.evaluate(
+        ForecastEvaluateRequest(
+            method_code="HISTORICAL_MEAN",
+            values=[10, 20, 30, 40, 50],
+            horizon=1,
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.values == [30]
+    assert result.intervals == [{"lower_bound": 5.0, "upper_bound": 55.0, "interval_level": 0.8}]
+    assert result.diagnostics["interval_method"] == ("ROLLING_ORIGIN_ABSOLUTE_RESIDUAL_QUANTILE")
+    assert result.diagnostics["interval_method_version"] == "2.0"
+    assert result.diagnostics["interval_calibration_size"] == 3
+    assert result.diagnostics["interval_status"] == "available"
+
+
+def test_intervals_report_insufficient_calibration_without_invented_bounds() -> None:
+    result = forecast_execution_service.evaluate(
+        ForecastEvaluateRequest(method_code="NAIVE", values=[1, 2, 3], horizon=1)
+    )
+
+    assert result.status == "succeeded"
+    assert result.intervals == [{"lower_bound": None, "upper_bound": None, "interval_level": None}]
+    assert result.diagnostics["interval_status"] == "insufficient_data"
+
+
 def test_ensemble_requires_governed_weights() -> None:
     method = default_forecasting_method_registry().get("WEIGHTED_FORECAST_ENSEMBLE")
     result = method.forecast(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import fmean, median
@@ -32,6 +33,7 @@ from app.models.forecasting import (
 )
 from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
 from app.models.trust import (
+    AnalyticalLevel,
     AnalyticalReadinessDecision,
     ReadinessStatus,
     TrustAssessment,
@@ -106,8 +108,8 @@ class PreparedSeries:
 class TimeSeriesPreparationService:
     def prepare(self, payload: ForecastExecutionCreate) -> PreparedSeries:
         ordered = sorted(payload.observations, key=lambda item: item.timestamp)
-        timestamps = [item.timestamp for item in ordered]
-        if len(set(timestamps)) != len(timestamps) or any(
+        original_timestamps = [item.timestamp for item in ordered]
+        if len(set(original_timestamps)) != len(original_timestamps) or any(
             item.status.value == "duplicate" for item in ordered
         ):
             raise ForecastingServiceError("INVALID_TIME_SERIES", "Duplicate periods are blocked")
@@ -116,6 +118,7 @@ class TimeSeriesPreparationService:
             raise ForecastingServiceError("NOT_READY", "Partial periods require approval")
         if payload.partial_period_policy == "EXCLUDE":
             ordered = [item for item in ordered if item.status.value != "partial"]
+        timestamps = [item.timestamp for item in ordered]
         missing = [
             index
             for index, item in enumerate(ordered)
@@ -164,7 +167,7 @@ class TimeSeriesPreparationService:
         if any(not math.isfinite(value) for value in values):
             raise ForecastingServiceError("INVALID_TIME_SERIES", "Non-finite values are blocked")
         return PreparedSeries(
-            timestamps=[item.timestamp for item in ordered][: len(values)],
+            timestamps=timestamps,
             values=values,
             fingerprint=_hash(
                 {
@@ -280,6 +283,9 @@ class ForecastReconciliationService:
 
 class ForecastExecutionService:
     engine_version = "1.0"
+    interval_method_code = "ROLLING_ORIGIN_ABSOLUTE_RESIDUAL_QUANTILE"
+    interval_method_version = "2.0"
+    minimum_interval_calibration_size = 3
 
     def __init__(self, registry: ForecastingMethodRegistry | None = None) -> None:
         self.registry = registry or default_forecasting_method_registry()
@@ -290,14 +296,28 @@ class ForecastExecutionService:
         try:
             method = self.registry.get(payload.method_code, payload.method_version)
             result = method.forecast(payload.values, payload.horizon, payload.parameters)
-            intervals = self._intervals(result.values, result.residuals, 0.8)
+            calibration_residuals = self._one_step_ahead_residuals(
+                method, payload.values, payload.parameters
+            )
+            intervals = self._intervals(result.values, calibration_residuals, 0.8)
+            interval_status = (
+                "available"
+                if len(calibration_residuals) >= self.minimum_interval_calibration_size
+                else "insufficient_data"
+            )
             return ForecastEvaluationRead(
                 status="succeeded",
                 method_code=method.metadata.method_code,
                 method_version=method.metadata.method_version,
                 values=result.values,
                 intervals=intervals,
-                diagnostics=result.diagnostics,
+                diagnostics={
+                    **result.diagnostics,
+                    "interval_method": self.interval_method_code,
+                    "interval_method_version": self.interval_method_version,
+                    "interval_calibration_size": len(calibration_residuals),
+                    "interval_status": interval_status,
+                },
             )
         except ForecastingMethodError as exc:
             return ForecastEvaluationRead(
@@ -322,11 +342,22 @@ class ForecastExecutionService:
         fingerprint = _hash(
             {
                 "organization": organization_id,
+                "trust_assessment": payload.trust_assessment_id,
+                "readiness_assessment": payload.readiness_assessment_id,
+                "orchestration_request": payload.orchestration_request_id,
+                "dataset_reference": payload.dataset_reference,
                 "dataset": payload.dataset_fingerprint,
+                "source_lineage_reference": payload.source_lineage_reference,
                 "prepared": prepared.fingerprint,
                 "definition": version.fingerprint,
+                "target_code": payload.target_code,
+                "source_time_grain": payload.source_time_grain,
+                "forecast_time_grain": payload.forecast_time_grain,
                 "methods": payload.candidate_methods,
                 "horizon": payload.forecast_horizon,
+                "interval_level": payload.interval_level,
+                "backtest_type": payload.backtest_type,
+                "backtest_folds": payload.backtest_folds,
                 "parameters": payload.parameters,
                 "engine": self.engine_version,
             }
@@ -340,7 +371,12 @@ class ForecastExecutionService:
         if existing is not None:
             return existing
         now = datetime.now(UTC)
-        interval = self._period_delta(payload.forecast_time_grain)
+        forecast_start = self._advance_period(
+            prepared.timestamps[-1], payload.forecast_time_grain, 1
+        )
+        forecast_end = self._advance_period(
+            prepared.timestamps[-1], payload.forecast_time_grain, payload.forecast_horizon
+        )
         execution = ForecastExecution(
             organization_id=organization_id,
             orchestration_request_id=payload.orchestration_request_id,
@@ -364,8 +400,8 @@ class ForecastExecutionService:
             source_lineage_reference=payload.source_lineage_reference,
             training_window_start=prepared.timestamps[0],
             training_window_end=prepared.timestamps[-1],
-            forecast_start=prepared.timestamps[-1] + interval,
-            forecast_end=prepared.timestamps[-1] + interval * payload.forecast_horizon,
+            forecast_start=forecast_start,
+            forecast_end=forecast_end,
             forecast_horizon=payload.forecast_horizon,
             engine_version=self.engine_version,
             correlation_id=payload.correlation_id,
@@ -373,8 +409,9 @@ class ForecastExecutionService:
             explanation={},
             warnings=prepared.warnings,
             limitations=[
-                "Forecast intervals are empirical residual ranges, not guaranteed outcomes.",
-                "Calendar-aware custom periods and deep hierarchy reconciliation are deferred.",
+                "Forecast intervals are calibrated from rolling-origin one-step-ahead errors "
+                "and are not guaranteed outcomes.",
+                "Custom fiscal calendars and deep hierarchy reconciliation are deferred.",
             ],
         )
         db.add(execution)
@@ -407,9 +444,7 @@ class ForecastExecutionService:
             candidate_rows.append(row)
             if not eligible:
                 continue
-            actuals, forecasts = self._backtest(
-                db, execution, row, method, prepared, payload, interval
-            )
+            actuals, forecasts = self._backtest(db, execution, row, method, prepared, payload)
             metric_values = _metrics(
                 actuals,
                 forecasts,
@@ -427,7 +462,10 @@ class ForecastExecutionService:
             row.secondary_metrics = cast(dict[str, object], metric_values)
             row.bias_value = metric_values["BIAS_PERCENTAGE"]
             final = method.forecast(prepared.values, payload.forecast_horizon, payload.parameters)
-            results[code] = (final.values, final.residuals, metric_values)
+            calibration_residuals = [
+                forecast - actual for actual, forecast in zip(actuals, forecasts, strict=True)
+            ]
+            results[code] = (final.values, calibration_residuals, metric_values)
             for metric_code, value in metric_values.items():
                 db.add(
                     ForecastMetric(
@@ -471,15 +509,23 @@ class ForecastExecutionService:
             )
         forecasts, residuals, selected_metrics = results[selected.method_code]
         intervals = self._intervals(forecasts, residuals, payload.interval_level)
+        interval_status = (
+            "available"
+            if len(residuals) >= self.minimum_interval_calibration_size
+            else "insufficient_data"
+        )
         for step, (forecast, bounds) in enumerate(zip(forecasts, intervals, strict=True), 1):
-            start = prepared.timestamps[-1] + interval * step
+            start = self._advance_period(prepared.timestamps[-1], payload.forecast_time_grain, step)
+            end = self._advance_period(
+                prepared.timestamps[-1], payload.forecast_time_grain, step + 1
+            )
             db.add(
                 ForecastPoint(
                     organization_id=organization_id,
                     forecast_execution_id=execution.id,
                     scenario_code="BASE",
                     forecast_period_start=start,
-                    forecast_period_end=start + interval,
+                    forecast_period_end=end,
                     horizon_step=step,
                     point_forecast=forecast,
                     lower_bound=bounds["lower_bound"],
@@ -514,8 +560,11 @@ class ForecastExecutionService:
             "primary_error_metric": payload.primary_metric,
             "primary_error_value": selected_metrics.get(payload.primary_metric),
             "bias": selected_metrics.get("BIAS_PERCENTAGE"),
-            "interval_method": "empirical_residual",
+            "interval_method": self.interval_method_code,
+            "interval_method_version": self.interval_method_version,
             "interval_level": payload.interval_level,
+            "interval_calibration_size": len(residuals),
+            "interval_status": interval_status,
             "missing_period_policy": payload.missing_period_policy,
             "partial_period_policy": payload.partial_period_policy,
             "outlier_policy": payload.outlier_policy,
@@ -719,11 +768,11 @@ class ForecastExecutionService:
         db.refresh(row)
         return row
 
-    @staticmethod
+    @classmethod
     def _intervals(
-        values: list[float], residuals: list[float], level: float
+        cls, values: list[float], residuals: list[float], level: float
     ) -> list[dict[str, float | None]]:
-        if len(residuals) < 2:
+        if len(residuals) < cls.minimum_interval_calibration_size:
             return [
                 {"lower_bound": None, "upper_bound": None, "interval_level": None} for _ in values
             ]
@@ -735,15 +784,35 @@ class ForecastExecutionService:
         ]
 
     @staticmethod
-    def _period_delta(grain: str) -> timedelta:
-        return {
+    def _advance_period(value: datetime, grain: str, steps: int) -> datetime:
+        if steps < 0:
+            raise ForecastingServiceError("INVALID_TIME_GRAIN", "Period steps cannot be negative")
+        fixed = {
             "HOURLY": timedelta(hours=1),
             "DAILY": timedelta(days=1),
             "WEEKLY": timedelta(days=7),
-            "MONTHLY": timedelta(days=30),
-            "QUARTERLY": timedelta(days=91),
-            "ANNUAL": timedelta(days=365),
-        }.get(grain, timedelta(days=1))
+        }
+        if grain in fixed:
+            return value + fixed[grain] * steps
+        months_per_step = {"MONTHLY": 1, "QUARTERLY": 3, "ANNUAL": 12}.get(grain)
+        if months_per_step is None:
+            raise ForecastingServiceError(
+                "INVALID_TIME_GRAIN", f"Unsupported forecast time grain: {grain}"
+            )
+        month_index = value.year * 12 + value.month - 1 + months_per_step * steps
+        year, zero_based_month = divmod(month_index, 12)
+        month = zero_based_month + 1
+        day = min(value.day, monthrange(year, month)[1])
+        return value.replace(year=year, month=month, day=day)
+
+    def _one_step_ahead_residuals(
+        self, method: Any, values: list[float], parameters: dict[str, object]
+    ) -> list[float]:
+        residuals: list[float] = []
+        for split in range(method.metadata.minimum_history, len(values)):
+            result = method.forecast(values[:split], 1, parameters)
+            residuals.append(result.values[0] - values[split])
+        return residuals
 
     def _backtest(
         self,
@@ -753,7 +822,6 @@ class ForecastExecutionService:
         method: Any,
         series: PreparedSeries,
         payload: ForecastExecutionCreate,
-        interval: timedelta,
     ) -> tuple[list[float], list[float]]:
         minimum = method.metadata.minimum_history
         folds = min(payload.backtest_folds, len(series.values) - minimum)
@@ -826,6 +894,7 @@ class ForecastExecutionService:
                 AnalyticalReadinessDecision.id == payload.readiness_assessment_id,
                 AnalyticalReadinessDecision.organization_id == organization_id,
                 AnalyticalReadinessDecision.trust_assessment_id == payload.trust_assessment_id,
+                AnalyticalReadinessDecision.analytical_level == AnalyticalLevel.FORECASTING.value,
             )
         )
         if trust is None or trust.status not in {

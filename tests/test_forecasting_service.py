@@ -11,12 +11,14 @@ from app.schemas.forecasting import (
     ForecastActualCreate,
     ForecastExecutionCreate,
     ForecastObservationInput,
+    ForecastPeriodStatus,
     ForecastScenarioCreate,
 )
 from app.schemas.ingestion import DatasetCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.services.forecasting_service import (
     ForecastingServiceError,
+    TimeSeriesPreparationService,
     forecast_execution_service,
 )
 from app.services.ingestion_service import DatasetService
@@ -217,3 +219,68 @@ def test_missing_duplicate_partial_and_history_readiness_are_explicit(db: Sessio
     request.observations[2].timestamp = request.observations[1].timestamp
     with pytest.raises(ForecastingServiceError, match="Duplicate"):
         forecast_execution_service.execute(db, organization_id, request, actor)
+
+
+def test_preparation_preserves_timestamps_when_interior_rows_are_excluded() -> None:
+    trust_id, readiness_id = uuid4(), uuid4()
+    request = payload(trust_id, readiness_id)
+    expected_timestamps = [item.timestamp for item in request.observations]
+    request.observations[2].status = ForecastPeriodStatus.PARTIAL
+    request.observations[6].confirmed_data_error = True
+    request.partial_period_policy = "EXCLUDE"
+    request.outlier_policy = "EXCLUDE_CONFIRMED_ERROR"
+
+    prepared = TimeSeriesPreparationService().prepare(request)
+
+    assert prepared.timestamps == [
+        timestamp for index, timestamp in enumerate(expected_timestamps) if index not in {2, 6}
+    ]
+    assert prepared.values == [
+        float(100 + index * 5) for index in range(len(request.observations)) if index not in {2, 6}
+    ]
+    assert len(prepared.timestamps) == len(prepared.values)
+
+
+def test_forecasting_rejects_readiness_for_another_analytical_level(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = foundation(db, "forecast-level")
+    readiness = db.get(AnalyticalReadinessDecision, readiness_id)
+    assert readiness is not None
+    readiness.analytical_level = "statistical"
+    db.commit()
+
+    with pytest.raises(ForecastingServiceError, match="readiness"):
+        forecast_execution_service.execute(
+            db,
+            organization_id,
+            payload(trust_id, readiness_id, "1" * 64),
+            actor,
+        )
+
+
+@pytest.mark.parametrize(
+    ("start", "grain", "steps", "expected"),
+    [
+        (
+            datetime(2024, 1, 31, tzinfo=UTC),
+            "MONTHLY",
+            1,
+            datetime(2024, 2, 29, tzinfo=UTC),
+        ),
+        (
+            datetime(2025, 11, 30, tzinfo=UTC),
+            "QUARTERLY",
+            1,
+            datetime(2026, 2, 28, tzinfo=UTC),
+        ),
+        (
+            datetime(2024, 2, 29, tzinfo=UTC),
+            "ANNUAL",
+            1,
+            datetime(2025, 2, 28, tzinfo=UTC),
+        ),
+    ],
+)
+def test_calendar_period_advancement(
+    start: datetime, grain: str, steps: int, expected: datetime
+) -> None:
+    assert forecast_execution_service._advance_period(start, grain, steps) == expected
