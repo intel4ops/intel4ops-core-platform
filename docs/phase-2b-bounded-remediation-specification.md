@@ -571,4 +571,3 @@ The owner must decide:
 Approval of this specification authorizes preparation of package-specific execution prompts.
 It does not authorize implementation unless the approval explicitly names the package and
 states that coding may begin.
-
