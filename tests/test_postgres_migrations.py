@@ -27,7 +27,12 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.models.orchestration import IntelligenceOrchestrationRequest
-from app.models.reliability import ReliabilityExecution
+from app.models.reliability import (
+    ReliabilityExecution,
+    ReliabilityExecutionStep,
+    ReliabilityMetric,
+    ReliabilityModelResult,
+)
 from app.models.trust import (
     AnalyticalReadinessDecision,
     TrustAssessment,
@@ -2234,6 +2239,30 @@ def test_concurrent_reliability_definition_identity_idempotency(
         )
         assert len(identical_rows) == 1
         primary_definition_id = identical_rows[0].oikb_definition_id
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityMetric)
+                .where(ReliabilityMetric.reliability_execution_id == identical_rows[0].id)
+            )
+            or 0
+        ) > 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityModelResult)
+                .where(ReliabilityModelResult.reliability_execution_id == identical_rows[0].id)
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityExecutionStep)
+                .where(ReliabilityExecutionStep.reliability_execution_id == identical_rows[0].id)
+            )
+            == 1
+        )
         assert {result[1] for result in distinct_results} == {
             primary_definition_id,
             second_definition_id,
