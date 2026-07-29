@@ -114,6 +114,32 @@ def test_intervals_report_insufficient_calibration_without_invented_bounds() -> 
     assert result.diagnostics["interval_status"] == "insufficient_data"
 
 
+def test_seasonal_calibration_honors_two_complete_cycles() -> None:
+    exact_boundary = forecast_execution_service.evaluate(
+        ForecastEvaluateRequest(
+            method_code="SEASONAL_NAIVE",
+            values=[float(value) for value in range(24)],
+            horizon=1,
+            parameters={"seasonal_period": 12},
+        )
+    )
+    longer_series = forecast_execution_service.evaluate(
+        ForecastEvaluateRequest(
+            method_code="SEASONAL_NAIVE",
+            values=[float(value) for value in range(27)],
+            horizon=1,
+            parameters={"seasonal_period": 12},
+        )
+    )
+
+    assert exact_boundary.status == "succeeded"
+    assert exact_boundary.diagnostics["interval_calibration_size"] == 0
+    assert exact_boundary.diagnostics["interval_status"] == "insufficient_data"
+    assert longer_series.status == "succeeded"
+    assert longer_series.diagnostics["interval_calibration_size"] == 3
+    assert longer_series.diagnostics["interval_status"] == "available"
+
+
 def test_ensemble_requires_governed_weights() -> None:
     method = default_forecasting_method_registry().get("WEIGHTED_FORECAST_ENSEMBLE")
     result = method.forecast(

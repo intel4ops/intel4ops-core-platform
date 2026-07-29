@@ -173,6 +173,17 @@ class TimeSeriesPreparationService:
                 {
                     "periods": [item.isoformat() for item in timestamps],
                     "values": values,
+                    "observation_context": [
+                        {
+                            "timestamp": item.timestamp,
+                            "status": item.status,
+                            "confirmed_data_error": item.confirmed_data_error,
+                            "unit": item.unit,
+                            "currency_code": item.currency_code,
+                            "entity_reference": item.entity_reference,
+                        }
+                        for item in ordered
+                    ],
                     "policies": [
                         payload.missing_period_policy,
                         payload.partial_period_policy,
@@ -530,7 +541,7 @@ class ForecastExecutionService:
                     point_forecast=forecast,
                     lower_bound=bounds["lower_bound"],
                     upper_bound=bounds["upper_bound"],
-                    interval_level=payload.interval_level,
+                    interval_level=bounds["interval_level"],
                     output_unit=execution.target_unit,
                     currency_code=execution.currency_code,
                     is_partial_period=False,
@@ -809,10 +820,26 @@ class ForecastExecutionService:
         self, method: Any, values: list[float], parameters: dict[str, object]
     ) -> list[float]:
         residuals: list[float] = []
-        for split in range(method.metadata.minimum_history, len(values)):
+        minimum = self._effective_minimum_history(method, parameters)
+        for split in range(minimum, len(values)):
             result = method.forecast(values[:split], 1, parameters)
             residuals.append(result.values[0] - values[split])
         return residuals
+
+    @staticmethod
+    def _effective_minimum_history(method: Any, parameters: dict[str, object]) -> int:
+        minimum = int(method.metadata.minimum_history)
+        if not method.metadata.supports_seasonality:
+            return minimum
+        season_value = parameters.get("seasonal_period", 12)
+        if not isinstance(season_value, (int, float, str)):
+            raise ForecastingServiceError("INVALID_SEASONAL_PERIOD", "Seasonal period is invalid")
+        season = int(season_value)
+        if season < 1:
+            raise ForecastingServiceError(
+                "INVALID_SEASONAL_PERIOD", "Seasonal period must be positive"
+            )
+        return max(minimum, season * 2)
 
     def _backtest(
         self,
@@ -823,7 +850,7 @@ class ForecastExecutionService:
         series: PreparedSeries,
         payload: ForecastExecutionCreate,
     ) -> tuple[list[float], list[float]]:
-        minimum = method.metadata.minimum_history
+        minimum = self._effective_minimum_history(method, payload.parameters)
         folds = min(payload.backtest_folds, len(series.values) - minimum)
         if folds < 1:
             raise ForecastingServiceError("BACKTEST_FAILED", "Insufficient backtest folds")
