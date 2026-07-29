@@ -116,9 +116,22 @@ Local results:
 - Offline PostgreSQL SQL generation: passed.
 - Git diff check: passed.
 
-`TEST_POSTGRES_URL` was not configured in the execution process. Disposable PostgreSQL
-behavior, migration lifecycle, and drift remain mandatory recertification gates and have not
-been claimed as passed.
+Disposable PostgreSQL validation completed against PostgreSQL 17.10 using the local database
+`intel4ops_wp213a_validation` with `CONFIRM_DISPOSABLE_POSTGRES=1`. No credentials were
+printed or committed.
+
+- Full PostgreSQL suite: 13 passed.
+- WP-2.13A reliability behavior: passed.
+- Authorization, tenant-isolation, orchestration idempotency, and Trust concurrency coverage:
+  passed within the PostgreSQL suite.
+- Upgrade to `20260728_0023`: passed.
+- Downgrade to `20260728_0022`: passed.
+- Re-upgrade to `20260728_0023`: passed.
+- Alembic drift: none (`No new upgrade operations detected`).
+- Offline PostgreSQL SQL generation: passed.
+
+WP-2.13A introduced no migration; the downgrade validates the current repository lifecycle
+across the preceding migration boundary.
 
 ## Remaining limitations
 
