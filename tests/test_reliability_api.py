@@ -1,7 +1,18 @@
+from uuid import UUID
+
+import pytest
 from conftest import IdentityState
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from test_reliability_service import reliability_foundation, reliability_payload
+from test_reliability_service import (
+    add_reliability_definition,
+    reliability_foundation,
+    reliability_payload,
+)
+
+from app.models.reliability import ReliabilityExecution
+from app.services.reliability_service import reliability_execution_service
 
 
 def test_reliability_api_exposes_truthful_metadata_and_human_review_evidence(
@@ -81,3 +92,44 @@ def test_reliability_api_requires_organization_authorization(
     response = client.get(f"/api/v1/organizations/{organization_id}/reliability/methods")
 
     assert response.status_code == 403
+
+
+def test_reliability_api_returns_conflict_for_mismatched_persisted_identity(
+    client: TestClient,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-api-identity-conflict"
+    )
+    request = reliability_payload(trust_id, readiness_id, dataset_fingerprint="b" * 64)
+    created = client.post(
+        f"/api/v1/organizations/{organization_id}/reliability/executions",
+        json=request.model_dump(mode="json"),
+    )
+    assert created.status_code == 201
+    existing = db.scalar(
+        select(ReliabilityExecution).where(ReliabilityExecution.id == UUID(created.json()["id"]))
+    )
+    assert existing is not None
+    definition, _ = add_reliability_definition(
+        db,
+        organization_id,
+        actor,
+        stable_code="SHARED.RELIABILITY.API_CONFLICT",
+        fingerprint="r" * 64,
+    )
+    changed = request.model_copy(update={"definition_code": definition.stable_code})
+    monkeypatch.setattr(
+        reliability_execution_service,
+        "_reproducibility_fingerprint",
+        lambda *_args, **_kwargs: existing.reproducibility_fingerprint,
+    )
+
+    response = client.post(
+        f"/api/v1/organizations/{organization_id}/reliability/executions",
+        json=changed.model_dump(mode="json"),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"
