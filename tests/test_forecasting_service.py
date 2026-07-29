@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy.orm import Session
@@ -11,12 +12,14 @@ from app.schemas.forecasting import (
     ForecastActualCreate,
     ForecastExecutionCreate,
     ForecastObservationInput,
+    ForecastPeriodStatus,
     ForecastScenarioCreate,
 )
 from app.schemas.ingestion import DatasetCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.services.forecasting_service import (
     ForecastingServiceError,
+    TimeSeriesPreparationService,
     forecast_execution_service,
 )
 from app.services.ingestion_service import DatasetService
@@ -217,3 +220,156 @@ def test_missing_duplicate_partial_and_history_readiness_are_explicit(db: Sessio
     request.observations[2].timestamp = request.observations[1].timestamp
     with pytest.raises(ForecastingServiceError, match="Duplicate"):
         forecast_execution_service.execute(db, organization_id, request, actor)
+
+
+def test_preparation_preserves_timestamps_when_interior_rows_are_excluded() -> None:
+    trust_id, readiness_id = uuid4(), uuid4()
+    request = payload(trust_id, readiness_id)
+    expected_timestamps = [item.timestamp for item in request.observations]
+    request.observations[2].status = ForecastPeriodStatus.PARTIAL
+    request.observations[6].confirmed_data_error = True
+    request.partial_period_policy = "EXCLUDE"
+    request.outlier_policy = "EXCLUDE_CONFIRMED_ERROR"
+
+    prepared = TimeSeriesPreparationService().prepare(request)
+
+    assert prepared.timestamps == [
+        timestamp for index, timestamp in enumerate(expected_timestamps) if index not in {2, 6}
+    ]
+    assert prepared.values == [
+        float(100 + index * 5) for index in range(len(request.observations)) if index not in {2, 6}
+    ]
+    assert len(prepared.timestamps) == len(prepared.values)
+
+
+def test_forecasting_rejects_readiness_for_another_analytical_level(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = foundation(db, "forecast-level")
+    readiness = db.get(AnalyticalReadinessDecision, readiness_id)
+    assert readiness is not None
+    readiness.analytical_level = "statistical"
+    db.commit()
+
+    with pytest.raises(ForecastingServiceError, match="readiness"):
+        forecast_execution_service.execute(
+            db,
+            organization_id,
+            payload(trust_id, readiness_id, "1" * 64),
+            actor,
+        )
+
+
+@pytest.mark.parametrize(
+    ("start", "grain", "steps", "expected"),
+    [
+        (
+            datetime(2024, 1, 31, tzinfo=UTC),
+            "MONTHLY",
+            1,
+            datetime(2024, 2, 29, tzinfo=UTC),
+        ),
+        (
+            datetime(2025, 11, 30, tzinfo=UTC),
+            "QUARTERLY",
+            1,
+            datetime(2026, 2, 28, tzinfo=UTC),
+        ),
+        (
+            datetime(2024, 2, 29, tzinfo=UTC),
+            "ANNUAL",
+            1,
+            datetime(2025, 2, 28, tzinfo=UTC),
+        ),
+    ],
+)
+def test_calendar_period_advancement(
+    start: datetime, grain: str, steps: int, expected: datetime
+) -> None:
+    assert forecast_execution_service._advance_period(start, grain, steps) == expected
+
+
+def test_calendar_period_advancement_preserves_local_time_across_dst() -> None:
+    chicago = ZoneInfo("America/Chicago")
+    start = datetime(2026, 2, 15, 8, 30, tzinfo=chicago)
+
+    advanced = forecast_execution_service._advance_period(start, "MONTHLY", 1)
+
+    assert advanced == datetime(2026, 3, 15, 8, 30, tzinfo=chicago)
+    assert advanced.utcoffset() != start.utcoffset()
+
+
+def test_prepared_fingerprint_covers_measurement_and_status_context() -> None:
+    trust_id, readiness_id = uuid4(), uuid4()
+    baseline = payload(trust_id, readiness_id)
+    exact_retry = payload(trust_id, readiness_id)
+    changed_unit = payload(trust_id, readiness_id)
+    changed_currency = payload(trust_id, readiness_id)
+    changed_status = payload(trust_id, readiness_id)
+    for item in changed_unit.observations:
+        item.unit = "hours"
+    for item in changed_currency.observations:
+        item.currency_code = "EUR"
+    changed_status.observations[4].status = ForecastPeriodStatus.LATE
+    preparation = TimeSeriesPreparationService()
+
+    baseline_fingerprint = preparation.prepare(baseline).fingerprint
+
+    assert preparation.prepare(exact_retry).fingerprint == baseline_fingerprint
+    assert preparation.prepare(changed_unit).fingerprint != baseline_fingerprint
+    assert preparation.prepare(changed_currency).fingerprint != baseline_fingerprint
+    assert preparation.prepare(changed_status).fingerprint != baseline_fingerprint
+
+
+def test_execution_replay_requires_exact_measurement_and_status_context(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = foundation(db, "forecast-fingerprint")
+    baseline = payload(trust_id, readiness_id, "3" * 64)
+    first = forecast_execution_service.execute(db, organization_id, baseline, actor)
+    exact_retry = forecast_execution_service.execute(
+        db, organization_id, payload(trust_id, readiness_id, "3" * 64), actor
+    )
+
+    changed_requests = [
+        payload(trust_id, readiness_id, "3" * 64),
+        payload(trust_id, readiness_id, "3" * 64),
+        payload(trust_id, readiness_id, "3" * 64),
+    ]
+    for item in changed_requests[0].observations:
+        item.unit = "hours"
+    for item in changed_requests[1].observations:
+        item.currency_code = "EUR"
+    changed_requests[2].observations[4].status = ForecastPeriodStatus.LATE
+    changed = [
+        forecast_execution_service.execute(db, organization_id, request, actor)
+        for request in changed_requests
+    ]
+
+    assert exact_retry.id == first.id
+    assert all(item.id != first.id for item in changed)
+    assert len({item.id for item in changed}) == 3
+
+
+def test_persisted_forecast_marks_uncalibrated_intervals_as_insufficient(
+    db: Session,
+) -> None:
+    organization_id, trust_id, readiness_id, actor = foundation(db, "forecast-calibration")
+    request = payload(trust_id, readiness_id, "2" * 64)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    request.candidate_methods = ["SEASONAL_NAIVE"]
+    request.parameters = {"seasonal_period": 12}
+    request.backtest_folds = 1
+    request.observations = [
+        ForecastObservationInput(
+            timestamp=forecast_execution_service._advance_period(start, "MONTHLY", index),
+            value=100 + index,
+            unit="count",
+        )
+        for index in range(25)
+    ]
+
+    execution = forecast_execution_service.execute(db, organization_id, request, actor)
+
+    assert execution.status == "succeeded"
+    assert execution.explanation["interval_status"] == "insufficient_data"
+    assert execution.explanation["interval_calibration_size"] == 1
+    assert all(point.lower_bound is None for point in execution.points)
+    assert all(point.upper_bound is None for point in execution.points)
+    assert all(point.interval_level is None for point in execution.points)
