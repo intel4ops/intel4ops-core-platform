@@ -30,7 +30,7 @@ from app.models.raw_lineage import (
     RawStorageObject,
     RetentionClass,
 )
-from app.models.source_system import SourceSystem
+from app.models.source_system import DOWNSTREAM_CREATION_SOURCE_STATUSES, SourceSystem
 from app.schemas.raw_lineage import (
     MAX_LINEAGE_DEPTH,
     MAX_LINEAGE_NODES,
@@ -411,6 +411,10 @@ class RawStorageObjectService:
                 if all(getattr(existing, key) == getattr(payload, key) for key in identity):
                     return existing
                 raise RawLineageConflictError("Idempotency key conflicts with an existing object")
+        if source.status not in DOWNSTREAM_CREATION_SOURCE_STATUSES:
+            raise RawLineageConflictError(
+                f"Source system status '{source.status}' does not permit new downstream data"
+            )
         if db.scalar(
             select(RawStorageObject.id).where(
                 RawStorageObject.organization_id == organization_id,
@@ -915,8 +919,13 @@ class ProcessingRunService:
         ProcessingRunStatus.CANCELLED: set(),
     }
 
-    def __init__(self, events: LineageEventService | None = None) -> None:
+    def __init__(
+        self,
+        events: LineageEventService | None = None,
+        lineage: LineageService | None = None,
+    ) -> None:
         self.events = events or LineageEventService()
+        self.lineage = lineage or LineageService(self.events)
 
     def create(
         self,
@@ -925,21 +934,18 @@ class ProcessingRunService:
         payload: ProcessingRunCreate,
         actor: UUID,
     ) -> ProcessingRun:
-        for model, entity_id, label in (
-            (IngestionBatch, payload.ingestion_batch_id, "Ingestion batch"),
-            (DatasetVersion, payload.dataset_version_id, "Dataset version"),
-            (ProcessingRun, payload.parent_run_id, "Parent run"),
-        ):
-            if (
-                entity_id is not None
-                and db.scalar(
-                    select(model.id).where(
-                        model.id == entity_id, model.organization_id == organization_id
-                    )
+        batch = self._tenant_entity(
+            db, IngestionBatch, organization_id, payload.ingestion_batch_id, "Ingestion batch"
+        )
+        version = self._tenant_entity(
+            db, DatasetVersion, organization_id, payload.dataset_version_id, "Dataset version"
+        )
+        self._tenant_entity(db, ProcessingRun, organization_id, payload.parent_run_id, "Parent run")
+        if batch is not None and version is not None:
+            if version.ingestion_batch_id != batch.id:
+                raise RawLineageConflictError(
+                    "Dataset version and ingestion batch anchors must describe the same ingestion"
                 )
-                is None
-            ):
-                raise RawLineageTenantMismatchError(f"{label} not found in organization")
         run = ProcessingRun(
             organization_id=organization_id,
             created_by_user_id=actor,
@@ -947,11 +953,34 @@ class ProcessingRunService:
         )
         db.add(run)
         db.flush()
-        LineageService(self.events).register_node(
+        run_node = self.lineage.register_node(
             db,
             organization_id,
             LineageNodeCreate(node_type=LineageNodeType.PROCESSING_RUN, entity_id=run.id),
         )
+        for anchor, node_type in (
+            (batch, LineageNodeType.INGESTION_BATCH),
+            (version, LineageNodeType.DATASET_VERSION),
+        ):
+            if anchor is None:
+                continue
+            anchor_node = self.lineage.register_node(
+                db,
+                organization_id,
+                LineageNodeCreate(node_type=node_type, entity_id=anchor.id),
+            )
+            self.lineage.create_edge(
+                db,
+                organization_id,
+                LineageEdgeCreate(
+                    from_node_id=anchor_node.id,
+                    to_node_id=run_node.id,
+                    relationship_type=LineageRelationshipType.CONSUMED_BY,
+                    processing_run_id=run.id,
+                ),
+                actor,
+                commit=False,
+            )
         self.events.record(
             db,
             organization_id,
@@ -964,6 +993,26 @@ class ProcessingRunService:
         db.commit()
         db.refresh(run)
         return run
+
+    @staticmethod
+    def _tenant_entity(
+        db: Session,
+        model: Any,
+        organization_id: UUID,
+        entity_id: UUID | None,
+        label: str,
+    ) -> Any | None:
+        if entity_id is None:
+            return None
+        entity = db.scalar(
+            select(model).where(
+                model.id == entity_id,
+                model.organization_id == organization_id,
+            )
+        )
+        if entity is None:
+            raise RawLineageTenantMismatchError(f"{label} not found in organization")
+        return entity
 
     def get(self, db: Session, organization_id: UUID, run_id: UUID) -> ProcessingRun:
         run = db.scalar(

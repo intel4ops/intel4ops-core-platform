@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.engines.trust_engine import (
@@ -41,6 +44,10 @@ class TrustConfigurationError(ValueError):
     pass
 
 
+class TrustConflictError(ValueError):
+    pass
+
+
 class NoApplicableTrustRulesError(ValueError):
     pass
 
@@ -70,11 +77,18 @@ class TrustAssessmentService:
                 )
             )
             if batch is None:
-                raise TrustTenantMismatchError("Ingestion batch not found in organization")
+                raise TrustTenantMismatchError("Resource not found in organization")
             if batch.source_system_id != dataset.source_system_id:
                 raise TrustConfigurationError(
                     "Dataset and ingestion batch source systems do not match"
                 )
+        fingerprint = self._request_fingerprint(dataset_id, payload)
+        if payload.idempotency_key is not None:
+            existing = self._idempotent_assessment(
+                db, organization_id, payload.idempotency_key, fingerprint
+            )
+            if existing is not None:
+                return existing
         applicable = self.registry.applicable(dataset.dataset_type, payload.rule_configurations)
         if not applicable:
             raise NoApplicableTrustRulesError("No applicable trust rules")
@@ -83,11 +97,24 @@ class TrustAssessmentService:
             dataset_id=dataset.id,
             ingestion_batch_id=payload.ingestion_batch_id,
             industry_pack_code=payload.industry_pack_code,
+            idempotency_key=payload.idempotency_key,
+            request_fingerprint=(fingerprint if payload.idempotency_key is not None else None),
             status=TrustAssessmentStatus.RUNNING.value,
             assessed_row_count=len(payload.records),
         )
         db.add(assessment)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            if payload.idempotency_key is None:
+                raise
+            existing = self._idempotent_assessment(
+                db, organization_id, payload.idempotency_key, fingerprint
+            )
+            if existing is not None:
+                return existing
+            raise TrustConflictError("Idempotency key conflicts with an existing request") from exc
         evaluation_time = payload.evaluation_time or datetime.now(UTC)
         executed: list[tuple[TrustRule, TrustRuleOutcome]] = []
         execution_errored = False
@@ -239,8 +266,36 @@ class TrustAssessmentService:
             )
         )
         if dataset is None:
-            raise TrustNotFoundError("Dataset not found")
+            raise TrustNotFoundError("Resource not found in organization")
         return dataset
+
+    @staticmethod
+    def _request_fingerprint(dataset_id: UUID, payload: TrustAssessmentCreate) -> str:
+        request = {
+            "dataset_id": str(dataset_id),
+            **payload.model_dump(mode="json", exclude={"idempotency_key"}),
+        }
+        canonical = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _idempotent_assessment(
+        db: Session,
+        organization_id: UUID,
+        idempotency_key: str,
+        fingerprint: str,
+    ) -> TrustAssessment | None:
+        existing = db.scalar(
+            select(TrustAssessment).where(
+                TrustAssessment.organization_id == organization_id,
+                TrustAssessment.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is None:
+            return None
+        if existing.request_fingerprint != fingerprint:
+            raise TrustConflictError("Idempotency key conflicts with an existing request")
+        return existing
 
     def get(self, db: Session, organization_id: UUID, assessment_id: UUID) -> TrustAssessment:
         assessment = db.scalar(

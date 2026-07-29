@@ -7,6 +7,13 @@ from fastapi.testclient import TestClient
 from app.models.entities import MembershipRole
 
 
+def activate_source(client: TestClient, organization_id: str, source_id: str) -> None:
+    base = f"/api/v1/organizations/{organization_id}/source-systems/{source_id}"
+    assert client.patch(base, json={"status": "configured"}).status_code == 200
+    assert client.patch(base, json={"status": "validating"}).status_code == 200
+    assert client.post(f"{base}/connection-success").status_code == 200
+
+
 def setup_context(client: TestClient, slug: str) -> tuple[str, str, str, str]:
     organization = client.post(
         "/api/v1/organizations",
@@ -28,6 +35,7 @@ def setup_context(client: TestClient, slug: str) -> tuple[str, str, str, str]:
             "integration_method": "file_upload",
         },
     ).json()
+    activate_source(client, organization_id, source["id"])
     batch = client.post(
         f"/api/v1/organizations/{organization_id}/ingestion-batches",
         json={

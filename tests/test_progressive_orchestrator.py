@@ -75,6 +75,8 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID]:
         ),
         actor,
     )
+    source.status = "active"
+    db.commit()
     dataset = DatasetService().create(
         db,
         organization.id,

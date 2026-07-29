@@ -4,6 +4,13 @@ from conftest import IdentityState
 from fastapi.testclient import TestClient
 
 
+def activate_source(client: TestClient, organization_id: str, source_id: str) -> None:
+    base = f"/api/v1/organizations/{organization_id}/source-systems/{source_id}"
+    assert client.patch(base, json={"status": "configured"}).status_code == 200
+    assert client.patch(base, json={"status": "validating"}).status_code == 200
+    assert client.post(f"{base}/connection-success").status_code == 200
+
+
 def api_foundation(client: TestClient, slug: str) -> tuple[str, str, str]:
     organization = client.post(
         "/api/v1/organizations",
@@ -27,6 +34,7 @@ def api_foundation(client: TestClient, slug: str) -> tuple[str, str, str]:
         },
     )
     assert source.status_code == 201
+    activate_source(client, organization_id, source.json()["id"])
     dataset = client.post(
         f"/api/v1/organizations/{organization_id}/datasets",
         json={

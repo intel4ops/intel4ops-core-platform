@@ -20,6 +20,13 @@ from app.services.finding_platform_service import (
 )
 
 
+def activate_source(client: TestClient, organization_id: str, source_id: str) -> None:
+    base = f"/api/v1/organizations/{organization_id}/source-systems/{source_id}"
+    assert client.patch(base, json={"status": "configured"}).status_code == 200
+    assert client.patch(base, json={"status": "validating"}).status_code == 200
+    assert client.post(f"{base}/connection-success").status_code == 200
+
+
 def create_execution(client: TestClient, slug: str) -> tuple[UUID, UUID]:
     organization = client.post(
         "/api/v1/organizations",
@@ -42,6 +49,7 @@ def create_execution(client: TestClient, slug: str) -> tuple[UUID, UUID]:
             "integration_method": "api",
         },
     )
+    activate_source(client, organization_id, source.json()["id"])
     dataset = client.post(
         f"/api/v1/organizations/{organization_id}/datasets",
         json={

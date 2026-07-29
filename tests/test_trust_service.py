@@ -14,6 +14,7 @@ from app.services.source_system_service import SourceSystemService
 from app.services.trust_service import (
     NoApplicableTrustRulesError,
     TrustAssessmentService,
+    TrustConflictError,
     TrustNotFoundError,
     TrustTenantMismatchError,
 )
@@ -42,6 +43,8 @@ def trust_foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID]:
         ),
         actor,
     )
+    source.status = "active"
+    db.commit()
     batch = IngestionBatchService().create(
         db,
         organization.id,
@@ -169,3 +172,30 @@ def test_cross_tenant_ingestion_batch_is_rejected(db: Session) -> None:
     payload = assessment_payload().model_copy(update={"ingestion_batch_id": second_batch})
     with pytest.raises(TrustTenantMismatchError):
         TrustAssessmentService().create_and_execute(db, first_id, dataset_id, payload)
+
+
+def test_assessment_idempotency_replays_without_duplicate_children(db: Session) -> None:
+    organization_id, batch_id, dataset_id = trust_foundation(db, "trust-idempotency")
+    payload = assessment_payload().model_copy(
+        update={"ingestion_batch_id": batch_id, "idempotency_key": "assessment-001"}
+    )
+    service = TrustAssessmentService()
+    created = service.create_and_execute(db, organization_id, dataset_id, payload)
+    replay = service.create_and_execute(db, organization_id, dataset_id, payload)
+    assert replay.id == created.id
+    assert len(service.rule_results(db, organization_id, created.id)) == 5
+    assert len(service.readiness(db, organization_id, created.id)) == 7
+
+    conflict = payload.model_copy(update={"records": [{"id": "different"}]})
+    with pytest.raises(TrustConflictError):
+        service.create_and_execute(db, organization_id, dataset_id, conflict)
+
+
+def test_assessment_idempotency_is_organization_scoped(db: Session) -> None:
+    first_id, _, first_dataset = trust_foundation(db, "trust-idem-first")
+    second_id, _, second_dataset = trust_foundation(db, "trust-idem-second")
+    payload = assessment_payload().model_copy(update={"idempotency_key": "shared-key"})
+    service = TrustAssessmentService()
+    first = service.create_and_execute(db, first_id, first_dataset, payload)
+    second = service.create_and_execute(db, second_id, second_dataset, payload)
+    assert first.id != second.id

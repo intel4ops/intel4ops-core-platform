@@ -62,3 +62,15 @@ object key case-insensitively matches:
 JSON fields use PostgreSQL JSONB in PostgreSQL and standard JSON in isolated SQLite
 unit tests. All managed schema changes are owned by Alembic revision
 `20260724_0003`.
+
+## Downstream lifecycle policy
+
+Only an `active` source may create a new ingestion batch, dataset, dataset
+version, or raw storage registration. Draft, configured, validating, paused,
+failed, and decommissioned sources remain readable but cannot create new
+downstream data. Failed sources can re-enter validation, but cannot ingest while
+failed.
+
+Decommissioning is terminal. Identity and governance configuration becomes
+immutable, while description and owner contact metadata remain editable for
+records administration. Existing downstream records and lineage are retained.

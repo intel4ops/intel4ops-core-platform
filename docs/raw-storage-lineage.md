@@ -89,6 +89,15 @@ upgrades to head, verifies UUID/JSONB/index/constraint behavior, downgrades WP-2
 `20260724_0004`, re-upgrades, and validates the full base lifecycle. Never use
 production, customer, or Mobility Next databases.
 
+Data-transformation ProcessingRuns require an ingestion-batch or
+dataset-version anchor. Integrity-verification and custom infrastructure runs
+may remain unanchored. Supplied anchors automatically produce idempotent
+`consumed_by` lineage edges.
+
+PostgreSQL serializes last-active-administrator changes on the organization row.
+SQLite tests validate the domain rule but cannot reproduce PostgreSQL row-lock
+concurrency.
+
 WP-2.05 does not upload or parse files, map canonical records, calculate Trust scores,
 generate findings, or delete physical storage. WP-2.06 may consume this immutable
 identity and lineage foundation.

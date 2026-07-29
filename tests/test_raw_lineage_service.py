@@ -13,6 +13,7 @@ from app.models.raw_lineage import (
     RawObjectStatus,
     RawRecordStatus,
 )
+from app.models.source_system import SourceSystem
 from app.schemas.contracts import OrganizationCreate
 from app.schemas.ingestion import DatasetCreate, DatasetVersionCreate, IngestionBatchCreate
 from app.schemas.raw_lineage import (
@@ -67,6 +68,8 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID, UUID]:
         ),
         actor,
     )
+    source.status = "active"
+    db.commit()
     batch = IngestionBatchService().create(
         db,
         organization.id,
@@ -169,6 +172,21 @@ def test_raw_object_idempotency_tenant_context_and_automatic_lineage(db: Session
         "raw_storage_object",
     }
     assert len(graph.edges) == 4
+
+    source = db.get(SourceSystem, source_id)
+    assert source is not None
+    source.status = "paused"
+    db.commit()
+    assert service.register(db, organization_id, payload, actor).id == raw_object.id
+    with pytest.raises(RawLineageConflictError):
+        service.register(
+            db,
+            organization_id,
+            payload.model_copy(
+                update={"object_number": "raw-002", "idempotency_key": "raw-key-002"}
+            ),
+            actor,
+        )
 
     other_id, _, _, _, _ = foundation(db, "raw-register-other")
     with pytest.raises(RawLineageTenantMismatchError):
@@ -297,6 +315,13 @@ def test_processing_run_lifecycle_counts_and_events(db: Session) -> None:
         ),
         actor,
     )
+    run_node = service.lineage.node_for_entity(
+        db, organization_id, LineageNodeType.PROCESSING_RUN, run.id
+    )
+    graph = service.lineage.graph(db, organization_id, run_node.id, direction="upstream")
+    assert {edge.relationship_type for edge in graph.edges} == {
+        LineageRelationshipType.CONSUMED_BY.value
+    }
     started = service.transition(db, organization_id, run.id, ProcessingRunStatus.RUNNING, actor)
     assert started.started_at is not None
     completed = service.transition(
@@ -314,7 +339,11 @@ def test_processing_run_lifecycle_counts_and_events(db: Session) -> None:
     failed = service.create(
         db,
         organization_id,
-        ProcessingRunCreate(run_type="parsing", executor_type="worker"),
+        ProcessingRunCreate(
+            ingestion_batch_id=batch_id,
+            run_type="parsing",
+            executor_type="worker",
+        ),
         actor,
     )
     service.transition(db, organization_id, failed.id, ProcessingRunStatus.RUNNING, actor)
@@ -334,6 +363,15 @@ def test_processing_run_lifecycle_counts_and_events(db: Session) -> None:
         service.transition(db, organization_id, failed.id, ProcessingRunStatus.QUEUED, actor).status
         == "queued"
     )
+    with pytest.raises(ValidationError):
+        ProcessingRunCreate(run_type="mapping", executor_type="worker")
+    infrastructure = service.create(
+        db,
+        organization_id,
+        ProcessingRunCreate(run_type="custom", executor_type="worker"),
+        actor,
+    )
+    assert infrastructure.ingestion_batch_id is None
 
 
 def test_lineage_duplicate_edges_cycle_prevention_and_tenant_scope(db: Session) -> None:

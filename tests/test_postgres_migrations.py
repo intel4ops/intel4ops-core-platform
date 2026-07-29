@@ -1,13 +1,15 @@
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,7 +22,11 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.models.orchestration import IntelligenceOrchestrationRequest
-from app.models.trust import AnalyticalReadinessDecision
+from app.models.trust import (
+    AnalyticalReadinessDecision,
+    TrustAssessment,
+    TrustRuleResult,
+)
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.ingestion import (
@@ -48,6 +54,7 @@ from app.services.ingestion_service import (
 from app.services.intelligence_service import IntelligenceExecutionService
 from app.services.membership_service import (
     DuplicateMembershipError,
+    LastActiveOrganizationAdminError,
     OrganizationMembershipService,
 )
 from app.services.orchestration_service import OrchestrationService
@@ -487,6 +494,14 @@ def assert_schema_at_head(engine: Engine) -> None:
         "ix_trust_assessments_status",
         "ix_trust_assessments_created_at",
     } <= {index["name"] for index in inspector.get_indexes("trust_assessments")}
+    trust_columns = {
+        column["name"]: column for column in inspector.get_columns("trust_assessments")
+    }
+    assert str(trust_columns["idempotency_key"]["type"]) == "VARCHAR(255)"
+    assert str(trust_columns["request_fingerprint"]["type"]) == "VARCHAR(64)"
+    assert {
+        constraint["name"] for constraint in inspector.get_unique_constraints("trust_assessments")
+    } >= {"uq_trust_assessments_organization_idempotency"}
     assert {
         foreign_key["referred_table"]
         for foreign_key in inspector.get_foreign_keys("trust_assessments")
@@ -518,6 +533,18 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     for table, names in expected_indexes.items():
         assert names <= {index["name"] for index in inspector.get_indexes(table)}
+
+    expected_checks = {
+        "organizations": {"ck_organizations_status"},
+        "findings": {"ck_findings_severity", "ck_findings_status"},
+        "recovery_actions": {"ck_recovery_actions_status"},
+        "processing_runs": {"ck_processing_runs_data_anchor"},
+        "trust_assessments": {"ck_trust_assessment_idempotency_pair"},
+    }
+    for table, names in expected_checks.items():
+        assert names <= {
+            constraint["name"] for constraint in inspector.get_check_constraints(table)
+        }
 
     expected_foreign_keys = {
         "findings": {
@@ -871,6 +898,24 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
             )
             == 0
         )
+    command.downgrade(config, "20260728_0022")
+    foundation_inspector = inspect(postgres_engine)
+    assert {"idempotency_key", "request_fingerprint"}.isdisjoint(
+        {column["name"] for column in foundation_inspector.get_columns("trust_assessments")}
+    )
+    assert "ck_organizations_status" not in {
+        constraint["name"]
+        for constraint in foundation_inspector.get_check_constraints("organizations")
+    }
+    command.upgrade(config, "head")
+    foundation_inspector = inspect(postgres_engine)
+    assert {"idempotency_key", "request_fingerprint"} <= {
+        column["name"] for column in foundation_inspector.get_columns("trust_assessments")
+    }
+    assert "ck_organizations_status" in {
+        constraint["name"]
+        for constraint in foundation_inspector.get_check_constraints("organizations")
+    }
     command.downgrade(config, "20260727_0021")
     assert not (wp_301_tables & set(inspect(postgres_engine).get_table_names()))
     assert wp_221_tables <= set(inspect(postgres_engine).get_table_names())
@@ -1312,6 +1357,8 @@ def test_ingestion_governance_on_postgres(postgres_engine: Engine) -> None:
             ),
             uuid4(),
         )
+        source.status = "active"
+        session.commit()
         batch = batch_service.create(
             session,
             organization.id,
@@ -1401,6 +1448,8 @@ def test_raw_storage_uuid_scope_and_foreign_keys_on_postgres(
             ),
             uuid4(),
         )
+        source.status = "active"
+        session.commit()
         batch = batch_service.create(
             session,
             organization.id,
@@ -1642,6 +1691,8 @@ def test_intelligence_decimal_and_tenant_scope_on_postgres(
             ),
             actor,
         )
+        source.status = "active"
+        session.commit()
         dataset = dataset_service.create(
             session,
             organizations[0].id,
@@ -1763,6 +1814,8 @@ def test_orchestration_uuid_jsonb_idempotency_and_tenant_scope_on_postgres(
             ),
             actor,
         )
+        source.status = "active"
+        session.commit()
         dataset = DatasetService().create(
             session,
             organizations[0].id,
@@ -1863,3 +1916,160 @@ def test_statistical_uuid_jsonb_tenancy_and_execution_on_postgres(
         assert isinstance(metadata, dict)
         assert metadata["method_code"] == "MODIFIED_Z_SCORE"
         assert observations[0].evidence_references[0]["aggregate_only"] is True
+
+
+@pytest.mark.postgres
+def test_concurrent_admin_changes_cannot_remove_all_active_admins(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    service = OrganizationMembershipService()
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Concurrent Admin Safety",
+                slug=f"concurrent-admin-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        admins = [
+            service.create(
+                session,
+                organization.id,
+                MembershipCreate(
+                    user_id=uuid4(),
+                    role=MembershipRole.ORGANIZATION_ADMIN,
+                    status=MembershipStatus.ACTIVE,
+                ),
+                invited_by_user_id=uuid4(),
+            )
+            for _ in range(2)
+        ]
+        organization_id = organization.id
+        admin_ids = [admin.id for admin in admins]
+
+    barrier = Barrier(2)
+
+    def demote(membership_id: UUID) -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                service.update_role(
+                    session,
+                    organization_id,
+                    membership_id,
+                    MembershipRole.ANALYST,
+                )
+            except LastActiveOrganizationAdminError:
+                session.rollback()
+                return "protected"
+            return "changed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(demote, admin_ids))
+    assert sorted(outcomes) == ["changed", "protected"]
+    with Session(postgres_engine) as session:
+        active_admins = session.scalar(
+            select(func.count())
+            .select_from(OrganizationMembership)
+            .where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.role == MembershipRole.ORGANIZATION_ADMIN.value,
+                OrganizationMembership.status == MembershipStatus.ACTIVE.value,
+            )
+        )
+        assert active_admins == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_trust_idempotency_creates_one_assessment(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    actor = uuid4()
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Concurrent Trust",
+                slug=f"concurrent-trust-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        source = SourceSystemService().create(
+            session,
+            organization.id,
+            SourceSystemCreate(
+                name="Concurrent Trust ERP",
+                code="concurrent-trust-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            actor,
+        )
+        source.status = "active"
+        session.commit()
+        dataset = DatasetService().create(
+            session,
+            organization.id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Concurrent Trust Records",
+                code=f"concurrent-trust-{uuid4().hex[:8]}",
+                domain="operations",
+                dataset_type="transactional",
+            ),
+            actor,
+        )
+        organization_id = organization.id
+        dataset_id = dataset.id
+
+    payload = TrustAssessmentCreate(
+        idempotency_key="concurrent-assessment",
+        records=[{"id": "1"}],
+        rule_configurations={"required_field_completeness": {"required_fields": ["id"]}},
+    )
+    barrier = Barrier(2)
+
+    def execute() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            return (
+                TrustAssessmentService()
+                .create_and_execute(
+                    session,
+                    organization_id,
+                    dataset_id,
+                    payload,
+                )
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assessment_ids = list(executor.map(lambda _: execute(), range(2)))
+    assert assessment_ids[0] == assessment_ids[1]
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TrustAssessment)
+                .where(
+                    TrustAssessment.organization_id == organization_id,
+                    TrustAssessment.idempotency_key == "concurrent-assessment",
+                )
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TrustRuleResult)
+                .where(TrustRuleResult.trust_assessment_id == assessment_ids[0])
+            )
+            == 1
+        )

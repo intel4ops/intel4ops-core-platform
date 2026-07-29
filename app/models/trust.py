@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -98,6 +99,16 @@ class TrustAssessment(Base):
             name="ck_trust_assessment_status",
         ),
         CheckConstraint(
+            "(idempotency_key IS NULL AND request_fingerprint IS NULL) OR "
+            "(idempotency_key IS NOT NULL AND request_fingerprint IS NOT NULL)",
+            name="ck_trust_assessment_idempotency_pair",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "idempotency_key",
+            name="uq_trust_assessments_organization_idempotency",
+        ),
+        CheckConstraint(
             "overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100)",
             name="ck_trust_assessment_overall_score",
         ),
@@ -136,6 +147,8 @@ class TrustAssessment(Base):
         ForeignKey("ingestion_batches.id", ondelete="RESTRICT"), nullable=True
     )
     industry_pack_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default=TrustAssessmentStatus.PENDING.value)
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     completeness_score: Mapped[float | None] = mapped_column(Float, nullable=True)

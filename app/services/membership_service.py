@@ -112,6 +112,7 @@ class OrganizationMembershipService:
         membership_id: UUID,
         role: MembershipRole,
     ) -> OrganizationMembership:
+        self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
         if (
             membership.role == MembershipRole.ORGANIZATION_ADMIN.value
@@ -135,6 +136,7 @@ class OrganizationMembershipService:
     def suspend(
         self, db: Session, organization_id: UUID, membership_id: UUID
     ) -> OrganizationMembership:
+        self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
         self._protect_last_active_admin(db, membership)
         membership.status = MembershipStatus.SUSPENDED.value
@@ -144,6 +146,7 @@ class OrganizationMembershipService:
     def revoke(
         self, db: Session, organization_id: UUID, membership_id: UUID
     ) -> OrganizationMembership:
+        self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
         self._protect_last_active_admin(db, membership)
         membership.status = MembershipStatus.REVOKED.value
@@ -195,6 +198,14 @@ class OrganizationMembershipService:
             raise LastActiveOrganizationAdminError(
                 "The last active organization administrator cannot be changed"
             )
+
+    @staticmethod
+    def _lock_organization(db: Session, organization_id: UUID) -> None:
+        organization = db.scalar(
+            select(Organization).where(Organization.id == organization_id).with_for_update()
+        )
+        if organization is None:
+            raise MembershipOrganizationNotFoundError("Organization not found")
 
     @staticmethod
     def _commit(db: Session, membership: OrganizationMembership) -> None:

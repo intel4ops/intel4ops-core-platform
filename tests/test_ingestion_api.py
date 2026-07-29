@@ -10,6 +10,13 @@ from app.models.entities import MembershipRole, MembershipStatus
 JSON_OBJECT = TypeAdapter(dict[str, object])
 
 
+def activate_source(client: TestClient, organization_id: str, source_id: str) -> None:
+    base = f"/api/v1/organizations/{organization_id}/source-systems/{source_id}"
+    assert client.patch(base, json={"status": "configured"}).status_code == 200
+    assert client.patch(base, json={"status": "validating"}).status_code == 200
+    assert client.post(f"{base}/connection-success").status_code == 200
+
+
 def create_foundation(client: TestClient, slug: str) -> tuple[str, str]:
     organization = client.post(
         "/api/v1/organizations",
@@ -33,7 +40,9 @@ def create_foundation(client: TestClient, slug: str) -> tuple[str, str]:
         },
     )
     assert source.status_code == 201
-    return organization_id, str(source.json()["id"])
+    source_id = str(source.json()["id"])
+    activate_source(client, organization_id, source_id)
+    return organization_id, source_id
 
 
 def create_member(
