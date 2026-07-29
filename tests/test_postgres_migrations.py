@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_reliability_service import reliability_foundation, reliability_payload
 from test_statistical_service import execution_payload, statistical_foundation
 
 from app.models.entities import (
@@ -39,6 +40,7 @@ from app.schemas.intelligence import IntelligenceExecutionCreate
 from app.schemas.memberships import MembershipCreate
 from app.schemas.orchestration import OrchestrationCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
+from app.schemas.reliability import CensoringStatus
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
 from app.services.finding_platform_service import (
@@ -60,6 +62,7 @@ from app.services.membership_service import (
 from app.services.orchestration_service import OrchestrationService
 from app.services.organization_service import OrganizationService
 from app.services.raw_lineage_service import RawStorageObjectService
+from app.services.reliability_service import ReliabilityServiceError, reliability_execution_service
 from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
@@ -2073,3 +2076,35 @@ def test_concurrent_trust_idempotency_creates_one_assessment(
             )
             == 1
         )
+
+
+@pytest.mark.postgres
+def test_reliability_behavior_on_disposable_postgres(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, trust_id, readiness_id, actor = reliability_foundation(
+            session, f"pg-reliability-{uuid4().hex[:8]}"
+        )
+        basic = reliability_execution_service.execute(
+            session,
+            organization_id,
+            reliability_payload(
+                trust_id,
+                readiness_id,
+                dataset_fingerprint="7" * 64,
+            ),
+            actor,
+        )
+        assert basic.status == "succeeded"
+        assert basic.explanation["human_review_required"] is True
+
+        censored = reliability_payload(
+            trust_id,
+            readiness_id,
+            method_code="WEIBULL_TWO_PARAMETER",
+            dataset_fingerprint="8" * 64,
+        )
+        censored.observations[-1].event_observed = False
+        censored.observations[-1].censoring_status = CensoringStatus.RIGHT_CENSORED
+        with pytest.raises(ReliabilityServiceError, match="does not support censored"):
+            reliability_execution_service.execute(session, organization_id, censored, actor)

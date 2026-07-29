@@ -44,9 +44,24 @@ class ReliabilityMethod(Protocol):
 
 
 def _finite(value: object, field: str) -> float:
-    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ReliabilityMethodError(f"{field} must be finite")
+    if not math.isfinite(float(value)):
         raise ReliabilityMethodError(f"{field} must be finite")
     return float(value)
+
+
+def _discrete_count(value: object, field: str) -> int:
+    numeric = _finite(value, field)
+    if not numeric.is_integer():
+        raise ReliabilityMethodError(f"{field} must be an integral count")
+    return int(numeric)
+
+
+def _strict_boolean(value: object, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ReliabilityMethodError(f"{field} must be boolean")
+    return value
 
 
 @dataclass(frozen=True)
@@ -60,14 +75,16 @@ class BasicReliabilityMethod:
             _finite(item.get("repair_duration", 0), "repair_duration") for item in observations
         )
         failures = sum(
-            int(_finite(item.get("failure_count", 0), "failure_count")) for item in observations
+            _discrete_count(item.get("failure_count", 0), "failure_count") for item in observations
         )
         repairs = sum(
-            int(_finite(item.get("repair_count", item.get("failure_count", 0)), "repair_count"))
+            _discrete_count(item.get("repair_count", item.get("failure_count", 0)), "repair_count")
             for item in observations
         )
         if exposure < 0 or downtime < 0 or repair < 0 or failures < 0 or repairs < 0:
             raise ReliabilityMethodError("Reliability inputs cannot be negative")
+        if downtime > exposure:
+            raise ReliabilityMethodError("downtime cannot exceed exposure")
         effective_exposure = exposure - downtime
         values: dict[str, float | None] = {
             "FAILURE_COUNT": float(failures),
@@ -100,7 +117,9 @@ class KaplanMeierMethod:
             duration = _finite(item.get("duration"), "duration")
             if duration < 0:
                 raise ReliabilityMethodError("duration cannot be negative")
-            prepared.append((duration, bool(item.get("event_observed"))))
+            prepared.append(
+                (duration, _strict_boolean(item.get("event_observed"), "event_observed"))
+            )
         if not prepared:
             raise ReliabilityMethodError("At least one survival observation is required")
         at_risk = len(prepared)
@@ -140,11 +159,14 @@ class WeibullTwoParameterMethod:
     metadata: ReliabilityMethodMetadata
 
     def execute(self, observations: list[dict[str, object]]) -> ReliabilityResult:
-        failures = sorted(
-            _finite(item.get("duration"), "duration")
+        if any(
+            not _strict_boolean(item.get("event_observed"), "event_observed")
             for item in observations
-            if bool(item.get("event_observed"))
-        )
+        ):
+            raise ReliabilityMethodError(
+                "WEIBULL_TWO_PARAMETER does not support censored observations"
+            )
+        failures = sorted(_finite(item.get("duration"), "duration") for item in observations)
         if len(failures) < self.metadata.minimum_failure_count:
             raise ReliabilityMethodError("Insufficient failures for Weibull fit")
         if failures[0] <= 0 or failures[0] == failures[-1]:
@@ -169,11 +191,10 @@ class WeibullTwoParameterMethod:
             {
                 "fit": "probability_plot_least_squares",
                 "failure_count": len(failures),
-                "censored_count": sum(
-                    not bool(item.get("event_observed")) for item in observations
-                ),
+                "censored_count": 0,
+                "censoring_supported": False,
             },
-            ("Censoring is reported but not included in this bounded probability-plot fit.",),
+            ("This bounded probability-plot fit supports uncensored failure observations only.",),
         )
 
 
@@ -294,11 +315,15 @@ def default_reliability_method_registry() -> ReliabilityMethodRegistry:
                 method_code="WEIBULL_TWO_PARAMETER",
                 method_name="Two-parameter Weibull",
                 capability_class="WEIBULL_RELIABILITY",
-                supports_censoring=True,
+                supports_censoring=False,
                 supports_grouped_assets=True,
                 supports_condition_inputs=False,
                 supports_uncertainty=False,
                 minimum_failure_count=3,
+                known_limitations=(
+                    "Uncensored failure observations only; censored Weibull fitting is "
+                    "unsupported.",
+                ),
                 method_version="1.0",
                 supported_exposure_bases=exposure_bases,
             )

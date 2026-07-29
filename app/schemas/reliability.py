@@ -16,22 +16,24 @@ class CensoringStatus(StrEnum):
 class ReliabilityObservationInput(BaseModel):
     asset_reference: str = Field(min_length=1, max_length=255)
     asset_class: str = Field(min_length=1, max_length=100)
-    duration: float | None = Field(default=None, ge=0)
-    exposure: float = Field(default=0, ge=0)
-    downtime: float = Field(default=0, ge=0)
-    repair_duration: float = Field(default=0, ge=0)
-    failure_count: int = Field(default=0, ge=0)
-    repair_count: int = Field(default=0, ge=0)
-    event_observed: bool = False
+    duration: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    exposure: float = Field(default=0, ge=0, allow_inf_nan=False)
+    downtime: float = Field(default=0, ge=0, allow_inf_nan=False)
+    repair_duration: float = Field(default=0, ge=0, allow_inf_nan=False)
+    failure_count: int = Field(default=0, ge=0, strict=True)
+    repair_count: int = Field(default=0, ge=0, strict=True)
+    event_observed: bool = Field(default=False, strict=True)
     censoring_status: CensoringStatus = CensoringStatus.RIGHT_CENSORED
     lifecycle_state: str = Field(default="ACTIVE", max_length=40)
-    normalized_value: float | None = Field(default=None, ge=0, le=1)
-    weight: float | None = Field(default=None, ge=0, le=1)
+    normalized_value: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    weight: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def consistent_event(self) -> "ReliabilityObservationInput":
         if self.event_observed != (self.censoring_status == CensoringStatus.FAILURE_OBSERVED):
             raise ValueError("event_observed must agree with censoring_status")
+        if self.downtime > self.exposure:
+            raise ValueError("downtime cannot exceed exposure")
         return self
 
 
@@ -74,10 +76,36 @@ class ReliabilityExecutionCreate(BaseModel):
         return self
 
 
+class ReliabilityEvaluationObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_reference: str | None = Field(default=None, min_length=1, max_length=255)
+    asset_class: str | None = Field(default=None, min_length=1, max_length=100)
+    duration: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    exposure: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    downtime: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    repair_duration: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    failure_count: int | None = Field(default=None, ge=0, strict=True)
+    repair_count: int | None = Field(default=None, ge=0, strict=True)
+    event_observed: bool | None = Field(default=None, strict=True)
+    normalized_value: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    weight: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def valid_exposure_context(self) -> "ReliabilityEvaluationObservation":
+        if (
+            self.exposure is not None
+            and self.downtime is not None
+            and self.downtime > self.exposure
+        ):
+            raise ValueError("downtime cannot exceed exposure")
+        return self
+
+
 class ReliabilityEvaluateRequest(BaseModel):
     method_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
     method_version: str = "1.0"
-    observations: list[dict[str, object]] = Field(min_length=1, max_length=10000)
+    observations: list[ReliabilityEvaluationObservation] = Field(min_length=1, max_length=10000)
 
 
 class ReliabilityEvaluationRead(BaseModel):

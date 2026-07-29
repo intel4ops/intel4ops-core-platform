@@ -114,7 +114,10 @@ class ReliabilityExecutionService:
     def evaluate(self, payload: ReliabilityEvaluateRequest) -> ReliabilityEvaluationRead:
         try:
             method = self.registry.get(payload.method_code, payload.method_version)
-            result = method.execute(payload.observations)
+            inputs = [
+                item.model_dump(exclude_none=True, mode="json") for item in payload.observations
+            ]
+            result = method.execute(inputs)
         except ReliabilityMethodError as exc:
             raise ReliabilityServiceError("METHOD_REJECTED", str(exc)) from exc
         return ReliabilityEvaluationRead(
@@ -190,9 +193,15 @@ class ReliabilityExecutionService:
             {
                 "organization": organization_id,
                 "asset_scope": payload.asset_scope_reference,
+                "asset_scope_type": payload.asset_scope_type,
+                "trust_assessment": payload.trust_assessment_id,
+                "orchestration_request": payload.orchestration_request_id,
+                "dataset_reference": payload.dataset_reference,
                 "dataset": payload.dataset_fingerprint,
+                "source_lineage_reference": payload.source_lineage_reference,
                 "lifecycle": lifecycle_fingerprint,
                 "window": [payload.observation_window_start, payload.observation_window_end],
+                "exposure_unit": payload.exposure_unit,
                 "package": package,
                 "readiness": readiness.id,
                 "inputs": inputs,
