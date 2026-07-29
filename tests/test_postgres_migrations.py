@@ -13,7 +13,11 @@ from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from test_reliability_service import reliability_foundation, reliability_payload
+from test_reliability_service import (
+    add_reliability_definition,
+    reliability_foundation,
+    reliability_payload,
+)
 from test_statistical_service import execution_payload, statistical_foundation
 
 from app.models.entities import (
@@ -23,6 +27,7 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.models.orchestration import IntelligenceOrchestrationRequest
+from app.models.reliability import ReliabilityExecution
 from app.models.trust import (
     AnalyticalReadinessDecision,
     TrustAssessment,
@@ -40,7 +45,7 @@ from app.schemas.intelligence import IntelligenceExecutionCreate
 from app.schemas.memberships import MembershipCreate
 from app.schemas.orchestration import OrchestrationCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
-from app.schemas.reliability import CensoringStatus
+from app.schemas.reliability import CensoringStatus, ReliabilityExecutionCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
 from app.services.finding_platform_service import (
@@ -62,7 +67,11 @@ from app.services.membership_service import (
 from app.services.orchestration_service import OrchestrationService
 from app.services.organization_service import OrganizationService
 from app.services.raw_lineage_service import RawStorageObjectService
-from app.services.reliability_service import ReliabilityServiceError, reliability_execution_service
+from app.services.reliability_service import (
+    ReliabilityExecutionService,
+    ReliabilityServiceError,
+    reliability_execution_service,
+)
 from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
@@ -2108,3 +2117,148 @@ def test_reliability_behavior_on_disposable_postgres(postgres_engine: Engine) ->
         censored.observations[-1].censoring_status = CensoringStatus.RIGHT_CENSORED
         with pytest.raises(ReliabilityServiceError, match="does not support censored"):
             reliability_execution_service.execute(session, organization_id, censored, actor)
+
+
+@pytest.mark.postgres
+def test_concurrent_reliability_definition_identity_idempotency(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, trust_id, readiness_id, actor = reliability_foundation(
+            session, f"pg-rel-concurrency-{uuid4().hex[:8]}"
+        )
+        second_definition, second_version = add_reliability_definition(
+            session,
+            organization_id,
+            actor,
+            stable_code="SHARED.RELIABILITY.CONCURRENT_ALTERNATE",
+            fingerprint="r" * 64,
+        )
+        second_definition_id = second_definition.id
+        second_definition_code = second_definition.stable_code
+        second_version_id = second_version.id
+
+    identical_payload = reliability_payload(
+        trust_id,
+        readiness_id,
+        dataset_fingerprint="5" * 64,
+    )
+    identical_barrier = Barrier(2)
+
+    def execute_identical() -> UUID:
+        with Session(postgres_engine) as session:
+            identical_barrier.wait()
+            return (
+                ReliabilityExecutionService()
+                .execute(
+                    session,
+                    organization_id,
+                    identical_payload,
+                    actor,
+                )
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        identical_ids = list(executor.map(lambda _: execute_identical(), range(2)))
+    assert identical_ids[0] == identical_ids[1]
+
+    class ForcedCollisionReliabilityService(ReliabilityExecutionService):
+        def _reproducibility_fingerprint(self, *args: object, **kwargs: object) -> str:
+            return "c" * 64
+
+    first_payload = reliability_payload(
+        trust_id,
+        readiness_id,
+        dataset_fingerprint="6" * 64,
+    )
+    second_payload = first_payload.model_copy(
+        update={
+            "definition_code": second_definition_code,
+            "correlation_id": "rel-concurrent-conflict",
+        }
+    )
+    collision_barrier = Barrier(2)
+
+    def execute_collision(payload: ReliabilityExecutionCreate) -> tuple[str, UUID | str]:
+        with Session(postgres_engine) as session:
+            collision_barrier.wait()
+            try:
+                row = ForcedCollisionReliabilityService().execute(
+                    session,
+                    organization_id,
+                    payload,
+                    actor,
+                )
+                return "succeeded", row.id
+            except ReliabilityServiceError as exc:
+                return "conflict", exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        collision_results = list(executor.map(execute_collision, (first_payload, second_payload)))
+    assert sorted(result[0] for result in collision_results) == ["conflict", "succeeded"]
+    assert {result[1] for result in collision_results if result[0] == "conflict"} == {
+        "IDEMPOTENCY_CONFLICT"
+    }
+
+    distinct_first = first_payload.model_copy(
+        update={"dataset_fingerprint": "7" * 64, "correlation_id": "rel-distinct-first"}
+    )
+    distinct_second = second_payload.model_copy(
+        update={"dataset_fingerprint": "7" * 64, "correlation_id": "rel-distinct-second"}
+    )
+    distinct_barrier = Barrier(2)
+
+    def execute_distinct(payload: ReliabilityExecutionCreate) -> tuple[UUID, UUID, UUID]:
+        with Session(postgres_engine) as session:
+            distinct_barrier.wait()
+            row = ReliabilityExecutionService().execute(
+                session,
+                organization_id,
+                payload,
+                actor,
+            )
+            return row.id, row.oikb_definition_id, row.oikb_definition_version_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        distinct_results = list(executor.map(execute_distinct, (distinct_first, distinct_second)))
+    assert distinct_results[0][0] != distinct_results[1][0]
+    assert second_version_id in {result[2] for result in distinct_results}
+
+    with Session(postgres_engine) as session:
+        identical_rows = list(
+            session.scalars(
+                select(ReliabilityExecution).where(ReliabilityExecution.id.in_(identical_ids))
+            )
+        )
+        assert len(identical_rows) == 1
+        primary_definition_id = identical_rows[0].oikb_definition_id
+        assert {result[1] for result in distinct_results} == {
+            primary_definition_id,
+            second_definition_id,
+        }
+        collision_rows = list(
+            session.scalars(
+                select(ReliabilityExecution).where(
+                    ReliabilityExecution.organization_id == organization_id,
+                    ReliabilityExecution.reproducibility_fingerprint == "c" * 64,
+                )
+            )
+        )
+        assert len(collision_rows) == 1
+        assert collision_rows[0].oikb_definition_id in {
+            primary_definition_id,
+            second_definition_id,
+        }
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityExecution)
+                .where(
+                    ReliabilityExecution.organization_id == organization_id,
+                    ReliabilityExecution.id.in_([result[0] for result in distinct_results]),
+                )
+            )
+            == 2
+        )

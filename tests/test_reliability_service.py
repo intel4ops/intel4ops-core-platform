@@ -25,6 +25,56 @@ from app.services.reliability_service import (
 from app.services.source_system_service import SourceSystemService
 
 
+def add_reliability_definition(
+    db: Session,
+    organization_id: UUID,
+    actor: UUID,
+    *,
+    stable_code: str,
+    semantic_version: str = "1.0.0",
+    fingerprint: str = "r" * 64,
+) -> tuple[OIKBDefinition, OIKBDefinitionVersion]:
+    definition = OIKBDefinition(
+        stable_code=stable_code,
+        name=stable_code,
+        description="Test reliability definition.",
+        knowledge_class="reliability_method",
+        analytical_level="reliability",
+        domain="reliability",
+        subdomain="asset",
+        owner_organization_id=organization_id,
+        scope_type="organization",
+        scope_key=f"organization:{organization_id}",
+        is_system_definition=False,
+        created_by=actor,
+    )
+    db.add(definition)
+    db.flush()
+    version = OIKBDefinitionVersion(
+        definition_id=definition.id,
+        semantic_version=semantic_version,
+        lifecycle_status="active",
+        quality_level="provisional",
+        effective_from=datetime.now(UTC) - timedelta(days=1),
+        expression_schema={"operation": "reliability"},
+        output_type="reliability_metrics",
+        output_unit="hour",
+        rounding_policy={"decimal_places": 6},
+        null_policy="structured_null",
+        zero_denominator_policy="structured_null",
+        trust_requirement={"minimum_status": "completed"},
+        readiness_requirement={"analytical_level": "reliability"},
+        fingerprint=fingerprint,
+        validation_satisfied=True,
+        created_by=actor,
+        activated_by=actor,
+        activated_at=datetime.now(UTC),
+    )
+    db.add(version)
+    db.commit()
+    return definition, version
+
+
 def reliability_foundation(
     db: Session, slug: str = "reliability-service"
 ) -> tuple[UUID, UUID, UUID, UUID]:
@@ -84,45 +134,12 @@ def reliability_foundation(
         explanation="Reliability-ready evidence.",
     )
     db.add(readiness)
-    definition = OIKBDefinition(
+    add_reliability_definition(
+        db,
+        organization.id,
+        actor,
         stable_code="SHARED.RELIABILITY.BASIC_ASSET_RELIABILITY",
-        name="Basic asset reliability",
-        description="Test reliability definition.",
-        knowledge_class="reliability_method",
-        analytical_level="reliability",
-        domain="reliability",
-        subdomain="asset",
-        owner_organization_id=organization.id,
-        scope_type="organization",
-        scope_key=f"organization:{organization.id}",
-        is_system_definition=False,
-        created_by=actor,
     )
-    db.add(definition)
-    db.flush()
-    db.add(
-        OIKBDefinitionVersion(
-            definition_id=definition.id,
-            semantic_version="1.0.0",
-            lifecycle_status="active",
-            quality_level="provisional",
-            effective_from=datetime.now(UTC) - timedelta(days=1),
-            expression_schema={"operation": "reliability"},
-            output_type="reliability_metrics",
-            output_unit="hour",
-            rounding_policy={"decimal_places": 6},
-            null_policy="structured_null",
-            zero_denominator_policy="structured_null",
-            trust_requirement={"minimum_status": "completed"},
-            readiness_requirement={"analytical_level": "reliability"},
-            fingerprint="r" * 64,
-            validation_satisfied=True,
-            created_by=actor,
-            activated_by=actor,
-            activated_at=datetime.now(UTC),
-        )
-    )
-    db.commit()
     return organization.id, trust.id, readiness.id, actor
 
 
@@ -248,3 +265,224 @@ def test_changed_lineage_context_does_not_replay_prior_execution(db: Session) ->
     second = reliability_execution_service.execute(db, organization_id, changed, actor)
 
     assert second.id != first.id
+
+
+def test_distinct_definition_with_identical_content_does_not_replay(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-definition-identity"
+    )
+    request = reliability_payload(trust_id, readiness_id, dataset_fingerprint="1" * 64)
+    first = reliability_execution_service.execute(db, organization_id, request, actor)
+    second_definition, second_version = add_reliability_definition(
+        db,
+        organization_id,
+        actor,
+        stable_code="SHARED.RELIABILITY.ALTERNATE_ASSET_RELIABILITY",
+        fingerprint="r" * 64,
+    )
+    changed = request.model_copy(
+        update={"definition_code": second_definition.stable_code, "correlation_id": "rel-alternate"}
+    )
+
+    second = reliability_execution_service.execute(db, organization_id, changed, actor)
+
+    assert second.id != first.id
+    assert second.oikb_definition_id == second_definition.id
+    assert second.oikb_definition_version_id == second_version.id
+
+
+def test_distinct_version_identity_with_identical_content_does_not_replay(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-version-identity"
+    )
+    request = reliability_payload(trust_id, readiness_id, dataset_fingerprint="2" * 64)
+    first = reliability_execution_service.execute(db, organization_id, request, actor)
+    definition = db.scalar(
+        select(OIKBDefinition).where(OIKBDefinition.stable_code == request.definition_code)
+    )
+    assert definition is not None
+    first_version = db.scalar(
+        select(OIKBDefinitionVersion).where(
+            OIKBDefinitionVersion.definition_id == definition.id,
+            OIKBDefinitionVersion.semantic_version == "1.0.0",
+        )
+    )
+    assert first_version is not None
+    first_version.lifecycle_status = "deprecated"
+    db.commit()
+    _, second_version = add_reliability_definition_version(
+        db,
+        definition,
+        actor,
+        semantic_version="1.0.1",
+        fingerprint="s" * 64,
+    )
+    changed = request.model_copy(
+        update={"definition_version": "1.0.1", "correlation_id": "rel-version-101"}
+    )
+
+    second = reliability_execution_service.execute(db, organization_id, changed, actor)
+
+    assert second.id != first.id
+    assert second.oikb_definition_id == definition.id
+    assert second.oikb_definition_version_id == second_version.id
+
+
+def add_reliability_definition_version(
+    db: Session,
+    definition: OIKBDefinition,
+    actor: UUID,
+    *,
+    semantic_version: str,
+    fingerprint: str,
+) -> tuple[OIKBDefinition, OIKBDefinitionVersion]:
+    version = OIKBDefinitionVersion(
+        definition_id=definition.id,
+        semantic_version=semantic_version,
+        lifecycle_status="active",
+        quality_level="provisional",
+        effective_from=datetime.now(UTC) - timedelta(days=1),
+        expression_schema={"operation": "reliability"},
+        output_type="reliability_metrics",
+        output_unit="hour",
+        rounding_policy={"decimal_places": 6},
+        null_policy="structured_null",
+        zero_denominator_policy="structured_null",
+        trust_requirement={"minimum_status": "completed"},
+        readiness_requirement={"analytical_level": "reliability"},
+        fingerprint=fingerprint,
+        validation_satisfied=True,
+        created_by=actor,
+        activated_by=actor,
+        activated_at=datetime.now(UTC),
+    )
+    db.add(version)
+    db.commit()
+    return definition, version
+
+
+def test_persisted_identity_mismatch_returns_conflict(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-identity-conflict"
+    )
+    request = reliability_payload(trust_id, readiness_id, dataset_fingerprint="3" * 64)
+    first = reliability_execution_service.execute(db, organization_id, request, actor)
+    second_definition, _ = add_reliability_definition(
+        db,
+        organization_id,
+        actor,
+        stable_code="SHARED.RELIABILITY.CONFLICTING_ASSET_RELIABILITY",
+        fingerprint="r" * 64,
+    )
+    changed = request.model_copy(update={"definition_code": second_definition.stable_code})
+    monkeypatch.setattr(
+        reliability_execution_service,
+        "_reproducibility_fingerprint",
+        lambda *_args, **_kwargs: first.reproducibility_fingerprint,
+    )
+
+    with pytest.raises(ReliabilityServiceError) as exc:
+        reliability_execution_service.execute(db, organization_id, changed, actor)
+
+    assert exc.value.code == "IDEMPOTENCY_CONFLICT"
+    assert exc.value.http_status == 409
+
+
+def test_governed_identity_fingerprint_is_deterministic_and_complete(db: Session) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-canonical-identity"
+    )
+    payload = reliability_payload(trust_id, readiness_id, dataset_fingerprint="4" * 64)
+    definition = db.scalar(
+        select(OIKBDefinition).where(OIKBDefinition.stable_code == payload.definition_code)
+    )
+    assert definition is not None
+    version = db.scalar(
+        select(OIKBDefinitionVersion).where(OIKBDefinitionVersion.definition_id == definition.id)
+    )
+    assert version is not None
+    baseline = reliability_execution_service._execution_package_fingerprint(
+        definition, version, payload
+    )
+    assert (
+        reliability_execution_service._execution_package_fingerprint(definition, version, payload)
+        == baseline
+    )
+
+    variants = [
+        (
+            definition,
+            version,
+            payload.model_copy(update={"method_version": "1.1"}),
+        ),
+        (
+            OIKBDefinition(
+                **{
+                    column.name: getattr(definition, column.name)
+                    for column in OIKBDefinition.__table__.columns
+                    if column.name != "id"
+                },
+                id=uuid4(),
+            ),
+            version,
+            payload,
+        ),
+        (
+            OIKBDefinition(
+                **{
+                    column.name: getattr(definition, column.name)
+                    for column in OIKBDefinition.__table__.columns
+                    if column.name not in {"id", "stable_code"}
+                },
+                id=definition.id,
+                stable_code="SHARED.RELIABILITY.CHANGED_CODE",
+            ),
+            version,
+            payload,
+        ),
+        (
+            definition,
+            OIKBDefinitionVersion(
+                **{
+                    column.name: getattr(version, column.name)
+                    for column in OIKBDefinitionVersion.__table__.columns
+                    if column.name != "id"
+                },
+                id=uuid4(),
+            ),
+            payload,
+        ),
+        (
+            definition,
+            OIKBDefinitionVersion(
+                **{
+                    column.name: getattr(version, column.name)
+                    for column in OIKBDefinitionVersion.__table__.columns
+                    if column.name != "semantic_version"
+                },
+                semantic_version="1.0.1",
+            ),
+            payload,
+        ),
+        (
+            definition,
+            OIKBDefinitionVersion(
+                **{
+                    column.name: getattr(version, column.name)
+                    for column in OIKBDefinitionVersion.__table__.columns
+                    if column.name != "fingerprint"
+                },
+                fingerprint="f" * 64,
+            ),
+            payload,
+        ),
+    ]
+    for changed_definition, changed_version, changed_payload in variants:
+        assert (
+            reliability_execution_service._execution_package_fingerprint(
+                changed_definition, changed_version, changed_payload
+            )
+            != baseline
+        )
