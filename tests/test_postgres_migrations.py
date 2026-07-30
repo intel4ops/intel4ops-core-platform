@@ -9,10 +9,13 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_forecasting_service import foundation as forecasting_foundation
+from test_forecasting_service import payload as forecasting_payload
 from test_reliability_service import (
     add_reliability_definition,
     reliability_foundation,
@@ -26,6 +29,8 @@ from app.models.entities import (
     MembershipStatus,
     OrganizationMembership,
 )
+from app.models.forecasting import ForecastExecution
+from app.models.ingestion import Dataset
 from app.models.orchestration import IntelligenceOrchestrationRequest
 from app.models.reliability import (
     ReliabilityExecution,
@@ -33,6 +38,7 @@ from app.models.reliability import (
     ReliabilityMetric,
     ReliabilityModelResult,
 )
+from app.models.statistics import StatisticalExecution
 from app.models.trust import (
     AnalyticalReadinessDecision,
     TrustAssessment,
@@ -58,6 +64,7 @@ from app.services.finding_platform_service import (
     FindingQueryService,
 )
 from app.services.finding_service import FindingService
+from app.services.forecasting_service import ForecastExecutionService
 from app.services.ingestion_service import (
     DatasetService,
     DatasetVersionService,
@@ -81,7 +88,10 @@ from app.services.source_system_service import (
     DuplicateSourceSystemCodeError,
     SourceSystemService,
 )
-from app.services.statistical_service import statistical_execution_service
+from app.services.statistical_service import (
+    StatisticalExecutionService,
+    statistical_execution_service,
+)
 from app.services.trust_service import TrustAssessmentService
 
 MANAGED_TABLES = {
@@ -2330,4 +2340,290 @@ def test_concurrent_reliability_definition_identity_idempotency(
                 )
             )
             == 2
+        )
+
+
+@pytest.mark.postgres
+def test_wp206a_legacy_provenance_backfill_is_deterministic(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    execution_ids: dict[str, UUID] = {}
+
+    with Session(postgres_engine) as session:
+        for scenario in ("deterministic", "ambiguous", "fabricated", "cross-tenant"):
+            organization_id, trust_id, readiness_id, actor = reliability_foundation(
+                session, f"wp206a-{scenario}-{uuid4().hex[:8]}"
+            )
+            request = reliability_payload(trust_id, readiness_id)
+            execution = reliability_execution_service.execute(
+                session, organization_id, request, actor
+            )
+            execution_ids[scenario] = execution.id
+            dataset = session.get(Dataset, request.dataset_id)
+            assert dataset is not None
+            if scenario == "ambiguous":
+                add_eligible_dataset_version(
+                    session,
+                    organization_id,
+                    dataset.source_system_id,
+                    dataset.id,
+                    actor,
+                    checksum=execution.dataset_fingerprint,
+                )
+            elif scenario == "fabricated":
+                execution.dataset_reference = "fabricated-dataset-reference"
+                session.commit()
+            elif scenario == "cross-tenant":
+                original_code = dataset.code
+                dataset.code = f"renamed-{uuid4().hex[:12]}"
+                session.commit()
+                other_organization_id, other_trust_id, _, _ = reliability_foundation(
+                    session, f"wp206a-lookalike-{uuid4().hex[:8]}"
+                )
+                other_dataset = session.get(
+                    Dataset,
+                    reliability_payload(other_trust_id, uuid4()).dataset_id,
+                )
+                assert other_dataset is not None
+                other_dataset.code = original_code
+                session.commit()
+                assert other_organization_id != organization_id
+
+    command.downgrade(config, "20260728_0023")
+    command.upgrade(config, "head")
+
+    with Session(postgres_engine) as session:
+        rows = {
+            row.id: row
+            for row in session.scalars(
+                select(ReliabilityExecution).where(
+                    ReliabilityExecution.id.in_(execution_ids.values())
+                )
+            )
+        }
+        assert len(rows) == 4
+        assert rows[execution_ids["deterministic"]].dataset_id is not None
+        assert rows[execution_ids["deterministic"]].dataset_version_id is not None
+        for scenario in ("ambiguous", "fabricated", "cross-tenant"):
+            assert rows[execution_ids[scenario]].dataset_id is None
+            assert rows[execution_ids[scenario]].dataset_version_id is None
+            assert rows[execution_ids[scenario]].ingestion_batch_id is None
+            assert rows[execution_ids[scenario]].source_system_id is None
+
+
+@pytest.mark.postgres
+def test_wp206a_statistical_and_forecast_concurrency_and_governed_identity(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        stat_org, _, stat_trust, stat_readiness, stat_actor = statistical_foundation(
+            session, f"wp206a-stat-{uuid4().hex[:8]}"
+        )
+        stat_request = execution_payload(
+            stat_trust, stat_readiness, key=f"wp206a-stat-{uuid4().hex}"
+        )
+        forecast_org, forecast_trust, forecast_readiness, forecast_actor = forecasting_foundation(
+            session, f"wp206a-forecast-{uuid4().hex[:8]}"
+        )
+        forecast_request = forecasting_payload(forecast_trust, forecast_readiness, "4" * 64)
+
+    stat_barrier = Barrier(2)
+
+    def execute_statistical() -> UUID:
+        with Session(postgres_engine) as session:
+            stat_barrier.wait()
+            return (
+                StatisticalExecutionService()
+                .execute(session, stat_org, stat_request, stat_actor)
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        statistical_ids = list(executor.map(lambda _: execute_statistical(), range(2)))
+    assert statistical_ids[0] == statistical_ids[1]
+
+    forecast_barrier = Barrier(2)
+
+    def execute_forecast() -> UUID:
+        with Session(postgres_engine) as session:
+            forecast_barrier.wait()
+            return (
+                ForecastExecutionService()
+                .execute(session, forecast_org, forecast_request, forecast_actor)
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        forecast_ids = list(executor.map(lambda _: execute_forecast(), range(2)))
+    assert forecast_ids[0] == forecast_ids[1]
+
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(StatisticalExecution)
+                .where(StatisticalExecution.id.in_(statistical_ids))
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ForecastExecution)
+                .where(ForecastExecution.id.in_(forecast_ids))
+            )
+            == 1
+        )
+
+
+@pytest.mark.postgres
+def test_wp206a_reliability_identity_collisions_never_cross_governed_boundaries(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, trust_id, readiness_id, actor = reliability_foundation(
+            session, f"wp206a-identity-{uuid4().hex[:8]}"
+        )
+        first_payload = reliability_payload(trust_id, readiness_id)
+        dataset = session.get(Dataset, first_payload.dataset_id)
+        assert dataset is not None
+        second_version = add_eligible_dataset_version(
+            session,
+            organization_id,
+            dataset.source_system_id,
+            dataset.id,
+            actor,
+            checksum="a" * 64,
+        )
+        first = reliability_execution_service.execute(
+            session, organization_id, first_payload, actor
+        )
+        second_payload = first_payload.model_copy(
+            update={
+                "dataset_version_id": second_version.id,
+                "correlation_id": f"wp206a-second-version-{uuid4().hex}",
+            }
+        )
+        second = reliability_execution_service.execute(
+            session, organization_id, second_payload, actor
+        )
+        assert first.id != second.id
+
+        other_dataset = DatasetService().create(
+            session,
+            organization_id,
+            DatasetCreate(
+                source_system_id=dataset.source_system_id,
+                name="WP-2.06A collision dataset",
+                code=f"wp206a-collision-{uuid4().hex[:8]}",
+                domain="maintenance",
+                dataset_type="time_series",
+            ),
+            actor,
+        )
+        other_version = add_eligible_dataset_version(
+            session,
+            organization_id,
+            dataset.source_system_id,
+            other_dataset.id,
+            actor,
+            checksum="a" * 64,
+        )
+        other_trust = TrustAssessment(
+            organization_id=organization_id,
+            dataset_id=other_dataset.id,
+            status="completed",
+            overall_score=95,
+            assessed_row_count=10,
+            passed_rule_count=3,
+        )
+        session.add(other_trust)
+        session.flush()
+        other_readiness = AnalyticalReadinessDecision(
+            organization_id=organization_id,
+            trust_assessment_id=other_trust.id,
+            analytical_level="reliability",
+            readiness_status="ready",
+            blocking_rule_codes=[],
+            warning_rule_codes=[],
+            explanation="WP-2.06A governed collision test.",
+        )
+        session.add(other_readiness)
+        session.commit()
+        other_payload = first_payload.model_copy(
+            update={
+                "dataset_id": other_dataset.id,
+                "dataset_version_id": other_version.id,
+                "trust_assessment_id": other_trust.id,
+                "readiness_assessment_id": other_readiness.id,
+                "correlation_id": f"wp206a-other-dataset-{uuid4().hex}",
+            }
+        )
+        other_execution = reliability_execution_service.execute(
+            session, organization_id, other_payload, actor
+        )
+        assert other_execution.id not in {first.id, second.id}
+
+        class ForcedGovernedCollisionService(ReliabilityExecutionService):
+            def _reproducibility_fingerprint(self, *args: object, **kwargs: object) -> str:
+                return "e" * 64
+
+        collision_service = ForcedGovernedCollisionService()
+        collision_first = collision_service.execute(
+            session,
+            organization_id,
+            first_payload.model_copy(
+                update={"correlation_id": f"wp206a-forced-first-{uuid4().hex}"}
+            ),
+            actor,
+        )
+        with pytest.raises(ReliabilityServiceError) as conflict:
+            collision_service.execute(
+                session,
+                organization_id,
+                second_payload.model_copy(
+                    update={"correlation_id": f"wp206a-forced-second-{uuid4().hex}"}
+                ),
+                actor,
+            )
+        assert conflict.value.code == "IDEMPOTENCY_CONFLICT"
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityExecution)
+                .where(
+                    ReliabilityExecution.organization_id == organization_id,
+                    ReliabilityExecution.reproducibility_fingerprint == "e" * 64,
+                )
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityMetric)
+                .where(ReliabilityMetric.reliability_execution_id == collision_first.id)
+            )
+            or 0
+        ) > 0
+
+        other_organization_id, _, _, _ = reliability_foundation(
+            session, f"wp206a-cross-tenant-{uuid4().hex[:8]}"
+        )
+        with pytest.raises(ReliabilityServiceError) as cross_tenant:
+            reliability_execution_service.execute(
+                session, other_organization_id, first_payload, actor
+            )
+        assert cross_tenant.value.code == "DATASET_NOT_FOUND"
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(ReliabilityExecution)
+                .where(ReliabilityExecution.organization_id == other_organization_id)
+            )
+            == 0
         )
