@@ -69,6 +69,8 @@ class StatisticalExecution(Base):
         Index("ix_statistical_execution_definition", "oikb_definition_version_id"),
         Index("ix_statistical_execution_fingerprint", "reproducibility_fingerprint"),
         Index("ix_statistical_execution_created", "created_at"),
+        Index("ix_statistical_execution_dataset_id", "dataset_id"),
+        Index("ix_statistical_execution_dataset_version_id", "dataset_version_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -102,6 +104,18 @@ class StatisticalExecution(Base):
     )
     readiness_assessment_id: Mapped[UUID] = mapped_column(
         ForeignKey("analytical_readiness_decisions.id", ondelete="RESTRICT")
+    )
+    dataset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("datasets.id", ondelete="RESTRICT"), nullable=True
+    )
+    dataset_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("dataset_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    ingestion_batch_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ingestion_batches.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_system_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("source_systems.id", ondelete="RESTRICT"), nullable=True
     )
     dataset_reference: Mapped[str] = mapped_column(String(255))
     dataset_fingerprint: Mapped[str] = mapped_column(String(64))

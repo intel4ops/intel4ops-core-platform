@@ -38,14 +38,15 @@ class ReliabilityObservationInput(BaseModel):
 
 
 class ReliabilityExecutionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     definition_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)+$")
     definition_version: str = Field(default="1.0.0", pattern=r"^[0-9]+(?:\.[0-9]+)*$")
     trust_assessment_id: UUID
     readiness_assessment_id: UUID
     orchestration_request_id: UUID | None = None
-    dataset_reference: str = Field(min_length=1, max_length=255)
-    dataset_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_lineage_reference: str = Field(min_length=1, max_length=500)
+    dataset_id: UUID
+    dataset_version_id: UUID
     asset_scope_reference: str = Field(min_length=1, max_length=255)
     asset_scope_type: str = Field(default="ASSET_GROUP", max_length=40)
     method_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
@@ -145,6 +146,10 @@ class ReliabilityExecutionRead(BaseModel):
     reliability_method_code: str
     reliability_method_version: str
     status: str
+    dataset_id: UUID | None
+    dataset_version_id: UUID | None
+    ingestion_batch_id: UUID | None
+    source_system_id: UUID | None
     dataset_reference: str
     exposure_basis: str
     exposure_unit: str

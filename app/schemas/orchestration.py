@@ -79,8 +79,7 @@ class OrchestrationCreate(BaseModel):
     )
     definition_version: str = Field(pattern=r"^[0-9]+(?:\.[0-9]+)*$", max_length=30)
     dataset_id: UUID
-    dataset_version_id: UUID | None = None
-    dataset_reference: str = Field(min_length=1, max_length=255)
+    dataset_version_id: UUID
     trust_assessment_id: UUID
     analytical_readiness_id: UUID
     requested_analytical_level: OrchestrationAnalyticalLevel | None = None
