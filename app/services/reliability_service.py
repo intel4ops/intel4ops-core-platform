@@ -36,6 +36,11 @@ from app.schemas.reliability import (
     ReliabilityExecutionCreate,
     ReliabilityReviewCreate,
 )
+from app.services.governed_provenance_service import (
+    GovernedDatasetProvenance,
+    GovernedProvenanceError,
+    governed_dataset_provenance_service,
+)
 
 
 class ReliabilityServiceError(ValueError):
@@ -80,11 +85,13 @@ class ReliabilityReadinessService:
         db: Session,
         organization_id: UUID,
         payload: ReliabilityExecutionCreate,
+        dataset_id: UUID,
     ) -> tuple[TrustAssessment, AnalyticalReadinessDecision]:
         trust = db.scalar(
             select(TrustAssessment).where(
                 TrustAssessment.id == payload.trust_assessment_id,
                 TrustAssessment.organization_id == organization_id,
+                TrustAssessment.dataset_id == dataset_id,
             )
         )
         if trust is None or trust.status != TrustAssessmentStatus.COMPLETED.value:
@@ -170,6 +177,7 @@ class ReliabilityExecutionService:
         lifecycle_fingerprint: str,
         inputs: list[dict[str, object]],
         package: str,
+        provenance: GovernedDatasetProvenance,
     ) -> str:
         return _hash(
             {
@@ -178,9 +186,7 @@ class ReliabilityExecutionService:
                 "asset_scope_type": payload.asset_scope_type,
                 "trust_assessment": payload.trust_assessment_id,
                 "orchestration_request": payload.orchestration_request_id,
-                "dataset_reference": payload.dataset_reference,
-                "dataset": payload.dataset_fingerprint,
-                "source_lineage_reference": payload.source_lineage_reference,
+                "governed_provenance": provenance.identity(),
                 "lifecycle": lifecycle_fingerprint,
                 "window": [payload.observation_window_start, payload.observation_window_end],
                 "exposure_unit": payload.exposure_unit,
@@ -197,11 +203,16 @@ class ReliabilityExecutionService:
         definition: OIKBDefinition,
         version: OIKBDefinitionVersion,
         package: str,
+        provenance: GovernedDatasetProvenance,
     ) -> ReliabilityExecution:
         if (
             existing.oikb_definition_id != definition.id
             or existing.oikb_definition_version_id != version.id
             or existing.execution_package_fingerprint != package
+            or existing.dataset_id != provenance.dataset_id
+            or existing.dataset_version_id != provenance.dataset_version_id
+            or existing.ingestion_batch_id != provenance.ingestion_batch_id
+            or existing.source_system_id != provenance.source_system_id
             or definition.stable_code == ""
             or version.semantic_version == ""
             or version.fingerprint == ""
@@ -220,7 +231,21 @@ class ReliabilityExecutionService:
         payload: ReliabilityExecutionCreate,
         actor: UUID,
     ) -> ReliabilityExecution:
-        _, readiness = self.readiness.validate(db, organization_id, payload)
+        try:
+            provenance = governed_dataset_provenance_service.resolve(
+                db,
+                organization_id,
+                payload.dataset_id,
+                payload.dataset_version_id,
+            )
+        except GovernedProvenanceError as exc:
+            raise ReliabilityServiceError(exc.code, str(exc), exc.http_status) from exc
+        _, readiness = self.readiness.validate(
+            db,
+            organization_id,
+            payload,
+            provenance.dataset_id,
+        )
         definition = db.scalar(
             select(OIKBDefinition).where(
                 OIKBDefinition.stable_code == payload.definition_code,
@@ -273,6 +298,7 @@ class ReliabilityExecutionService:
             lifecycle_fingerprint,
             inputs,
             package,
+            provenance,
         )
         existing = db.scalar(
             select(ReliabilityExecution).where(
@@ -281,7 +307,13 @@ class ReliabilityExecutionService:
             )
         )
         if existing is not None:
-            return self._verified_replay(existing, definition, version, package)
+            return self._verified_replay(
+                existing,
+                definition,
+                version,
+                package,
+                provenance,
+            )
         now = datetime.now(UTC)
         execution = ReliabilityExecution(
             organization_id=organization_id,
@@ -290,6 +322,10 @@ class ReliabilityExecutionService:
             oikb_definition_version_id=version.id,
             trust_assessment_id=payload.trust_assessment_id,
             readiness_assessment_id=payload.readiness_assessment_id,
+            dataset_id=provenance.dataset_id,
+            dataset_version_id=provenance.dataset_version_id,
+            ingestion_batch_id=provenance.ingestion_batch_id,
+            source_system_id=provenance.source_system_id,
             execution_package_fingerprint=package,
             reproducibility_fingerprint=reproducibility,
             asset_scope_reference=payload.asset_scope_reference,
@@ -299,10 +335,10 @@ class ReliabilityExecutionService:
             status=ReliabilityExecutionStatus.RUNNING.value,
             requested_by=actor,
             started_at=now,
-            dataset_reference=payload.dataset_reference,
-            dataset_fingerprint=payload.dataset_fingerprint,
+            dataset_reference=provenance.dataset_reference,
+            dataset_fingerprint=provenance.dataset_fingerprint,
             lifecycle_fingerprint=lifecycle_fingerprint,
-            source_lineage_reference=payload.source_lineage_reference,
+            source_lineage_reference=provenance.source_lineage_reference,
             observation_window_start=payload.observation_window_start,
             observation_window_end=payload.observation_window_end,
             exposure_basis=payload.exposure_basis,
@@ -329,7 +365,13 @@ class ReliabilityExecutionService:
             )
             if existing is None:
                 raise
-            return self._verified_replay(existing, definition, version, package)
+            return self._verified_replay(
+                existing,
+                definition,
+                version,
+                package,
+                provenance,
+            )
         try:
             result = method.execute(inputs)
         except ReliabilityMethodError as exc:

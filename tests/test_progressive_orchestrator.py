@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from conftest import IdentityState
 from fastapi.testclient import TestClient
+from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -50,6 +51,8 @@ from app.services.orchestration_service import (
 from app.services.organization_service import OrganizationService
 from app.services.source_system_service import SourceSystemService
 from app.services.trust_service import TrustAssessmentService
+
+_DATASET_VERSIONS: dict[UUID, UUID] = {}
 
 
 def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID]:
@@ -102,6 +105,7 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID]:
             },
         ),
     )
+    version = add_eligible_dataset_version(db, organization.id, source.id, dataset.id, actor)
     readiness = db.scalar(
         select(AnalyticalReadinessDecision).where(
             AnalyticalReadinessDecision.trust_assessment_id == assessment.id,
@@ -109,6 +113,7 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID]:
         )
     )
     assert readiness is not None
+    _DATASET_VERSIONS[dataset.id] = version.id
     return organization.id, dataset.id, assessment.id, readiness.id
 
 
@@ -127,7 +132,7 @@ def request(
         definition_code=definition_code,
         definition_version="1.0",
         dataset_id=dataset_id,
-        dataset_reference=f"dataset:{dataset_id}",
+        dataset_version_id=_DATASET_VERSIONS[dataset_id],
         trust_assessment_id=assessment_id,
         analytical_readiness_id=readiness_id,
         execution_type=execution_type,
@@ -148,6 +153,7 @@ def candidate(measured_value: str) -> CandidateFindingCreate:
         title="Governed arithmetic exception",
         summary="Synthetic orchestration publication.",
         domain_code="operations",
+        dataset_reference="synthetic-dataset",
         measured_value=Decimal(measured_value),
         measured_value_type="currency",
         measured_currency="USD",
@@ -157,7 +163,6 @@ def candidate(measured_value: str) -> CandidateFindingCreate:
         affected_record_count=1,
         occurrence_start=datetime(2026, 7, 1, tzinfo=UTC),
         occurrence_end=datetime(2026, 7, 31, tzinfo=UTC),
-        dataset_reference="synthetic-dataset",
         evidence_policy_code="WP209",
         evidence_policy_version="1.0",
         evidence=[

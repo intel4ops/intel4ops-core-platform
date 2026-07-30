@@ -1,11 +1,12 @@
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import Session
-from test_statistical_service import statistical_foundation
+from test_statistical_service import _GOVERNED_DATASETS, statistical_foundation
 
 from app.schemas.intelligence import ExecutionType
 from app.schemas.orchestration import OrchestrationAnalyticalLevel, OrchestrationCreate
-from app.services.orchestration_service import OrchestrationService
+from app.services.orchestration_service import OrchestrationError, OrchestrationService
 
 
 def test_statistical_engine_registration_and_governed_orchestration(db: Session) -> None:
@@ -20,7 +21,7 @@ def test_statistical_engine_registration_and_governed_orchestration(db: Session)
             definition_code="SHARED.STATISTICS.ROBUST_OUTLIER",
             definition_version="1.0.0",
             dataset_id=dataset_id,
-            dataset_reference=f"dataset:{dataset_id}",
+            dataset_version_id=_GOVERNED_DATASETS[trust_id][1],
             trust_assessment_id=trust_id,
             analytical_readiness_id=readiness_id,
             requested_analytical_level=OrchestrationAnalyticalLevel.STATISTICAL,
@@ -57,3 +58,30 @@ def test_statistical_engine_registration_and_governed_orchestration(db: Session)
     )
     assert statistical.capability_code == "bounded_statistical_intelligence"
     assert statistical.analytical_level == "statistical"
+
+
+def test_statistical_adapter_validation_uses_governed_error_contract(db: Session) -> None:
+    organization_id, dataset_id, trust_id, readiness_id, actor = statistical_foundation(
+        db, "statistical-validation-envelope"
+    )
+    with pytest.raises(OrchestrationError) as captured:
+        OrchestrationService().orchestrate(
+            db,
+            organization_id,
+            OrchestrationCreate(
+                definition_code="SHARED.STATISTICS.ROBUST_OUTLIER",
+                definition_version="1.0.0",
+                dataset_id=dataset_id,
+                dataset_version_id=_GOVERNED_DATASETS[trust_id][1],
+                trust_assessment_id=trust_id,
+                analytical_readiness_id=readiness_id,
+                requested_analytical_level=OrchestrationAnalyticalLevel.STATISTICAL,
+                records=[{"value": {"invalid": "numeric-input"}}],
+                parameters={"deviation_threshold": 3.5},
+                execution_type=ExecutionType.CALCULATION,
+                correlation_id=f"statistical-invalid-{uuid4()}",
+                idempotency_key=f"statistical-invalid-{uuid4()}",
+            ),
+            actor,
+        )
+    assert captured.value.code == "INVALID_ENGINE_INPUT"

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy.orm import Session
 
 from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
@@ -25,6 +26,8 @@ from app.services.forecasting_service import (
 from app.services.ingestion_service import DatasetService
 from app.services.organization_service import OrganizationService
 from app.services.source_system_service import SourceSystemService
+
+_GOVERNED_DATASETS: dict[UUID, tuple[UUID, UUID]] = {}
 
 
 def foundation(db: Session, slug: str = "forecast-service") -> tuple[UUID, UUID, UUID, UUID]:
@@ -64,6 +67,9 @@ def foundation(db: Session, slug: str = "forecast-service") -> tuple[UUID, UUID,
             default_currency="USD",
         ),
         actor,
+    )
+    version = add_eligible_dataset_version(
+        db, organization.id, source.id, dataset.id, actor, checksum="d" * 64
     )
     trust = TrustAssessment(
         organization_id=organization.id,
@@ -124,6 +130,7 @@ def foundation(db: Session, slug: str = "forecast-service") -> tuple[UUID, UUID,
         )
     )
     db.commit()
+    _GOVERNED_DATASETS[trust.id] = (dataset.id, version.id)
     return organization.id, trust.id, readiness.id, actor
 
 
@@ -131,13 +138,13 @@ def payload(
     trust_id: UUID, readiness_id: UUID, fingerprint: str = "d" * 64
 ) -> ForecastExecutionCreate:
     start = datetime(2025, 1, 1, tzinfo=UTC)
+    dataset_id, dataset_version_id = _GOVERNED_DATASETS.get(trust_id, (uuid4(), uuid4()))
     return ForecastExecutionCreate(
         definition_code="SHARED.FORECASTING.UNIVARIATE_DEMAND",
         trust_assessment_id=trust_id,
         readiness_assessment_id=readiness_id,
-        dataset_reference="dataset:forecast-history",
-        dataset_fingerprint=fingerprint,
-        source_lineage_reference="lineage:forecast-history",
+        dataset_id=dataset_id,
+        dataset_version_id=dataset_version_id,
         target_code="completed_jobs",
         forecast_horizon=3,
         candidate_methods=["NAIVE", "HOLT_LINEAR_TREND"],
@@ -204,7 +211,8 @@ def test_scenario_preserves_baseline_and_actuals_are_auditable(db: Session) -> N
         ForecastActualCreate(
             actual_reference="dataset:actuals:period-1",
             actual_value=float(point.point_forecast) + 2,
-            actual_dataset_fingerprint="a" * 64,
+            dataset_id=execution.dataset_id,
+            dataset_version_id=execution.dataset_version_id,
         ),
     )
     assert actual.actual_status == "evaluated"

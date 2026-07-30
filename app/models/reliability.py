@@ -48,6 +48,8 @@ class ReliabilityExecution(Base):
         ),
         Index("ix_reliability_execution_org_status", "organization_id", "status"),
         Index("ix_reliability_execution_asset_scope", "organization_id", "asset_scope_reference"),
+        Index("ix_reliability_execution_dataset_id", "dataset_id"),
+        Index("ix_reliability_execution_dataset_version_id", "dataset_version_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -67,6 +69,18 @@ class ReliabilityExecution(Base):
     )
     readiness_assessment_id: Mapped[UUID] = mapped_column(
         ForeignKey("analytical_readiness_decisions.id", ondelete="RESTRICT")
+    )
+    dataset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("datasets.id", ondelete="RESTRICT"), nullable=True
+    )
+    dataset_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("dataset_versions.id", ondelete="RESTRICT"), nullable=True
+    )
+    ingestion_batch_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ingestion_batches.id", ondelete="RESTRICT"), nullable=True
+    )
+    source_system_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("source_systems.id", ondelete="RESTRICT"), nullable=True
     )
     execution_package_fingerprint: Mapped[str] = mapped_column(String(64))
     reproducibility_fingerprint: Mapped[str] = mapped_column(String(64))

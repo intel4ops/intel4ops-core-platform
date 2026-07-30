@@ -69,10 +69,18 @@ def test_forecasting_api_execution_methods_evidence_scenario_and_actual(
         json={
             "actual_reference": "dataset:actual:period-1",
             "actual_value": baseline[0]["point_forecast"],
-            "actual_dataset_fingerprint": "8" * 64,
+            "dataset_id": str(request.dataset_id),
+            "dataset_version_id": str(request.dataset_version_id),
         },
     )
     assert actual.status_code == 200
+    legacy_payload = request.model_dump(mode="json")
+    legacy_payload["dataset_reference"] = "caller-controlled-reference"
+    rejected = client.post(
+        f"/api/v1/organizations/{organization_id}/forecasts/executions",
+        json=legacy_payload,
+    )
+    assert rejected.status_code == 422
     accuracy = client.get(
         f"/api/v1/organizations/{organization_id}/forecasts/executions/{execution_id}/accuracy"
     )
