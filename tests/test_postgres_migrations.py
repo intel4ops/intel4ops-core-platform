@@ -30,7 +30,7 @@ from app.models.entities import (
     OrganizationMembership,
 )
 from app.models.forecasting import ForecastExecution
-from app.models.ingestion import Dataset
+from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
 from app.models.orchestration import IntelligenceOrchestrationRequest
 from app.models.reliability import (
     ReliabilityExecution,
@@ -2499,6 +2499,38 @@ def test_wp206a_reliability_identity_collisions_never_cross_governed_boundaries(
             actor,
             checksum="a" * 64,
         )
+        first_version = session.get(DatasetVersion, first_payload.dataset_version_id)
+        assert first_version is not None
+        first_batch = session.get(IngestionBatch, first_version.ingestion_batch_id)
+        assert first_batch is not None
+        first_batch.status = "processing"
+        session.commit()
+        with pytest.raises(ReliabilityServiceError) as batch_ineligible:
+            reliability_execution_service.execute(session, organization_id, first_payload, actor)
+        assert batch_ineligible.value.code == "INGESTION_BATCH_NOT_ELIGIBLE"
+        first_batch.status = "completed"
+        session.commit()
+
+        mismatched_source = SourceSystemService().create(
+            session,
+            organization_id,
+            SourceSystemCreate(
+                name="WP-2.06A mismatched source",
+                code=f"wp206a-mismatch-{uuid4().hex[:8]}",
+                system_type="eam",
+                integration_method="api",
+            ),
+            actor,
+        )
+        mismatched_source.status = "active"
+        original_source_id = dataset.source_system_id
+        dataset.source_system_id = mismatched_source.id
+        session.commit()
+        with pytest.raises(ReliabilityServiceError) as source_mismatch:
+            reliability_execution_service.execute(session, organization_id, first_payload, actor)
+        assert source_mismatch.value.code == "SOURCE_SYSTEM_MISMATCH"
+        dataset.source_system_id = original_source_id
+        session.commit()
         first = reliability_execution_service.execute(
             session, organization_id, first_payload, actor
         )

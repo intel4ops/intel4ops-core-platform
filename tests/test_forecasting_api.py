@@ -74,6 +74,13 @@ def test_forecasting_api_execution_methods_evidence_scenario_and_actual(
         },
     )
     assert actual.status_code == 200
+    legacy_payload = request.model_dump(mode="json")
+    legacy_payload["dataset_reference"] = "caller-controlled-reference"
+    rejected = client.post(
+        f"/api/v1/organizations/{organization_id}/forecasts/executions",
+        json=legacy_payload,
+    )
+    assert rejected.status_code == 422
     accuracy = client.get(
         f"/api/v1/organizations/{organization_id}/forecasts/executions/{execution_id}/accuracy"
     )
