@@ -915,6 +915,41 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
             )
             == 0
         )
+    provenance_columns = {
+        "dataset_id",
+        "dataset_version_id",
+        "ingestion_batch_id",
+        "source_system_id",
+    }
+    for table_name in (
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+        "forecast_actuals",
+    ):
+        assert provenance_columns <= {
+            column["name"] for column in inspect(postgres_engine).get_columns(table_name)
+        }
+    command.downgrade(config, "20260728_0023")
+    for table_name in (
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+        "forecast_actuals",
+    ):
+        assert provenance_columns.isdisjoint(
+            {column["name"] for column in inspect(postgres_engine).get_columns(table_name)}
+        )
+    command.upgrade(config, "head")
+    for table_name in (
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+        "forecast_actuals",
+    ):
+        assert provenance_columns <= {
+            column["name"] for column in inspect(postgres_engine).get_columns(table_name)
+        }
     command.downgrade(config, "20260728_0022")
     foundation_inspector = inspect(postgres_engine)
     assert {"idempotency_key", "request_fingerprint"}.isdisjoint(
@@ -1846,6 +1881,11 @@ def test_orchestration_uuid_jsonb_idempotency_and_tenant_scope_on_postgres(
             ),
             actor,
         )
+        from governed_provenance_helpers import add_eligible_dataset_version
+
+        dataset_version = add_eligible_dataset_version(
+            session, organizations[0].id, source.id, dataset.id, actor
+        )
         assessment = TrustAssessmentService().create_and_execute(
             session,
             organizations[0].id,
@@ -1870,7 +1910,7 @@ def test_orchestration_uuid_jsonb_idempotency_and_tenant_scope_on_postgres(
             definition_code="sum",
             definition_version="1.0",
             dataset_id=dataset.id,
-            dataset_reference=f"{dataset.code}@postgres",
+            dataset_version_id=dataset_version.id,
             trust_assessment_id=assessment.id,
             analytical_readiness_id=readiness.id,
             execution_type="calculation",

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from conftest import IdentityState
 from fastapi.testclient import TestClient
+from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,8 @@ from app.services.ingestion_service import DatasetService
 from app.services.organization_service import OrganizationService
 from app.services.source_system_service import SourceSystemService
 from app.services.statistical_service import statistical_execution_service
+
+_GOVERNED_DATASETS: dict[UUID, tuple[UUID, UUID]] = {}
 
 
 def statistical_foundation(
@@ -66,6 +69,9 @@ def statistical_foundation(
             default_currency="USD",
         ),
         actor,
+    )
+    dataset_version = add_eligible_dataset_version(
+        db, organization.id, source.id, dataset.id, actor, checksum="b" * 64
     )
     trust = TrustAssessment(
         organization_id=organization.id,
@@ -156,6 +162,7 @@ def statistical_foundation(
         )
     )
     db.commit()
+    _GOVERNED_DATASETS[trust.id] = (dataset.id, dataset_version.id)
     return organization.id, dataset.id, trust.id, readiness.id, actor
 
 
@@ -166,14 +173,14 @@ def execution_payload(
     key: str,
     known_event: bool = False,
 ) -> StatisticalExecutionCreate:
+    dataset_id, dataset_version_id = _GOVERNED_DATASETS[trust_id]
     return StatisticalExecutionCreate(
         definition_code="SHARED.STATISTICS.ROBUST_OUTLIER",
         definition_version="1.0.0",
         trust_assessment_id=trust_id,
         readiness_assessment_id=readiness_id,
-        dataset_reference="dataset:statistical-observations",
-        dataset_fingerprint="b" * 64,
-        source_lineage_reference="lineage:statistical-observations",
+        dataset_id=dataset_id,
+        dataset_version_id=dataset_version_id,
         observations=[
             StatisticalObservationInput(
                 value=value,

@@ -2,9 +2,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.ingestion import Dataset, DatasetVersion
 from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
 from app.models.reliability import ReliabilityExecution
 from app.models.trust import AnalyticalReadinessDecision, TrustAssessment
@@ -23,6 +25,8 @@ from app.services.reliability_service import (
     reliability_execution_service,
 )
 from app.services.source_system_service import SourceSystemService
+
+_GOVERNED_DATASETS: dict[UUID, tuple[UUID, UUID]] = {}
 
 
 def add_reliability_definition(
@@ -114,6 +118,7 @@ def reliability_foundation(
         ),
         actor,
     )
+    version = add_eligible_dataset_version(db, organization.id, source.id, dataset.id, actor)
     trust = TrustAssessment(
         organization_id=organization.id,
         dataset_id=dataset.id,
@@ -140,6 +145,7 @@ def reliability_foundation(
         actor,
         stable_code="SHARED.RELIABILITY.BASIC_ASSET_RELIABILITY",
     )
+    _GOVERNED_DATASETS[trust.id] = (dataset.id, version.id)
     return organization.id, trust.id, readiness.id, actor
 
 
@@ -151,13 +157,13 @@ def reliability_payload(
     dataset_fingerprint: str = "d" * 64,
 ) -> ReliabilityExecutionCreate:
     observed = method_code == "WEIBULL_TWO_PARAMETER"
+    dataset_id, dataset_version_id = _GOVERNED_DATASETS[trust_id]
     return ReliabilityExecutionCreate(
         definition_code="SHARED.RELIABILITY.BASIC_ASSET_RELIABILITY",
         trust_assessment_id=trust_id,
         readiness_assessment_id=readiness_id,
-        dataset_reference="dataset:reliability-history",
-        dataset_fingerprint=dataset_fingerprint,
-        source_lineage_reference="lineage:reliability-history",
+        dataset_id=dataset_id,
+        dataset_version_id=dataset_version_id,
         asset_scope_reference="fleet:pumps",
         method_code=method_code,
         observation_window_start=datetime(2026, 1, 1, tzinfo=UTC),
@@ -197,10 +203,44 @@ def test_execution_is_reproducible_tenant_scoped_and_requires_human_review(
 
     assert execution.status == "succeeded"
     assert repeated.id == execution.id
+    assert execution.dataset_id == request.dataset_id
+    assert execution.dataset_version_id == request.dataset_version_id
+    assert execution.ingestion_batch_id is not None
+    assert execution.source_system_id is not None
+    assert execution.dataset_fingerprint == "a" * 64
+    assert str(request.dataset_version_id) in execution.source_lineage_reference
     assert execution.explanation["human_review_required"] is True
     assert execution.explanation["recommended_action_category"] == "HUMAN_REVIEW"
     with pytest.raises(ReliabilityServiceError, match="not found"):
         reliability_execution_service.get(db, uuid4(), execution.id)
+
+
+def test_governed_provenance_rejects_cross_tenant_and_ineligible_versions(
+    db: Session,
+) -> None:
+    organization_id, trust_id, readiness_id, actor = reliability_foundation(
+        db, "reliability-governed"
+    )
+    other_organization_id, other_trust_id, _, _ = reliability_foundation(
+        db, "reliability-governed-other"
+    )
+    request = reliability_payload(trust_id, readiness_id)
+    other_dataset_id, other_version_id = _GOVERNED_DATASETS[other_trust_id]
+    request.dataset_id = other_dataset_id
+    request.dataset_version_id = other_version_id
+    with pytest.raises(ReliabilityServiceError, match="not eligible"):
+        reliability_execution_service.execute(db, organization_id, request, actor)
+
+    dataset_id, version_id = _GOVERNED_DATASETS[trust_id]
+    request.dataset_id = dataset_id
+    request.dataset_version_id = version_id
+    version = db.get(DatasetVersion, version_id)
+    assert version is not None
+    version.status = "quarantined"
+    db.commit()
+    with pytest.raises(ReliabilityServiceError, match="not execution eligible"):
+        reliability_execution_service.execute(db, organization_id, request, actor)
+    assert organization_id != other_organization_id
 
 
 def test_readiness_level_status_and_tenant_are_enforced(db: Session) -> None:
@@ -222,7 +262,7 @@ def test_readiness_level_status_and_tenant_are_enforced(db: Session) -> None:
     with pytest.raises(ReliabilityServiceError, match="Critical lineage defect"):
         reliability_execution_service.execute(db, organization_id, request, actor)
 
-    with pytest.raises(ReliabilityServiceError, match="trust assessment"):
+    with pytest.raises(ReliabilityServiceError, match="dataset is not eligible"):
         reliability_execution_service.execute(db, uuid4(), request, actor)
 
 
@@ -253,14 +293,27 @@ def test_censored_weibull_fails_closed_and_records_failed_execution(db: Session)
     assert failed.failure_code == "METHOD_REJECTED"
 
 
-def test_changed_lineage_context_does_not_replay_prior_execution(db: Session) -> None:
+def test_changed_governed_dataset_version_does_not_replay_prior_execution(
+    db: Session,
+) -> None:
     organization_id, trust_id, readiness_id, actor = reliability_foundation(
         db, "reliability-fingerprint"
     )
     baseline = reliability_payload(trust_id, readiness_id, dataset_fingerprint="a" * 64)
     first = reliability_execution_service.execute(db, organization_id, baseline, actor)
+    dataset_id, _ = _GOVERNED_DATASETS[trust_id]
+    dataset = db.get(Dataset, dataset_id)
+    assert dataset is not None
+    changed_version = add_eligible_dataset_version(
+        db,
+        organization_id,
+        dataset.source_system_id,
+        dataset.id,
+        actor,
+        checksum="b" * 64,
+    )
     changed = reliability_payload(trust_id, readiness_id, dataset_fingerprint="a" * 64)
-    changed.source_lineage_reference = "lineage:corrected-history"
+    changed.dataset_version_id = changed_version.id
 
     second = reliability_execution_service.execute(db, organization_id, changed, actor)
 

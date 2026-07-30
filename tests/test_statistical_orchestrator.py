@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
-from test_statistical_service import statistical_foundation
+from test_statistical_service import _GOVERNED_DATASETS, statistical_foundation
 
 from app.schemas.intelligence import ExecutionType
 from app.schemas.orchestration import OrchestrationAnalyticalLevel, OrchestrationCreate
@@ -20,7 +20,7 @@ def test_statistical_engine_registration_and_governed_orchestration(db: Session)
             definition_code="SHARED.STATISTICS.ROBUST_OUTLIER",
             definition_version="1.0.0",
             dataset_id=dataset_id,
-            dataset_reference=f"dataset:{dataset_id}",
+            dataset_version_id=_GOVERNED_DATASETS[trust_id][1],
             trust_assessment_id=trust_id,
             analytical_readiness_id=readiness_id,
             requested_analytical_level=OrchestrationAnalyticalLevel.STATISTICAL,

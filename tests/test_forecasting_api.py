@@ -69,7 +69,8 @@ def test_forecasting_api_execution_methods_evidence_scenario_and_actual(
         json={
             "actual_reference": "dataset:actual:period-1",
             "actual_value": baseline[0]["point_forecast"],
-            "actual_dataset_fingerprint": "8" * 64,
+            "dataset_id": str(request.dataset_id),
+            "dataset_version_id": str(request.dataset_version_id),
         },
     )
     assert actual.status_code == 200
