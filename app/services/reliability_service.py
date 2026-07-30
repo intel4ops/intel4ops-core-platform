@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.engines.reliability_engine import (
@@ -45,8 +46,15 @@ class ReliabilityServiceError(ValueError):
 
 
 def _hash(value: object) -> str:
+    """Return SHA-256 over canonical UTF-8 JSON with sorted keys and compact separators."""
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
     ).hexdigest()
 
 
@@ -114,7 +122,10 @@ class ReliabilityExecutionService:
     def evaluate(self, payload: ReliabilityEvaluateRequest) -> ReliabilityEvaluationRead:
         try:
             method = self.registry.get(payload.method_code, payload.method_version)
-            result = method.execute(payload.observations)
+            inputs = [
+                item.model_dump(exclude_none=True, mode="json") for item in payload.observations
+            ]
+            result = method.execute(inputs)
         except ReliabilityMethodError as exc:
             raise ReliabilityServiceError("METHOD_REJECTED", str(exc)) from exc
         return ReliabilityEvaluationRead(
@@ -125,6 +136,82 @@ class ReliabilityExecutionService:
             diagnostics=result.diagnostics,
             limitations=list(result.limitations),
         )
+
+    def _execution_package_fingerprint(
+        self,
+        definition: OIKBDefinition,
+        version: OIKBDefinitionVersion,
+        payload: ReliabilityExecutionCreate,
+    ) -> str:
+        return _hash(
+            {
+                "governed_definition": {
+                    "stable_code": definition.stable_code,
+                    "definition_id": definition.id,
+                    "semantic_version": version.semantic_version,
+                    "version_id": version.id,
+                    "version_fingerprint": version.fingerprint,
+                },
+                "method": [payload.method_code, payload.method_version],
+                "failure_definition": [
+                    payload.failure_definition_code,
+                    payload.failure_definition_version,
+                ],
+                "exposure_basis": payload.exposure_basis,
+                "censoring_policy": payload.censoring_policy,
+            }
+        )
+
+    def _reproducibility_fingerprint(
+        self,
+        organization_id: UUID,
+        payload: ReliabilityExecutionCreate,
+        readiness: AnalyticalReadinessDecision,
+        lifecycle_fingerprint: str,
+        inputs: list[dict[str, object]],
+        package: str,
+    ) -> str:
+        return _hash(
+            {
+                "organization": organization_id,
+                "asset_scope": payload.asset_scope_reference,
+                "asset_scope_type": payload.asset_scope_type,
+                "trust_assessment": payload.trust_assessment_id,
+                "orchestration_request": payload.orchestration_request_id,
+                "dataset_reference": payload.dataset_reference,
+                "dataset": payload.dataset_fingerprint,
+                "source_lineage_reference": payload.source_lineage_reference,
+                "lifecycle": lifecycle_fingerprint,
+                "window": [payload.observation_window_start, payload.observation_window_end],
+                "exposure_unit": payload.exposure_unit,
+                "package": package,
+                "readiness": readiness.id,
+                "inputs": inputs,
+                "engine": self.engine_version,
+            }
+        )
+
+    @staticmethod
+    def _verified_replay(
+        existing: ReliabilityExecution,
+        definition: OIKBDefinition,
+        version: OIKBDefinitionVersion,
+        package: str,
+    ) -> ReliabilityExecution:
+        if (
+            existing.oikb_definition_id != definition.id
+            or existing.oikb_definition_version_id != version.id
+            or existing.execution_package_fingerprint != package
+            or definition.stable_code == ""
+            or version.semantic_version == ""
+            or version.fingerprint == ""
+        ):
+            raise ReliabilityServiceError(
+                "IDEMPOTENCY_CONFLICT",
+                "Existing reliability execution does not match governed definition identity",
+                409,
+            )
+        return existing
 
     def execute(
         self,
@@ -174,30 +261,18 @@ class ReliabilityExecutionService:
             raise ReliabilityServiceError("INSUFFICIENT_EXPOSURE", "Minimum exposure not met")
         if payload.exposure_basis not in method.metadata.supported_exposure_bases:
             raise ReliabilityServiceError("INVALID_EXPOSURE_BASIS", "Exposure basis is unsupported")
-        package = _hash(
-            {
-                "definition": version.fingerprint,
-                "method": [payload.method_code, payload.method_version],
-                "failure_definition": [
-                    payload.failure_definition_code,
-                    payload.failure_definition_version,
-                ],
-                "exposure_basis": payload.exposure_basis,
-                "censoring_policy": payload.censoring_policy,
-            }
+        package = self._execution_package_fingerprint(
+            definition,
+            version,
+            payload,
         )
-        reproducibility = _hash(
-            {
-                "organization": organization_id,
-                "asset_scope": payload.asset_scope_reference,
-                "dataset": payload.dataset_fingerprint,
-                "lifecycle": lifecycle_fingerprint,
-                "window": [payload.observation_window_start, payload.observation_window_end],
-                "package": package,
-                "readiness": readiness.id,
-                "inputs": inputs,
-                "engine": self.engine_version,
-            }
+        reproducibility = self._reproducibility_fingerprint(
+            organization_id,
+            payload,
+            readiness,
+            lifecycle_fingerprint,
+            inputs,
+            package,
         )
         existing = db.scalar(
             select(ReliabilityExecution).where(
@@ -206,7 +281,7 @@ class ReliabilityExecutionService:
             )
         )
         if existing is not None:
-            return existing
+            return self._verified_replay(existing, definition, version, package)
         now = datetime.now(UTC)
         execution = ReliabilityExecution(
             organization_id=organization_id,
@@ -242,7 +317,19 @@ class ReliabilityExecutionService:
             limitations=[],
         )
         db.add(execution)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(
+                select(ReliabilityExecution).where(
+                    ReliabilityExecution.organization_id == organization_id,
+                    ReliabilityExecution.reproducibility_fingerprint == reproducibility,
+                )
+            )
+            if existing is None:
+                raise
+            return self._verified_replay(existing, definition, version, package)
         try:
             result = method.execute(inputs)
         except ReliabilityMethodError as exc:
