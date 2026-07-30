@@ -185,6 +185,15 @@ def test_execution_schema_enforces_censoring_window_and_asset_class() -> None:
         "correlation_id": "corr-1",
     }
     assert ReliabilityExecutionCreate.model_validate(base).observations[0].event_observed
+    for legacy_field, value in {
+        "dataset_reference": "dataset:test",
+        "dataset_fingerprint": "a" * 64,
+        "source_lineage_reference": "lineage:test",
+        "ingestion_batch_id": "10000000-0000-0000-0000-000000000005",
+        "source_system_id": "10000000-0000-0000-0000-000000000006",
+    }.items():
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            ReliabilityExecutionCreate.model_validate({**base, legacy_field: value})
     invalid = dict(base)
     invalid["observations"] = [
         {

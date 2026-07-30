@@ -11,6 +11,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.engines.forecasting_engine import (
@@ -445,7 +446,29 @@ class ForecastExecutionService:
             ],
         )
         db.add(execution)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(
+                select(ForecastExecution).where(
+                    ForecastExecution.organization_id == organization_id,
+                    ForecastExecution.reproducibility_fingerprint == fingerprint,
+                )
+            )
+            if (
+                existing is None
+                or existing.dataset_id != provenance.dataset_id
+                or existing.dataset_version_id != provenance.dataset_version_id
+                or existing.ingestion_batch_id != provenance.ingestion_batch_id
+                or existing.source_system_id != provenance.source_system_id
+            ):
+                raise ForecastingServiceError(
+                    "IDEMPOTENCY_CONFLICT",
+                    "Forecast identity conflicts with persisted governed inputs",
+                    409,
+                )
+            return existing
         candidate_rows: list[ForecastCandidate] = []
         results: dict[str, tuple[list[float], list[float], dict[str, float | None]]] = {}
         for code in payload.candidate_methods:

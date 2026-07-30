@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.engines.statistical_engine import (
@@ -384,7 +385,15 @@ class StatisticalExecutionService:
             }
         )
         if existing is not None:
-            if existing.reproducibility_fingerprint != request_fingerprint:
+            if (
+                existing.reproducibility_fingerprint != request_fingerprint
+                or existing.dataset_id != provenance.dataset_id
+                or existing.dataset_version_id != provenance.dataset_version_id
+                or existing.ingestion_batch_id != provenance.ingestion_batch_id
+                or existing.source_system_id != provenance.source_system_id
+                or existing.trust_assessment_id != payload.trust_assessment_id
+                or existing.readiness_assessment_id != payload.readiness_assessment_id
+            ):
                 raise StatisticalServiceError(
                     "IDEMPOTENCY_CONFLICT",
                     "Idempotency key is already bound to different immutable inputs",
@@ -446,7 +455,30 @@ class StatisticalExecutionService:
             ],
         )
         db.add(execution)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(
+                select(StatisticalExecution).where(
+                    StatisticalExecution.organization_id == organization_id,
+                    StatisticalExecution.idempotency_key == payload.idempotency_key,
+                )
+            )
+            if (
+                existing is None
+                or existing.reproducibility_fingerprint != request_fingerprint
+                or existing.dataset_id != provenance.dataset_id
+                or existing.dataset_version_id != provenance.dataset_version_id
+                or existing.ingestion_batch_id != provenance.ingestion_batch_id
+                or existing.source_system_id != provenance.source_system_id
+            ):
+                raise StatisticalServiceError(
+                    "IDEMPOTENCY_CONFLICT",
+                    "Idempotency key is already bound to different immutable inputs",
+                    http_status=409,
+                )
+            return existing
         try:
             self._step(db, execution, 1, "governance", "completed", "Active OIKB package resolved")
             readiness_error = self._readiness(

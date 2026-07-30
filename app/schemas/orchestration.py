@@ -73,6 +73,8 @@ class AnalyticalOutputReference(BaseModel):
 
 
 class OrchestrationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     definition_code: str = Field(
         pattern=r"^(?:[a-z][a-z0-9_]*|[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)+)$",
         max_length=100,
