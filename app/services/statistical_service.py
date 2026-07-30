@@ -55,6 +55,11 @@ from app.schemas.statistics import (
     StatisticalExecutionCreate,
     StatisticalMethodRead,
 )
+from app.services.governed_provenance_service import (
+    GovernedDatasetProvenance,
+    GovernedProvenanceError,
+    governed_dataset_provenance_service,
+)
 from app.services.oikb_service import (
     execution_package_export_service,
     knowledge_resolution_service,
@@ -118,7 +123,7 @@ class BaselineService:
         variance = statistics.variance(values) if len(values) > 1 else 0.0
         baseline_contract = {
             "baseline_type": baseline_type,
-            "dataset_fingerprint": payload.dataset_fingerprint,
+            "dataset_fingerprint": execution.dataset_fingerprint,
             "values_fingerprint": _hash(values),
             "time_window": [
                 min(timestamps) if timestamps else None,
@@ -359,6 +364,12 @@ class StatisticalExecutionService:
         payload: StatisticalExecutionCreate,
         actor_user_id: UUID,
     ) -> StatisticalExecution:
+        try:
+            provenance = governed_dataset_provenance_service.resolve(
+                db, organization_id, payload.dataset_id, payload.dataset_version_id
+            )
+        except GovernedProvenanceError as exc:
+            raise StatisticalServiceError(exc.code, str(exc), http_status=exc.http_status) from exc
         existing = db.scalar(
             select(StatisticalExecution).where(
                 StatisticalExecution.organization_id == organization_id,
@@ -369,6 +380,7 @@ class StatisticalExecutionService:
             {
                 "organization_id": organization_id,
                 "payload": payload.model_dump(mode="json"),
+                "provenance": provenance.identity(),
             }
         )
         if existing is not None:
@@ -416,9 +428,13 @@ class StatisticalExecutionService:
             requested_by=actor_user_id,
             trust_assessment_id=payload.trust_assessment_id,
             readiness_assessment_id=payload.readiness_assessment_id,
-            dataset_reference=payload.dataset_reference,
-            dataset_fingerprint=payload.dataset_fingerprint,
-            source_lineage_reference=payload.source_lineage_reference,
+            dataset_id=provenance.dataset_id,
+            dataset_version_id=provenance.dataset_version_id,
+            ingestion_batch_id=provenance.ingestion_batch_id,
+            source_system_id=provenance.source_system_id,
+            dataset_reference=provenance.dataset_reference,
+            dataset_fingerprint=provenance.dataset_fingerprint,
+            source_lineage_reference=provenance.source_lineage_reference,
             parameter_snapshot=dict(payload.parameters),
             engine_version=ENGINE_VERSION,
             correlation_id=payload.correlation_id,
@@ -438,6 +454,7 @@ class StatisticalExecutionService:
                 organization_id,
                 payload.trust_assessment_id,
                 payload.readiness_assessment_id,
+                provenance,
             )
             if readiness_error is not None:
                 execution.status = readiness_error[0].value
@@ -589,6 +606,7 @@ class StatisticalExecutionService:
         organization_id: UUID,
         trust_assessment_id: UUID,
         readiness_assessment_id: UUID,
+        provenance: GovernedDatasetProvenance,
     ) -> tuple[StatisticalExecutionStatus, str] | None:
         trust = db.scalar(
             select(TrustAssessment).where(
@@ -596,10 +614,15 @@ class StatisticalExecutionService:
                 TrustAssessment.organization_id == organization_id,
             )
         )
-        if trust is None or trust.status not in {
-            TrustAssessmentStatus.COMPLETED.value,
-            TrustAssessmentStatus.COMPLETED_WITH_WARNINGS.value,
-        }:
+        if (
+            trust is None
+            or trust.dataset_id != provenance.dataset_id
+            or trust.status
+            not in {
+                TrustAssessmentStatus.COMPLETED.value,
+                TrustAssessmentStatus.COMPLETED_WITH_WARNINGS.value,
+            }
+        ):
             return StatisticalExecutionStatus.BLOCKED, "Trust assessment is not eligible"
         readiness = db.scalar(
             select(AnalyticalReadinessDecision).where(

@@ -47,6 +47,10 @@ from app.schemas.forecasting import (
     ForecastRevisionCreate,
     ForecastScenarioCreate,
 )
+from app.services.governed_provenance_service import (
+    GovernedProvenanceError,
+    governed_dataset_provenance_service,
+)
 
 
 class ForecastingServiceError(ValueError):
@@ -344,8 +348,21 @@ class ForecastExecutionService:
     def execute(
         self, db: Session, organization_id: UUID, payload: ForecastExecutionCreate, actor: UUID
     ) -> ForecastExecution:
+        try:
+            provenance = governed_dataset_provenance_service.resolve(
+                db, organization_id, payload.dataset_id, payload.dataset_version_id
+            )
+        except GovernedProvenanceError as exc:
+            raise ForecastingServiceError(exc.code, str(exc), exc.http_status) from exc
         definition, version = self._governance(db, organization_id, payload)
         self._trust(db, organization_id, payload)
+        trust = db.get(TrustAssessment, payload.trust_assessment_id)
+        if trust is None or trust.dataset_id != provenance.dataset_id:
+            raise ForecastingServiceError(
+                "TRUST_DATASET_MISMATCH",
+                "Trust assessment is not bound to the governed dataset",
+                422,
+            )
         prepared = self.preparation.prepare(payload)
         readiness = self.readiness.assess(prepared, payload, self.registry)
         if readiness["readiness_status"] != "ready":
@@ -356,9 +373,7 @@ class ForecastExecutionService:
                 "trust_assessment": payload.trust_assessment_id,
                 "readiness_assessment": payload.readiness_assessment_id,
                 "orchestration_request": payload.orchestration_request_id,
-                "dataset_reference": payload.dataset_reference,
-                "dataset": payload.dataset_fingerprint,
-                "source_lineage_reference": payload.source_lineage_reference,
+                "provenance": provenance.identity(),
                 "prepared": prepared.fingerprint,
                 "definition": version.fingerprint,
                 "target_code": payload.target_code,
@@ -405,10 +420,14 @@ class ForecastExecutionService:
             status=ForecastExecutionStatus.RUNNING.value,
             requested_by=actor,
             started_at=now,
-            dataset_reference=payload.dataset_reference,
-            dataset_fingerprint=payload.dataset_fingerprint,
+            dataset_id=provenance.dataset_id,
+            dataset_version_id=provenance.dataset_version_id,
+            ingestion_batch_id=provenance.ingestion_batch_id,
+            source_system_id=provenance.source_system_id,
+            dataset_reference=provenance.dataset_reference,
+            dataset_fingerprint=provenance.dataset_fingerprint,
             prepared_series_fingerprint=prepared.fingerprint,
-            source_lineage_reference=payload.source_lineage_reference,
+            source_lineage_reference=provenance.source_lineage_reference,
             training_window_start=prepared.timestamps[0],
             training_window_end=prepared.timestamps[-1],
             forecast_start=forecast_start,
@@ -697,6 +716,12 @@ class ForecastExecutionService:
         )
         if point is None:
             raise ForecastingServiceError("NOT_FOUND", "Forecast point not found", 404)
+        try:
+            provenance = governed_dataset_provenance_service.resolve(
+                db, organization_id, payload.dataset_id, payload.dataset_version_id
+            )
+        except GovernedProvenanceError as exc:
+            raise ForecastingServiceError(exc.code, str(exc), exc.http_status) from exc
         now = datetime.now(UTC)
         actual = db.scalar(
             select(ForecastActual).where(
@@ -714,7 +739,11 @@ class ForecastExecutionService:
                 actual_status=status,
                 actual_period_start=point.forecast_period_start,
                 actual_period_end=point.forecast_period_end,
-                actual_dataset_fingerprint=payload.actual_dataset_fingerprint,
+                dataset_id=provenance.dataset_id,
+                dataset_version_id=provenance.dataset_version_id,
+                ingestion_batch_id=provenance.ingestion_batch_id,
+                source_system_id=provenance.source_system_id,
+                actual_dataset_fingerprint=provenance.dataset_fingerprint,
                 evaluated_at=now,
             )
             db.add(actual)
@@ -722,7 +751,11 @@ class ForecastExecutionService:
             actual.actual_reference = payload.actual_reference
             actual.actual_value = payload.actual_value
             actual.actual_status = status
-            actual.actual_dataset_fingerprint = payload.actual_dataset_fingerprint
+            actual.dataset_id = provenance.dataset_id
+            actual.dataset_version_id = provenance.dataset_version_id
+            actual.ingestion_batch_id = provenance.ingestion_batch_id
+            actual.source_system_id = provenance.source_system_id
+            actual.actual_dataset_fingerprint = provenance.dataset_fingerprint
             actual.evaluated_at = now
         error = payload.actual_value - float(point.point_forecast)
         db.add(

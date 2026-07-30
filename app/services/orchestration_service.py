@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -182,15 +183,8 @@ class StatisticalEngineAdapter:
                 definition_version=payload.definition_version,
                 trust_assessment_id=payload.trust_assessment_id,
                 readiness_assessment_id=payload.analytical_readiness_id,
-                dataset_reference=payload.dataset_reference,
-                dataset_fingerprint=str(
-                    payload.request_context.get("dataset_fingerprint")
-                    or _hash({"dataset": payload.dataset_reference, "records": payload.records})
-                ),
-                source_lineage_reference=str(
-                    payload.request_context.get("source_lineage_reference")
-                    or f"dataset:{payload.dataset_reference}"
-                ),
+                dataset_id=payload.dataset_id,
+                dataset_version_id=payload.dataset_version_id,
                 observations=observations,
                 parameters=payload.parameters,
                 correlation_id=payload.correlation_id,
@@ -305,15 +299,8 @@ class ForecastingEngineAdapter:
                 trust_assessment_id=payload.trust_assessment_id,
                 readiness_assessment_id=payload.analytical_readiness_id,
                 orchestration_request_id=None,
-                dataset_reference=payload.dataset_reference,
-                dataset_fingerprint=str(
-                    payload.request_context.get("dataset_fingerprint")
-                    or _hash({"dataset": payload.dataset_reference, "records": payload.records})
-                ),
-                source_lineage_reference=str(
-                    payload.request_context.get("source_lineage_reference")
-                    or f"dataset:{payload.dataset_reference}"
-                ),
+                dataset_id=payload.dataset_id,
+                dataset_version_id=payload.dataset_version_id,
                 target_code=str(payload.request_context.get("target_code") or "forecast_target"),
                 source_time_grain=str(payload.parameters.get("source_time_grain", "MONTHLY")),
                 forecast_time_grain=str(payload.parameters.get("forecast_time_grain", "MONTHLY")),
@@ -716,7 +703,7 @@ class OrchestrationService:
                 "Correlation ID is already in use",
                 http_status=409,
             )
-        self._validate_references(db, organization_id, payload)
+        governed_dataset = self._validate_references(db, organization_id, payload)
         try:
             definition = self.definitions.resolve(
                 payload.definition_code,
@@ -750,7 +737,7 @@ class OrchestrationService:
             requested_analytical_level=requested_level.value,
             dataset_id=payload.dataset_id,
             dataset_version_id=payload.dataset_version_id,
-            dataset_reference=payload.dataset_reference,
+            dataset_reference=governed_dataset.code,
             trust_assessment_id=payload.trust_assessment_id,
             analytical_readiness_id=payload.analytical_readiness_id,
             requested_by_user_id=actor_user_id,
@@ -782,7 +769,7 @@ class OrchestrationService:
             request,
             OrchestrationStepType.VALIDATION,
             OrchestrationStepStatus.COMPLETED,
-            input_summary={"dataset_reference": payload.dataset_reference},
+            input_summary={"dataset_reference": governed_dataset.code},
         )
         self._transition(
             db,
@@ -1003,13 +990,19 @@ class OrchestrationService:
                     "definition_version": "1.0",
                 }
             )
-        engine_result = adapter.execute(
-            db,
-            organization_id,
-            engine_payload,
-            actor_user_id,
-            f"orchestration:{request.id}",
-        )
+        try:
+            engine_result = adapter.execute(
+                db,
+                organization_id,
+                engine_payload,
+                actor_user_id,
+                f"orchestration:{request.id}",
+            )
+        except ValidationError as exc:
+            raise OrchestrationError(
+                "INVALID_ENGINE_INPUT",
+                "Governed analytical engine input is invalid",
+            ) from exc
         execution = engine_result.execution
         output = engine_result.output
         if definition.scope_metadata.get("legacy_fallback") is False and definition_level not in {
@@ -1344,7 +1337,7 @@ class OrchestrationService:
 
     def _validate_references(
         self, db: Session, organization_id: UUID, payload: OrchestrationCreate
-    ) -> None:
+    ) -> Dataset:
         organization = db.scalar(
             select(Organization).where(
                 Organization.id == organization_id,
@@ -1365,20 +1358,19 @@ class OrchestrationService:
             raise OrchestrationError(
                 "CROSS_TENANT_REFERENCE", "Dataset is not eligible", http_status=404
             )
-        if payload.dataset_version_id is not None:
-            version = db.scalar(
-                select(DatasetVersion).where(
-                    DatasetVersion.id == payload.dataset_version_id,
-                    DatasetVersion.organization_id == organization_id,
-                    DatasetVersion.dataset_id == payload.dataset_id,
-                )
+        version = db.scalar(
+            select(DatasetVersion).where(
+                DatasetVersion.id == payload.dataset_version_id,
+                DatasetVersion.organization_id == organization_id,
+                DatasetVersion.dataset_id == payload.dataset_id,
             )
-            if version is None:
-                raise OrchestrationError(
-                    "CROSS_TENANT_REFERENCE",
-                    "Dataset version is not eligible",
-                    http_status=404,
-                )
+        )
+        if version is None:
+            raise OrchestrationError(
+                "CROSS_TENANT_REFERENCE",
+                "Dataset version is not eligible",
+                http_status=404,
+            )
         self._assessment(db, organization_id, payload)
         readiness = db.scalar(
             select(AnalyticalReadinessDecision).where(
@@ -1393,6 +1385,7 @@ class OrchestrationService:
                 "Readiness decision is not eligible",
                 http_status=404,
             )
+        return dataset
 
     @staticmethod
     def _assessment(
@@ -1494,7 +1487,6 @@ class OrchestrationService:
                 "definition_version": payload.definition_version,
                 "dataset_id": payload.dataset_id,
                 "dataset_version_id": payload.dataset_version_id,
-                "dataset_reference": payload.dataset_reference,
                 "trust_assessment_id": payload.trust_assessment_id,
                 "readiness_id": payload.analytical_readiness_id,
                 "requested_level": payload.requested_analytical_level,
