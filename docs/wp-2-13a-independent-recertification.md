@@ -210,3 +210,191 @@ governed definition/version identity to reliability execution fingerprinting and
 sequential and concurrent regression coverage. These implementation notes are not independent
 certification evidence. Complete independent recertification must review the new commit range
 before the decision may change.
+
+=========================================
+Final Independent Recertification
+After WP213A-IR-001 Remediation
+=========================================
+
+## Review identity
+
+- Repository: `C:\Users\hkepe\Documents\Intel4Ops\intel4ops_core_platform_Github`
+- Branch: `feature/wp-2-13a-reliability-truth-safety`
+- Reviewed HEAD: `e80ac50b5b54aa8983e387445ddae62eeebc21a9`
+- Reviewed baseline: `79428743b945ba3b7756a1cb471af21585190fcb`
+- Baseline relationship: baseline confirmed an ancestor of reviewed HEAD; reviewed HEAD confirmed
+  the tip of `feature/wp-2-13a-reliability-truth-safety`
+- Alembic head: `20260728_0023` (single head, confirmed)
+- PostgreSQL: `17.10`
+- Review role: independent assurance reviewer; no implementation code, tests, migrations, or
+  schemas were modified during this review
+- Review date: 2026-07-30
+
+Excluded from this recertification, per mandate: `fix/phase-2a-wave1-p0-corrections`, commit
+`98c93e8`, commit `a4a4716`, `fix/phase-2a-wave2-hardening`. Both excluded commits were confirmed
+absent from the baseline-to-HEAD ancestry (`git merge-base --is-ancestor` returned false for
+both).
+
+## Scope of remediation reviewed
+
+Baseline-to-HEAD diff: 12 files changed (`app/engines/reliability_engine.py`,
+`app/schemas/reliability.py`, `app/services/reliability_service.py`, three
+`docs/reliability-intelligence/*.md` files, this document, the remediation report, and four test
+files). No file under `app/models/`, `migrations/`, `app/services/orchestration_service.py`, or
+`app/services/action_service.py` was touched.
+
+## WP213A-IR-001 closure verification
+
+- **Original defect status:** preserved above as historical evidence; not re-executed against
+  the withdrawn vulnerable code path, which no longer exists at reviewed HEAD.
+- **Remediation inspected:** `ReliabilityExecutionService._execution_package_fingerprint` now
+  binds `definition.stable_code`, `definition.id`, `version.semantic_version`, `version.id`, and
+  `version.fingerprint`, in addition to method, failure-definition, exposure basis, and
+  censoring policy. `_verified_replay` rejects any persisted-execution match whose
+  `oikb_definition_id`, `oikb_definition_version_id`, or `execution_package_fingerprint` does not
+  match the current request, or whose definition/version identity fields are empty, raising
+  `IDEMPOTENCY_CONFLICT` (HTTP 409) instead of returning a mismatched execution. A concurrent
+  `IntegrityError` on the pre-existing `uq_reliability_reproducibility` constraint
+  (`organization_id`, `reproducibility_fingerprint`) is caught, the session is rolled back, the
+  existing row is re-queried, and the same identity verification is applied before replay.
+- **Exact identity verification — independent reproduction:** a standalone probe script (not
+  part of the implementer's test suite) was run against a freshly created, disposable
+  PostgreSQL 17.10 database and exercised directly against the application's own services. All
+  16 independent assertions passed:
+  - two same-tenant definitions with identical content (version) fingerprint but different
+    definition IDs and stable codes produced two distinct, correctly bound executions — no
+    cross-definition replay;
+  - two versions of one definition, requested with otherwise identical execution content but
+    different version identities, produced two distinct, correctly bound executions — no
+    cross-version replay; the database's own `uq_oikb_definition_fingerprint` constraint was
+    confirmed to structurally forbid two versions of the *same* definition from sharing a
+    content fingerprint, meaning the only reachable fingerprint-collision path is
+    cross-definition, which was independently proven not to replay;
+  - an identical request retried against the same definition/version returned exactly one
+    execution;
+  - two different, same-content-fingerprint tenants (cross-tenant equivalent requests) produced
+    two distinct, organization-scoped executions, with cross-tenant read-by-ID returning a
+    non-enumerating not-found error;
+  - a forced persisted-fingerprint collision between two different definitions raised
+    `IDEMPOTENCY_CONFLICT` / HTTP 409 deterministically, never a replay.
+- **Conflict behavior:** confirmed at both the service layer (independent probe) and the API
+  layer (`tests/test_reliability_api.py::test_reliability_api_returns_conflict_for_mismatched_persisted_identity`,
+  independently rerun) — HTTP 409, body `{"code": "IDEMPOTENCY_CONFLICT"}`.
+- **Concurrency validation:** `tests/test_postgres_migrations.py::test_concurrent_reliability_definition_identity_idempotency`
+  was independently rerun against a freshly created disposable PostgreSQL 17.10 database (not
+  reused from any prior session). Two concurrent identical requests resolved to exactly one
+  execution. A forced same-fingerprint collision across two different definitions, submitted
+  concurrently, produced exactly one success and one deterministic `IDEMPOTENCY_CONFLICT` —
+  never a replay to the losing request. Two concurrent distinct-definition requests produced two
+  separate, correctly bound executions.
+- **Partial-record prevention:** independently confirmed exactly one `ReliabilityExecution`, one
+  `ReliabilityModelResult`, one `ReliabilityExecutionStep`, and a positive `ReliabilityMetric`
+  count for the identical-replay case; exactly one `ReliabilityExecution` row for the forced
+  same-fingerprint collision despite two concurrent attempts; exactly two rows for the
+  concurrent-distinct case. No duplicate or partial records were observed under any concurrency
+  scenario.
+- **Tenant isolation:** independently confirmed at both the service layer (cross-tenant probe
+  above) and within the disposable PostgreSQL suite; the replay-lookup query remains scoped by
+  `organization_id`, and the reproducibility fingerprint itself also binds the organization,
+  giving two independent layers of cross-tenant protection.
+
+**WP213A-IR-001 is CLOSED.** The defect described in the original finding — a materially
+different governed-definition request silently reusing a prior execution — was independently
+reproduced as historical fact against the pre-remediation code and independently shown, through
+fresh reproduction against the current code and a fresh disposable database, not to occur at
+reviewed HEAD.
+
+## Complete WP-2.13A reverification
+
+All items listed under "Verified remediated before the blocking stop" above were independently
+reconfirmed at reviewed HEAD, with no regression:
+
+- Weibull registry metadata `supports_censoring=false`; censored observations rejected before
+  fitting with a deterministic error; no censored observation is silently filtered.
+- Uncensored Weibull fixtures remain deterministic, positive, finite, with B10 < B50.
+- Insufficient/constant populations fail safely; fractional, boolean, string, negative, NaN, and
+  infinite counts are rejected at the schema/engine boundary.
+- Downtime greater than exposure is rejected at both schema and engine layers.
+- Unsupported method/version pairs fail closed.
+- Reliability execution requires a tenant-scoped completed Trust assessment and a tenant-scoped
+  `reliability` readiness decision in `ready` or `ready_with_warnings`; blocked readiness, wrong
+  readiness level, cross-tenant Trust/readiness, unauthenticated access, and unauthorized
+  organization access are all rejected.
+- Definition and execution reads remain tenant-scoped with non-enumerating not-found errors.
+- Successful reliability results continue to require human review and do not automatically
+  create operational actions.
+- No Reliability adapter exists in the Progressive Intelligence Orchestrator; `orchestration_service.py`
+  contains no reliability reference (independently confirmed by direct search).
+- No migration, model change, WP-2.06A governed-input implementation, WP-2.TI implementation,
+  commercial threshold, new reliability model, or censor-aware estimator was introduced.
+- Censoring, method-registry, and orchestrator-integration documentation, and the remediation
+  report's WP213A-IR-001 section, accurately describe the corrected behavior; documented test
+  counts match the counts independently observed in this recertification.
+
+## Independent validation evidence
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Ruff format | PASS | `362 files already formatted` |
+| Ruff check | PASS | `All checks passed!` |
+| Mypy | PASS | `mypy app`: no issues found in 147 source files |
+| Focused reliability tests | PASS | 34 passed |
+| Full default tests (SQLite) | PASS | 333 passed |
+| PostgreSQL tests | PASS | 14 passed on PostgreSQL 17.10, freshly created disposable database |
+| Concurrency tests | PASS | identical, forced-collision, and distinct-definition concurrent cases all correct; zero partial/duplicate records |
+| Authorization tests | PASS | 401/403 cases within the focused suite |
+| Tenant-isolation tests | PASS | focused suite plus independent cross-tenant probe |
+| Idempotency tests | PASS | retry, cross-definition, cross-version, cross-tenant, and forced-collision cases all resolve correctly |
+| API conflict tests | PASS | HTTP 409 `IDEMPOTENCY_CONFLICT` confirmed at the API layer |
+| Alembic upgrade | PASS | to `20260728_0023` |
+| Alembic downgrade | PASS | `20260728_0023 -> 20260728_0022` |
+| Alembic re-upgrade | PASS | `20260728_0022 -> 20260728_0023` |
+| Alembic drift | PASS | autogenerate produced an empty upgrade/downgrade body — no drift |
+| Offline PostgreSQL SQL | PASS | PostgreSQL dialect; 7,071 lines / 913,648 characters; initial schema through head revision present |
+| Git diff | PASS | exact baseline-to-HEAD `git diff --check` produced no errors |
+| Secret scan | PASS | pattern scan of the full baseline-to-HEAD diff found no credentials, keys, or tokens |
+| Cleanup verification | PASS | both disposable databases created for this review were dropped and catalog verification returned zero matching databases; no credentials were printed |
+
+Two disposable PostgreSQL databases were created for this recertification, both freshly named
+with a `validation` safety marker and today's timestamp, distinct from any database used in the
+prior review or any other session. Both were dropped after use and their absence was verified
+against `pg_database`.
+
+## Scope integrity (reconfirmed)
+
+- Reliability orchestrator integration added: **NO**
+- WP-2.06A work added: **NO**
+- WP-2.TI work added: **NO**
+- Commercial thresholds invented: **NO**
+- Unvalidated censor-aware estimator added: **NO**
+- New reliability models outside the approved package: **NO**
+- Unrelated refactoring or feature development: **NO**
+- P0 commit `98c93e8` included in review: **NO**
+- P1 commit `a4a4716` included in review: **NO**
+
+## Reopened findings
+
+- None.
+
+## New findings
+
+- None.
+
+## Blocking findings
+
+- None.
+
+## Non-blocking conditions
+
+- One third-party `StarletteDeprecationWarning` (httpx/starlette `TestClient`), pre-existing and
+  outside scope — does not affect the decision.
+
+---
+
+## FINAL DECISION
+
+**CERTIFY**
+
+Merge recommendation:
+
+**APPROVE**
