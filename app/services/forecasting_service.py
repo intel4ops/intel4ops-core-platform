@@ -49,6 +49,7 @@ from app.schemas.forecasting import (
     ForecastScenarioCreate,
 )
 from app.services.governed_provenance_service import (
+    GovernedDatasetProvenance,
     GovernedProvenanceError,
     governed_dataset_provenance_service,
 )
@@ -308,6 +309,42 @@ class ForecastExecutionService:
         self.preparation = TimeSeriesPreparationService()
         self.readiness = ForecastReadinessService()
 
+    @staticmethod
+    def _verified_replay(
+        existing: ForecastExecution,
+        organization_id: UUID,
+        payload: ForecastExecutionCreate,
+        definition: OIKBDefinition,
+        version: OIKBDefinitionVersion,
+        provenance: GovernedDatasetProvenance,
+        prepared: PreparedSeries,
+    ) -> ForecastExecution:
+        if (
+            existing.organization_id != organization_id
+            or existing.dataset_id != provenance.dataset_id
+            or existing.dataset_version_id != provenance.dataset_version_id
+            or existing.ingestion_batch_id != provenance.ingestion_batch_id
+            or existing.source_system_id != provenance.source_system_id
+            or existing.oikb_definition_id != definition.id
+            or existing.oikb_definition_version_id != version.id
+            or existing.execution_package_fingerprint != version.fingerprint
+            or existing.trust_assessment_id != payload.trust_assessment_id
+            or existing.readiness_assessment_id != payload.readiness_assessment_id
+            or existing.orchestration_request_id != payload.orchestration_request_id
+            or existing.prepared_series_fingerprint != prepared.fingerprint
+            or existing.target_code != payload.target_code
+            or existing.source_time_grain != payload.source_time_grain
+            or existing.forecast_time_grain != payload.forecast_time_grain
+            or existing.forecast_horizon != payload.forecast_horizon
+            or existing.engine_version != ForecastExecutionService.engine_version
+        ):
+            raise ForecastingServiceError(
+                "IDEMPOTENCY_CONFLICT",
+                "Forecast identity conflicts with persisted governed inputs",
+                409,
+            )
+        return existing
+
     def evaluate(self, payload: ForecastEvaluateRequest) -> ForecastEvaluationRead:
         try:
             method = self.registry.get(payload.method_code, payload.method_version)
@@ -396,7 +433,15 @@ class ForecastExecutionService:
             )
         )
         if existing is not None:
-            return existing
+            return self._verified_replay(
+                existing,
+                organization_id,
+                payload,
+                definition,
+                version,
+                provenance,
+                prepared,
+            )
         now = datetime.now(UTC)
         forecast_start = self._advance_period(
             prepared.timestamps[-1], payload.forecast_time_grain, 1
@@ -456,19 +501,21 @@ class ForecastExecutionService:
                     ForecastExecution.reproducibility_fingerprint == fingerprint,
                 )
             )
-            if (
-                existing is None
-                or existing.dataset_id != provenance.dataset_id
-                or existing.dataset_version_id != provenance.dataset_version_id
-                or existing.ingestion_batch_id != provenance.ingestion_batch_id
-                or existing.source_system_id != provenance.source_system_id
-            ):
+            if existing is None:
                 raise ForecastingServiceError(
                     "IDEMPOTENCY_CONFLICT",
                     "Forecast identity conflicts with persisted governed inputs",
                     409,
                 )
-            return existing
+            return self._verified_replay(
+                existing,
+                organization_id,
+                payload,
+                definition,
+                version,
+                provenance,
+                prepared,
+            )
         candidate_rows: list[ForecastCandidate] = []
         results: dict[str, tuple[list[float], list[float], dict[str, float | None]]] = {}
         for code in payload.candidate_methods:

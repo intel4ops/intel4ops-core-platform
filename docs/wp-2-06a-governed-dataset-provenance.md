@@ -38,6 +38,12 @@ their own dataset and version. Server-derived compatibility values are:
 - `source_lineage_reference`: an audit string containing the exact dataset, version,
   batch, and source-system UUIDs.
 
+Forecast replay verifies the persisted governed identity before returning an execution
+found by reproducibility fingerprint, both during the primary lookup and after a
+concurrent uniqueness race. A fingerprint collision across dataset, version, batch,
+source system, definition, Trust, readiness, or prepared-series identity fails with
+`IDEMPOTENCY_CONFLICT` instead of returning the wrong forecast execution.
+
 ## Migration
 
 Alembic revision `20260730_0024` adds nullable UUID foreign keys to the three execution
@@ -50,6 +56,8 @@ and produce exactly one match. It does not infer a latest version and does not b
 forecast actuals without deterministic evidence. Unmatched or ambiguous historical
 rows remain null. A later migration may enforce non-null only after an operational
 inventory proves that all retained rows are mapped or explicitly archived.
+Historical forecast-actual rows are intentionally not backfilled because their legacy
+records do not provide a deterministic dataset-version mapping.
 
 ## Rollout, rollback, and validation
 

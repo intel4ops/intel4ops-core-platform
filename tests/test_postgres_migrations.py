@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
+from unittest.mock import patch
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -29,8 +30,16 @@ from app.models.entities import (
     MembershipStatus,
     OrganizationMembership,
 )
-from app.models.forecasting import ForecastExecution
+from app.models.forecasting import (
+    ForecastBacktest,
+    ForecastCandidate,
+    ForecastExecution,
+    ForecastExecutionStep,
+    ForecastMetric,
+    ForecastPoint,
+)
 from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
+from app.models.oikb import OIKBDefinition
 from app.models.orchestration import IntelligenceOrchestrationRequest
 from app.models.reliability import (
     ReliabilityExecution,
@@ -46,6 +55,7 @@ from app.models.trust import (
 )
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
+from app.schemas.forecasting import ForecastExecutionCreate
 from app.schemas.ingestion import (
     DatasetCreate,
     DatasetVersionCountsUpdate,
@@ -64,7 +74,7 @@ from app.services.finding_platform_service import (
     FindingQueryService,
 )
 from app.services.finding_service import FindingService
-from app.services.forecasting_service import ForecastExecutionService
+from app.services.forecasting_service import ForecastExecutionService, ForecastingServiceError
 from app.services.ingestion_service import (
     DatasetService,
     DatasetVersionService,
@@ -2659,3 +2669,220 @@ def test_wp206a_reliability_identity_collisions_never_cross_governed_boundaries(
             )
             == 0
         )
+
+
+@pytest.mark.postgres
+def test_wp206a_forecast_replay_verifies_governed_identity(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    collision_fingerprint = "f" * 64
+
+    def child_counts(session: Session, execution_id: UUID) -> tuple[int, ...]:
+        return tuple(
+            session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(model.forecast_execution_id == execution_id)
+            )
+            or 0
+            for model in (
+                ForecastCandidate,
+                ForecastBacktest,
+                ForecastMetric,
+                ForecastPoint,
+                ForecastExecutionStep,
+            )
+        )
+
+    with Session(postgres_engine) as session:
+        organization_id, trust_id, readiness_id, actor = forecasting_foundation(
+            session, f"wp206a-forecast-replay-{uuid4().hex[:8]}"
+        )
+        definition = session.scalar(
+            select(OIKBDefinition).where(
+                OIKBDefinition.owner_organization_id == organization_id,
+                OIKBDefinition.analytical_level == "forecasting",
+            )
+        )
+        assert definition is not None
+        definition.stable_code = f"TEST.WP206A.FORECAST.{uuid4().hex.upper()}"
+        session.commit()
+        first_payload = forecasting_payload(trust_id, readiness_id, "5" * 64).model_copy(
+            update={"definition_code": definition.stable_code}
+        )
+        dataset = session.get(Dataset, first_payload.dataset_id)
+        assert dataset is not None
+        second_version = add_eligible_dataset_version(
+            session,
+            organization_id,
+            dataset.source_system_id,
+            dataset.id,
+            actor,
+            checksum="5" * 64,
+        )
+
+        with patch("app.services.forecasting_service._hash", return_value=collision_fingerprint):
+            first = ForecastExecutionService().execute(
+                session, organization_id, first_payload, actor
+            )
+            baseline_counts = child_counts(session, first.id)
+            replay = ForecastExecutionService().execute(
+                session, organization_id, first_payload, actor
+            )
+            assert replay.id == first.id
+            assert child_counts(session, first.id) == baseline_counts
+
+            second_version_payload = first_payload.model_copy(
+                update={"dataset_version_id": second_version.id}
+            )
+            with pytest.raises(ForecastingServiceError) as version_conflict:
+                ForecastExecutionService().execute(
+                    session, organization_id, second_version_payload, actor
+                )
+            assert version_conflict.value.code == "IDEMPOTENCY_CONFLICT"
+            assert version_conflict.value.http_status == 409
+            assert child_counts(session, first.id) == baseline_counts
+
+            other_dataset = DatasetService().create(
+                session,
+                organization_id,
+                DatasetCreate(
+                    source_system_id=dataset.source_system_id,
+                    name="WP-2.06A forecast collision dataset",
+                    code=f"wp206a-forecast-collision-{uuid4().hex[:8]}",
+                    domain="operations",
+                    dataset_type="time_series",
+                ),
+                actor,
+            )
+            other_version = add_eligible_dataset_version(
+                session,
+                organization_id,
+                dataset.source_system_id,
+                other_dataset.id,
+                actor,
+                checksum="5" * 64,
+            )
+            other_trust = TrustAssessment(
+                organization_id=organization_id,
+                dataset_id=other_dataset.id,
+                status="completed",
+                overall_score=95,
+                assessed_row_count=24,
+                passed_rule_count=3,
+            )
+            session.add(other_trust)
+            session.flush()
+            other_readiness = AnalyticalReadinessDecision(
+                organization_id=organization_id,
+                trust_assessment_id=other_trust.id,
+                analytical_level="forecasting",
+                readiness_status="ready",
+                blocking_rule_codes=[],
+                warning_rule_codes=[],
+                explanation="WP-2.06A replay collision test.",
+            )
+            session.add(other_readiness)
+            session.commit()
+            other_dataset_payload = first_payload.model_copy(
+                update={
+                    "dataset_id": other_dataset.id,
+                    "dataset_version_id": other_version.id,
+                    "trust_assessment_id": other_trust.id,
+                    "readiness_assessment_id": other_readiness.id,
+                }
+            )
+            with pytest.raises(ForecastingServiceError) as dataset_conflict:
+                ForecastExecutionService().execute(
+                    session, organization_id, other_dataset_payload, actor
+                )
+            assert dataset_conflict.value.code == "IDEMPOTENCY_CONFLICT"
+            assert dataset_conflict.value.http_status == 409
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ForecastExecution)
+                    .where(ForecastExecution.organization_id == organization_id)
+                )
+                == 1
+            )
+            assert child_counts(session, first.id) == baseline_counts
+
+            other_organization_id, _, _, other_actor = forecasting_foundation(
+                session, f"wp206a-forecast-tenant-{uuid4().hex[:8]}"
+            )
+            with pytest.raises(ForecastingServiceError) as cross_tenant:
+                ForecastExecutionService().execute(
+                    session, other_organization_id, first_payload, other_actor
+                )
+            assert cross_tenant.value.code == "DATASET_NOT_FOUND"
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ForecastExecution)
+                    .where(ForecastExecution.organization_id == other_organization_id)
+                )
+                == 0
+            )
+
+    race_org = organization_id
+    race_actor = actor
+    race_payload = first_payload
+
+    identical_barrier = Barrier(2)
+
+    def execute_identical_forecast() -> tuple[str, UUID | str]:
+        with Session(postgres_engine) as session:
+            identical_barrier.wait()
+            try:
+                row = ForecastExecutionService().execute(
+                    session, race_org, race_payload, race_actor
+                )
+                return "succeeded", row.id
+            except ForecastingServiceError as exc:
+                return "conflict", exc.code
+
+    with patch("app.services.forecasting_service._hash", return_value="e" * 64):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            identical_results = list(executor.map(lambda _: execute_identical_forecast(), range(2)))
+    assert {result[0] for result in identical_results} == {"succeeded"}
+    assert len({result[1] for result in identical_results}) == 1
+
+    mismatch_org = organization_id
+    mismatch_actor = actor
+    mismatch_first = first_payload
+    mismatch_second = second_version_payload
+    mismatch_barrier = Barrier(2)
+
+    def execute_mismatched_forecast(
+        payload: ForecastExecutionCreate,
+    ) -> tuple[str, UUID | str]:
+        with Session(postgres_engine) as session:
+            mismatch_barrier.wait()
+            try:
+                row = ForecastExecutionService().execute(
+                    session,
+                    mismatch_org,
+                    payload,
+                    mismatch_actor,
+                )
+                return "succeeded", row.id
+            except ForecastingServiceError as exc:
+                return "conflict", exc.code
+
+    with patch("app.services.forecasting_service._hash", return_value="d" * 64):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            mismatch_results = list(
+                executor.map(
+                    execute_mismatched_forecast,
+                    (mismatch_first, mismatch_second),
+                )
+            )
+    assert sorted(result[0] for result in mismatch_results) == [
+        "conflict",
+        "succeeded",
+    ]
+    assert {result[1] for result in mismatch_results if result[0] == "conflict"} == {
+        "IDEMPOTENCY_CONFLICT"
+    }
