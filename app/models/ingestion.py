@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -131,6 +132,13 @@ class DatasetDomain(StrEnum):
 class IngestionBatch(Base):
     __tablename__ = "ingestion_batches"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_ingestion_batches_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("organization_id", "id", name="uq_ingestion_batches_org_id"),
         UniqueConstraint(
             "organization_id", "batch_number", name="uq_ingestion_batches_organization_batch"
         ),
@@ -171,6 +179,11 @@ class IngestionBatch(Base):
         ),
         Index("ix_ingestion_batches_organization_id", "organization_id"),
         Index("ix_ingestion_batches_source_system_id", "source_system_id"),
+        Index(
+            "ix_ingestion_batches_org_source_system_id",
+            "organization_id",
+            "source_system_id",
+        ),
         Index("ix_ingestion_batches_status", "status"),
         Index("ix_ingestion_batches_ingestion_method", "ingestion_method"),
         Index("ix_ingestion_batches_trigger_type", "trigger_type"),
@@ -225,13 +238,23 @@ class IngestionBatch(Base):
     )
 
     organization: Mapped[Organization] = relationship()
-    source_system: Mapped[SourceSystem] = relationship()
-    dataset_versions: Mapped[list[DatasetVersion]] = relationship(back_populates="ingestion_batch")
+    source_system: Mapped[SourceSystem] = relationship(foreign_keys=[source_system_id])
+    dataset_versions: Mapped[list[DatasetVersion]] = relationship(
+        back_populates="ingestion_batch",
+        foreign_keys="DatasetVersion.ingestion_batch_id",
+    )
 
 
 class Dataset(Base):
     __tablename__ = "datasets"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_datasets_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("organization_id", "id", name="uq_datasets_org_id"),
         UniqueConstraint("organization_id", "code", name="uq_datasets_organization_code"),
         CheckConstraint(f"dataset_type IN ({enum_values(DatasetType)})", name="ck_datasets_type"),
         CheckConstraint(
@@ -249,6 +272,7 @@ class Dataset(Base):
         ),
         Index("ix_datasets_organization_id", "organization_id"),
         Index("ix_datasets_source_system_id", "source_system_id"),
+        Index("ix_datasets_org_source_system_id", "organization_id", "source_system_id"),
         Index("ix_datasets_domain", "domain"),
         Index("ix_datasets_dataset_type", "dataset_type"),
         Index("ix_datasets_status", "status"),
@@ -290,13 +314,29 @@ class Dataset(Base):
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organization: Mapped[Organization] = relationship()
-    source_system: Mapped[SourceSystem] = relationship()
-    versions: Mapped[list[DatasetVersion]] = relationship(back_populates="dataset")
+    source_system: Mapped[SourceSystem] = relationship(foreign_keys=[source_system_id])
+    versions: Mapped[list[DatasetVersion]] = relationship(
+        back_populates="dataset",
+        foreign_keys="DatasetVersion.dataset_id",
+    )
 
 
 class DatasetVersion(Base):
     __tablename__ = "dataset_versions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_dataset_versions_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_dataset_versions_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("organization_id", "id", name="uq_dataset_versions_org_id"),
         UniqueConstraint(
             "dataset_id", "version_number", name="uq_dataset_versions_dataset_version"
         ),
@@ -329,6 +369,12 @@ class DatasetVersion(Base):
         Index("ix_dataset_versions_organization_id", "organization_id"),
         Index("ix_dataset_versions_dataset_id", "dataset_id"),
         Index("ix_dataset_versions_ingestion_batch_id", "ingestion_batch_id"),
+        Index("ix_dataset_versions_org_dataset_id", "organization_id", "dataset_id"),
+        Index(
+            "ix_dataset_versions_org_ingestion_batch_id",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
         Index("ix_dataset_versions_status", "status"),
         Index("ix_dataset_versions_received_at", "received_at"),
     )
@@ -372,5 +418,11 @@ class DatasetVersion(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    dataset: Mapped[Dataset] = relationship(back_populates="versions")
-    ingestion_batch: Mapped[IngestionBatch] = relationship(back_populates="dataset_versions")
+    dataset: Mapped[Dataset] = relationship(
+        back_populates="versions",
+        foreign_keys=[dataset_id],
+    )
+    ingestion_batch: Mapped[IngestionBatch] = relationship(
+        back_populates="dataset_versions",
+        foreign_keys=[ingestion_batch_id],
+    )

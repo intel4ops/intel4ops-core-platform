@@ -17,12 +17,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
+from test_ingestion_service import batch_payload as ingestion_batch_payload
+from test_ingestion_service import foundation as ingestion_foundation
 from test_reliability_service import (
     add_reliability_definition,
     reliability_foundation,
     reliability_payload,
 )
 from test_statistical_service import execution_payload, statistical_foundation
+from test_ti_a_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_A_PARENT_CONSTRAINTS,
+)
+from test_ti_a_referential_integrity import TENANT_FOREIGN_KEYS as TI_A_FOREIGN_KEYS
+from test_ti_a_referential_integrity import TENANT_INDEXES as TI_A_INDEXES
 
 from app.models.entities import (
     Finding,
@@ -2886,3 +2893,98 @@ def test_wp206a_forecast_replay_verifies_governed_identity(
     assert {result[1] for result in mismatch_results if result[0] == "conflict"} == {
         "IDEMPOTENCY_CONFLICT"
     }
+
+
+@pytest.mark.postgres
+def test_ti_a_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    def tenant_objects() -> tuple[set[str], set[str], set[str]]:
+        inspector = inspect(postgres_engine)
+        unique_names = {
+            item["name"]
+            for table_name in TI_A_PARENT_CONSTRAINTS
+            for item in inspector.get_unique_constraints(table_name)
+            if item["name"] is not None
+        }
+        foreign_key_names = {
+            item["name"]
+            for table_name in (
+                "ingestion_batches",
+                "datasets",
+                "dataset_versions",
+                "raw_storage_objects",
+                "raw_record_references",
+                "processing_runs",
+                "lineage_edges",
+                "lineage_events",
+            )
+            for item in inspector.get_foreign_keys(table_name)
+            if item["name"] is not None
+        }
+        index_names = {
+            item["name"]
+            for table_name in (
+                "ingestion_batches",
+                "datasets",
+                "dataset_versions",
+                "raw_storage_objects",
+                "raw_record_references",
+                "processing_runs",
+                "lineage_edges",
+                "lineage_events",
+            )
+            for item in inspector.get_indexes(table_name)
+            if item["name"] is not None
+        }
+        return unique_names, foreign_key_names, index_names
+
+    unique_names, foreign_key_names, index_names = tenant_objects()
+    assert set(TI_A_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_A_FOREIGN_KEYS <= foreign_key_names
+    assert TI_A_INDEXES <= index_names
+
+    command.downgrade(config, "20260730_0024")
+    unique_names, foreign_key_names, index_names = tenant_objects()
+    assert set(TI_A_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_A_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_A_INDEXES.isdisjoint(index_names)
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = tenant_objects()
+    assert set(TI_A_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_A_FOREIGN_KEYS <= foreign_key_names
+    assert TI_A_INDEXES <= index_names
+
+
+@pytest.mark.postgres
+def test_ti_a_allows_bounded_concurrent_same_tenant_inserts(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, source_id = ingestion_foundation(
+            session, f"ti-a-concurrency-{uuid4().hex[:8]}"
+        )
+    barrier = Barrier(2)
+
+    def create_batch(number: str) -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            return (
+                IngestionBatchService()
+                .create(
+                    session,
+                    organization_id,
+                    ingestion_batch_payload(source_id, number),
+                    uuid4(),
+                )
+                .id
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        batch_ids = list(executor.map(create_batch, ("batch-ti-a-1", "batch-ti-a-2")))
+    assert len(set(batch_ids)) == 2
