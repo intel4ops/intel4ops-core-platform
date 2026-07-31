@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -206,6 +207,31 @@ class ActorType(StrEnum):
 class RawStorageObject(Base):
     __tablename__ = "raw_storage_objects"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_raw_storage_objects_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_raw_storage_objects_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_raw_storage_objects_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "supersedes_raw_object_id"],
+            ["raw_storage_objects.organization_id", "raw_storage_objects.id"],
+            name="fk_raw_storage_objects_org_supersedes",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("organization_id", "id", name="uq_raw_storage_objects_org_id"),
         UniqueConstraint(
             "organization_id", "object_number", name="uq_raw_objects_organization_number"
         ),
@@ -252,6 +278,26 @@ class RawStorageObject(Base):
         Index("ix_raw_objects_source_system_id", "source_system_id"),
         Index("ix_raw_objects_ingestion_batch_id", "ingestion_batch_id"),
         Index("ix_raw_objects_dataset_version_id", "dataset_version_id"),
+        Index(
+            "ix_raw_storage_objects_org_source_system_id",
+            "organization_id",
+            "source_system_id",
+        ),
+        Index(
+            "ix_raw_storage_objects_org_ingestion_batch_id",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
+        Index(
+            "ix_raw_storage_objects_org_dataset_version_id",
+            "organization_id",
+            "dataset_version_id",
+        ),
+        Index(
+            "ix_raw_storage_objects_org_supersedes_raw_object_id",
+            "organization_id",
+            "supersedes_raw_object_id",
+        ),
         Index("ix_raw_objects_status", "status"),
         Index("ix_raw_objects_integrity_status", "integrity_status"),
         Index("ix_raw_objects_content_checksum", "content_checksum"),
@@ -314,6 +360,18 @@ class RawStorageObject(Base):
 class RawRecordReference(Base):
     __tablename__ = "raw_record_references"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "raw_storage_object_id"],
+            ["raw_storage_objects.organization_id", "raw_storage_objects.id"],
+            name="fk_raw_record_references_org_raw_storage_object",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_raw_record_references_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "raw_storage_object_id", "record_sequence", name="uq_raw_records_object_sequence"
         ),
@@ -335,6 +393,16 @@ class RawRecordReference(Base):
         Index("ix_raw_records_organization_id", "organization_id"),
         Index("ix_raw_records_object_id", "raw_storage_object_id"),
         Index("ix_raw_records_dataset_version_id", "dataset_version_id"),
+        Index(
+            "ix_raw_record_references_org_raw_storage_object_id",
+            "organization_id",
+            "raw_storage_object_id",
+        ),
+        Index(
+            "ix_raw_record_references_org_dataset_version_id",
+            "organization_id",
+            "dataset_version_id",
+        ),
         Index("ix_raw_records_record_key", "record_key"),
         Index("ix_raw_records_source_event_id", "source_event_id"),
         Index("ix_raw_records_source_timestamp", "source_timestamp"),
@@ -373,6 +441,25 @@ class RawRecordReference(Base):
 class ProcessingRun(Base):
     __tablename__ = "processing_runs"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_processing_runs_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_processing_runs_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "parent_run_id"],
+            ["processing_runs.organization_id", "processing_runs.id"],
+            name="fk_processing_runs_org_parent_run",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("organization_id", "id", name="uq_processing_runs_org_id"),
         CheckConstraint(f"run_type IN ({enum_values(ProcessingRunType)})", name="ck_run_type"),
         CheckConstraint(f"status IN ({enum_values(ProcessingRunStatus)})", name="ck_run_status"),
         CheckConstraint(
@@ -393,6 +480,21 @@ class ProcessingRun(Base):
         Index("ix_processing_runs_organization_id", "organization_id"),
         Index("ix_processing_runs_batch_id", "ingestion_batch_id"),
         Index("ix_processing_runs_dataset_version_id", "dataset_version_id"),
+        Index(
+            "ix_processing_runs_org_ingestion_batch_id",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
+        Index(
+            "ix_processing_runs_org_dataset_version_id",
+            "organization_id",
+            "dataset_version_id",
+        ),
+        Index(
+            "ix_processing_runs_org_parent_run_id",
+            "organization_id",
+            "parent_run_id",
+        ),
         Index("ix_processing_runs_status", "status"),
         Index("ix_processing_runs_run_type", "run_type"),
         Index("ix_processing_runs_correlation_id", "correlation_id"),
@@ -437,6 +539,7 @@ class ProcessingRun(Base):
 class LineageNode(Base):
     __tablename__ = "lineage_nodes"
     __table_args__ = (
+        UniqueConstraint("organization_id", "id", name="uq_lineage_nodes_org_id"),
         UniqueConstraint(
             "organization_id", "node_type", "entity_id", name="uq_lineage_node_entity"
         ),
@@ -470,6 +573,24 @@ class LineageNode(Base):
 class LineageEdge(Base):
     __tablename__ = "lineage_edges"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "from_node_id"],
+            ["lineage_nodes.organization_id", "lineage_nodes.id"],
+            name="fk_lineage_edges_org_from_node",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "to_node_id"],
+            ["lineage_nodes.organization_id", "lineage_nodes.id"],
+            name="fk_lineage_edges_org_to_node",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "processing_run_id"],
+            ["processing_runs.organization_id", "processing_runs.id"],
+            name="fk_lineage_edges_org_processing_run",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "organization_id",
             "from_node_id",
@@ -493,6 +614,13 @@ class LineageEdge(Base):
         Index("ix_lineage_edges_to_node_id", "to_node_id"),
         Index("ix_lineage_edges_relationship_type", "relationship_type"),
         Index("ix_lineage_edges_processing_run_id", "processing_run_id"),
+        Index("ix_lineage_edges_org_from_node_id", "organization_id", "from_node_id"),
+        Index("ix_lineage_edges_org_to_node_id", "organization_id", "to_node_id"),
+        Index(
+            "ix_lineage_edges_org_processing_run_id",
+            "organization_id",
+            "processing_run_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -518,6 +646,12 @@ class LineageEdge(Base):
 class LineageEvent(Base):
     __tablename__ = "lineage_events"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "processing_run_id"],
+            ["processing_runs.organization_id", "processing_runs.id"],
+            name="fk_lineage_events_org_processing_run",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"event_type IN ({enum_values(LineageEventType)})", name="ck_lineage_event_type"
         ),
@@ -527,6 +661,11 @@ class LineageEvent(Base):
         Index("ix_lineage_events_organization_id", "organization_id"),
         Index("ix_lineage_events_entity", "entity_type", "entity_id"),
         Index("ix_lineage_events_processing_run_id", "processing_run_id"),
+        Index(
+            "ix_lineage_events_org_processing_run_id",
+            "organization_id",
+            "processing_run_id",
+        ),
         Index("ix_lineage_events_occurred_at", "occurred_at"),
     )
 

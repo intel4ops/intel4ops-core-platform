@@ -111,6 +111,7 @@ def enum_values(enum_type: type[StrEnum]) -> str:
 class SourceSystem(Base):
     __tablename__ = "source_systems"
     __table_args__ = (
+        UniqueConstraint("organization_id", "id", name="uq_source_systems_org_id"),
         UniqueConstraint("organization_id", "code", name="uq_source_systems_organization_code"),
         CheckConstraint("failure_count >= 0", name="ck_source_systems_failure_count"),
         CheckConstraint(
