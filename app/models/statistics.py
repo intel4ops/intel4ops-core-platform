@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -61,6 +62,50 @@ class StatisticalExecution(Base):
         UniqueConstraint(
             "organization_id", "idempotency_key", name="uq_statistical_execution_idempotency"
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_statistical_executions_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_statistical_executions_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_statistical_executions_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_statistical_executions_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_statistical_executions_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_statistical_executions_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "readiness_assessment_id"],
+            [
+                "analytical_readiness_decisions.organization_id",
+                "analytical_readiness_decisions.id",
+            ],
+            name="fk_statistical_executions_org_readiness",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(StatisticalExecutionStatus)})",
             name="ck_statistical_execution_status",
@@ -71,6 +116,32 @@ class StatisticalExecution(Base):
         Index("ix_statistical_execution_created", "created_at"),
         Index("ix_statistical_execution_dataset_id", "dataset_id"),
         Index("ix_statistical_execution_dataset_version_id", "dataset_version_id"),
+        Index("ix_statistical_execution_org_dataset", "organization_id", "dataset_id"),
+        Index(
+            "ix_statistical_execution_org_dataset_version",
+            "organization_id",
+            "dataset_version_id",
+        ),
+        Index(
+            "ix_statistical_execution_org_ingestion_batch",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
+        Index(
+            "ix_statistical_execution_org_source_system",
+            "organization_id",
+            "source_system_id",
+        ),
+        Index(
+            "ix_statistical_execution_org_trust_assessment",
+            "organization_id",
+            "trust_assessment_id",
+        ),
+        Index(
+            "ix_statistical_execution_org_readiness",
+            "organization_id",
+            "readiness_assessment_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -132,10 +203,14 @@ class StatisticalExecution(Base):
     )
 
     baselines: Mapped[list[StatisticalBaseline]] = relationship(
-        cascade="all, delete-orphan", passive_deletes=True
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys=lambda: [StatisticalBaseline.statistical_execution_id],
     )
     observations: Mapped[list[StatisticalObservation]] = relationship(
-        cascade="all, delete-orphan", passive_deletes=True
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys=lambda: [StatisticalObservation.statistical_execution_id],
     )
     steps: Mapped[list[StatisticalExecutionStep]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
@@ -145,6 +220,12 @@ class StatisticalExecution(Base):
 class StatisticalBaseline(Base):
     __tablename__ = "statistical_baselines"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "statistical_execution_id"],
+            ["statistical_executions.organization_id", "statistical_executions.id"],
+            name="fk_statistical_baselines_org_execution",
+            ondelete="CASCADE",
+        ),
         Index(
             "ix_statistical_baseline_org_execution", "organization_id", "statistical_execution_id"
         ),
@@ -184,6 +265,17 @@ class StatisticalBaseline(Base):
 class StatisticalObservation(Base):
     __tablename__ = "statistical_observations"
     __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_statistical_observations_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "statistical_execution_id"],
+            ["statistical_executions.organization_id", "statistical_executions.id"],
+            name="fk_statistical_observations_org_execution",
+            ondelete="CASCADE",
+        ),
         CheckConstraint(
             "statistical_score >= 0 AND statistical_score <= 1 AND "
             "confidence_score >= 0 AND confidence_score <= 1 AND "
@@ -345,6 +437,12 @@ class AnomalySuppressionRecord(Base):
 class AnomalyReviewFeedback(Base):
     __tablename__ = "anomaly_review_feedback"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "statistical_observation_id"],
+            ["statistical_observations.organization_id", "statistical_observations.id"],
+            name="fk_anomaly_review_feedback_org_observation",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint(
             "organization_id",
             "statistical_observation_id",
