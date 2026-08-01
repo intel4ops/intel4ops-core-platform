@@ -376,6 +376,66 @@ def test_diagnostics_detect_each_cross_tenant_relationship(
             migration._assert_clean_tenant_references()
 
 
+@pytest.mark.parametrize("violation", ("orphan", "missing_tenant", "duplicate_parent"))
+def test_diagnostics_detect_orphans_missing_tenants_and_duplicate_targets(
+    violation: str,
+) -> None:
+    migration = import_module(
+        "migrations.versions.20260801_0027_ti_b2_reliability_statistical_integrity"
+    )
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE parents (id TEXT, organization_id TEXT)"))
+        connection.execute(
+            text(
+                "CREATE TABLE children (id TEXT PRIMARY KEY, organization_id TEXT, parent_id TEXT)"
+            )
+        )
+        parents: tuple[tuple[str, str], ...]
+        if violation == "duplicate_parent":
+            connection.execute(
+                text(
+                    "INSERT INTO parents (id, organization_id) "
+                    "VALUES ('parent-1', 'tenant-a'), ('parent-1', 'tenant-a')"
+                )
+            )
+            foreign_keys: tuple[tuple[str, str, str, str, str], ...] = ()
+            parents = (("parents", "uq_parents_org_id"),)
+            expected = "uq_parents_org_id.*1 duplicate targets"
+        else:
+            connection.execute(
+                text(
+                    "INSERT INTO children (id, organization_id, parent_id) "
+                    "VALUES ('child-1', :organization_id, 'missing-parent')"
+                ),
+                {"organization_id": None if violation == "missing_tenant" else "tenant-a"},
+            )
+            foreign_keys = (
+                (
+                    "children",
+                    "fk_children_org_parent",
+                    "parents",
+                    "parent_id",
+                    "RESTRICT",
+                ),
+            )
+            parents = ()
+            expected = "fk_children_org_parent.*1 violating rows"
+
+        with (
+            patch.object(migration, "COMPOSITE_FOREIGN_KEYS", foreign_keys),
+            patch.object(migration, "PARENT_UNIQUES", parents),
+            patch.object(migration.op, "get_bind", return_value=connection),
+            pytest.raises(RuntimeError, match=expected),
+        ):
+            migration._assert_clean_tenant_references()
+
+        if violation != "duplicate_parent":
+            assert (
+                connection.scalar(text("SELECT count(*) FROM children WHERE id = 'child-1'")) == 1
+            )
+
+
 def _reliability_graph(db: Session, slug: str) -> dict[str, UUID]:
     organization_id, trust_id, readiness_id, actor = reliability_foundation(db, slug)
     execution = reliability_execution_service.execute(
@@ -647,6 +707,38 @@ def test_direct_sql_allows_same_tenant_and_rejects_cross_tenant_rows(
             db.commit()
         db.rollback()
         assert db.scalar(select(table.c.id).where(table.c.id == row_id)) == row_id
+
+
+def test_orm_rejects_cross_tenant_rows_and_rolls_back_cleanly(db: Session) -> None:
+    first_reliability = _reliability_graph(db, f"ti-b2-rel-orm-first-{uuid4().hex[:8]}")
+    second_reliability = _reliability_graph(db, f"ti-b2-rel-orm-second-{uuid4().hex[:8]}")
+    first_statistics = _statistical_graph(db, f"ti-b2-stat-orm-first-{uuid4().hex[:8]}")
+    second_statistics = _statistical_graph(db, f"ti-b2-stat-orm-second-{uuid4().hex[:8]}")
+    first_cases = _relationship_cases(first_reliability, first_statistics)
+    second_cases = _relationship_cases(second_reliability, second_statistics)
+    model_by_table = {
+        "reliability_executions": ReliabilityExecution,
+        "reliability_metrics": ReliabilityMetric,
+        "reliability_model_results": ReliabilityModelResult,
+        "reliability_review_feedback": ReliabilityReviewFeedback,
+        "statistical_executions": StatisticalExecution,
+        "statistical_baselines": StatisticalBaseline,
+        "statistical_observations": StatisticalObservation,
+        "anomaly_review_feedback": AnomalyReviewFeedback,
+    }
+
+    for (table, row_id, parent_column, _), (_, _, _, wrong_parent) in zip(
+        first_cases, second_cases, strict=True
+    ):
+        values = _clone_values(db, table, row_id)
+        values[parent_column] = wrong_parent
+        row_id = cast(UUID, values["id"])
+        model: Any = model_by_table[table.name]
+        db.add(model(**values))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+        assert db.scalar(select(model.id).where(model.id == row_id)) is None
 
 
 def test_orm_collections_nullable_provenance_and_cascades(db: Session) -> None:
