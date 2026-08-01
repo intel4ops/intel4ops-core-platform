@@ -2,7 +2,9 @@ import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from importlib import import_module
 from threading import Barrier
+from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -30,6 +32,12 @@ from test_ti_a_referential_integrity import (
 )
 from test_ti_a_referential_integrity import TENANT_FOREIGN_KEYS as TI_A_FOREIGN_KEYS
 from test_ti_a_referential_integrity import TENANT_INDEXES as TI_A_INDEXES
+from test_ti_b1_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_B1_PARENT_CONSTRAINTS,
+)
+from test_ti_b1_referential_integrity import TENANT_FOREIGN_KEYS as TI_B1_FOREIGN_KEYS
+from test_ti_b1_referential_integrity import TENANT_INDEXES as TI_B1_INDEXES
+from test_trust_service import trust_foundation
 
 from app.models.entities import (
     Finding,
@@ -2988,3 +2996,180 @@ def test_ti_a_allows_bounded_concurrent_same_tenant_inserts(
     with ThreadPoolExecutor(max_workers=2) as executor:
         batch_ids = list(executor.map(create_batch, ("batch-ti-a-1", "batch-ti-a-2")))
     assert len(set(batch_ids)) == 2
+
+
+@pytest.mark.postgres
+def test_ti_b1_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    child_tables = (
+        "trust_assessments",
+        "trust_rule_results",
+        "trust_evidence",
+        "analytical_readiness_decisions",
+    )
+
+    def tenant_objects() -> tuple[
+        dict[str, list[Any]],
+        dict[str, list[Any]],
+        dict[str, list[Any]],
+    ]:
+        inspector = inspect(postgres_engine)
+        uniques = {
+            table_name: inspector.get_unique_constraints(table_name)
+            for table_name in TI_B1_PARENT_CONSTRAINTS
+        }
+        foreign_keys = {
+            table_name: inspector.get_foreign_keys(table_name) for table_name in child_tables
+        }
+        indexes = {table_name: inspector.get_indexes(table_name) for table_name in child_tables}
+        return uniques, foreign_keys, indexes
+
+    def object_names() -> tuple[set[str], set[str], set[str]]:
+        uniques, foreign_keys, indexes = tenant_objects()
+        return (
+            {
+                str(item["name"])
+                for values in uniques.values()
+                for item in values
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for values in foreign_keys.values()
+                for item in values
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for values in indexes.values()
+                for item in values
+                if item["name"] is not None
+            },
+        )
+
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_B1_INDEXES <= index_names
+
+    _, foreign_keys, _ = tenant_objects()
+    new_foreign_keys = {
+        str(item["name"]): item
+        for values in foreign_keys.values()
+        for item in values
+        if item["name"] in TI_B1_FOREIGN_KEYS
+    }
+    assert set(new_foreign_keys) == TI_B1_FOREIGN_KEYS
+    assert all(item["options"].get("ondelete") == "RESTRICT" for item in new_foreign_keys.values())
+    assert all(
+        item["constrained_columns"][0] == "organization_id"
+        and item["referred_columns"] == ["organization_id", "id"]
+        for item in new_foreign_keys.values()
+    )
+
+    existing_single_fk_targets: set[tuple[str, tuple[str, ...], str, tuple[str, ...]]] = {
+        (
+            table_name,
+            tuple(item["constrained_columns"]),
+            str(item["referred_table"]),
+            tuple(item["referred_columns"]),
+        )
+        for table_name, values in foreign_keys.items()
+        for item in values
+        if len(item["constrained_columns"]) == 1
+    }
+    assert {
+        ("trust_assessments", ("dataset_id",), "datasets", ("id",)),
+        (
+            "trust_assessments",
+            ("ingestion_batch_id",),
+            "ingestion_batches",
+            ("id",),
+        ),
+        (
+            "trust_rule_results",
+            ("trust_assessment_id",),
+            "trust_assessments",
+            ("id",),
+        ),
+        (
+            "trust_evidence",
+            ("trust_rule_result_id",),
+            "trust_rule_results",
+            ("id",),
+        ),
+        ("trust_evidence", ("dataset_id",), "datasets", ("id",)),
+        (
+            "analytical_readiness_decisions",
+            ("trust_assessment_id",),
+            "trust_assessments",
+            ("id",),
+        ),
+    } <= existing_single_fk_targets
+
+    migration = import_module("migrations.versions.20260731_0026_ti_b1_trust_readiness_integrity")
+    with (
+        postgres_engine.connect() as connection,
+        patch.object(migration.op, "get_bind", return_value=connection),
+    ):
+        migration._assert_clean_tenant_references()
+
+    command.downgrade(config, "20260731_0025")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B1_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_B1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_B1_INDEXES.isdisjoint(index_names)
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_B1_INDEXES <= index_names
+
+
+@pytest.mark.postgres
+def test_ti_b1_allows_bounded_concurrent_same_tenant_inserts(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, _, dataset_id = trust_foundation(
+            session, f"ti-b1-concurrency-{uuid4().hex[:8]}"
+        )
+        assessment = TrustAssessment(
+            organization_id=organization_id,
+            dataset_id=dataset_id,
+            status="pending",
+        )
+        session.add(assessment)
+        session.commit()
+        assessment_id = assessment.id
+
+    barrier = Barrier(2)
+
+    def create_result(suffix: str) -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            result = TrustRuleResult(
+                organization_id=organization_id,
+                trust_assessment_id=assessment_id,
+                rule_code=f"ti-b1-concurrent-{suffix}",
+                rule_version="1.0.0",
+                rule_name="TI-B1 concurrent rule",
+                dimension="validity",
+                severity="warning",
+                execution_status="completed",
+                result_status="passed",
+                message="TI-B1 concurrency",
+            )
+            session.add(result)
+            session.commit()
+            return result.id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        result_ids = list(executor.map(create_result, ("one", "two")))
+    assert len(set(result_ids)) == 2

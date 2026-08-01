@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -108,6 +109,23 @@ class TrustAssessment(Base):
             "idempotency_key",
             name="uq_trust_assessments_organization_idempotency",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_trust_assessments_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_trust_assessments_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_trust_assessments_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             "overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100)",
             name="ck_trust_assessment_overall_score",
@@ -134,6 +152,16 @@ class TrustAssessment(Base):
         Index("ix_trust_assessments_organization_id", "organization_id"),
         Index("ix_trust_assessments_dataset_id", "dataset_id"),
         Index("ix_trust_assessments_batch_id", "ingestion_batch_id"),
+        Index(
+            "ix_trust_assessments_org_dataset_id",
+            "organization_id",
+            "dataset_id",
+        ),
+        Index(
+            "ix_trust_assessments_org_ingestion_batch_id",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
         Index("ix_trust_assessments_status", "status"),
         Index("ix_trust_assessments_created_at", "created_at"),
     )
@@ -202,8 +230,24 @@ class TrustRuleResult(Base):
             "score IS NULL OR (score >= 0 AND score <= 100)",
             name="ck_trust_rule_score",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_trust_rule_results_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_trust_rule_results_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
         Index("ix_trust_rule_results_organization_id", "organization_id"),
         Index("ix_trust_rule_results_assessment_id", "trust_assessment_id"),
+        Index(
+            "ix_trust_rule_results_org_trust_assessment_id",
+            "organization_id",
+            "trust_assessment_id",
+        ),
         Index("ix_trust_rule_results_rule_code", "rule_code"),
         Index("ix_trust_rule_results_result_status", "result_status"),
         Index("ix_trust_rule_results_created_at", "created_at"),
@@ -241,9 +285,31 @@ class TrustEvidence(Base):
             f"evidence_type IN ({enum_values(TrustEvidenceType)})",
             name="ck_trust_evidence_type",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_rule_result_id"],
+            ["trust_rule_results.organization_id", "trust_rule_results.id"],
+            name="fk_trust_evidence_org_rule_result",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_trust_evidence_org_dataset",
+            ondelete="RESTRICT",
+        ),
         Index("ix_trust_evidence_organization_id", "organization_id"),
         Index("ix_trust_evidence_rule_result_id", "trust_rule_result_id"),
         Index("ix_trust_evidence_dataset_id", "dataset_id"),
+        Index(
+            "ix_trust_evidence_org_rule_result_id",
+            "organization_id",
+            "trust_rule_result_id",
+        ),
+        Index(
+            "ix_trust_evidence_org_dataset_id",
+            "organization_id",
+            "dataset_id",
+        ),
         Index("ix_trust_evidence_created_at", "created_at"),
     )
 
@@ -276,8 +342,24 @@ class AnalyticalReadinessDecision(Base):
             f"readiness_status IN ({enum_values(ReadinessStatus)})",
             name="ck_readiness_status",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_analytical_readiness_decisions_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_readiness_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
         Index("ix_readiness_organization_id", "organization_id"),
         Index("ix_readiness_assessment_id", "trust_assessment_id"),
+        Index(
+            "ix_readiness_org_trust_assessment_id",
+            "organization_id",
+            "trust_assessment_id",
+        ),
         Index("ix_readiness_status", "readiness_status"),
         Index("ix_readiness_created_at", "created_at"),
     )
