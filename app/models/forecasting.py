@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -46,6 +47,43 @@ class ForecastExecution(Base):
         UniqueConstraint(
             "organization_id", "reproducibility_fingerprint", name="uq_forecast_reproducibility"
         ),
+        UniqueConstraint("organization_id", "id", name="uq_forecast_executions_org_id"),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_forecast_executions_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_forecast_executions_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_forecast_executions_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_forecast_executions_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_forecast_executions_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "readiness_assessment_id"],
+            ["analytical_readiness_decisions.organization_id", "analytical_readiness_decisions.id"],
+            name="fk_forecast_executions_org_readiness",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(ForecastExecutionStatus)})",
             name="ck_forecast_execution_status",
@@ -55,6 +93,16 @@ class ForecastExecution(Base):
         Index("ix_forecast_execution_dataset", "organization_id", "dataset_reference"),
         Index("ix_forecast_execution_dataset_id", "dataset_id"),
         Index("ix_forecast_execution_dataset_version_id", "dataset_version_id"),
+        Index("ix_forecast_execution_org_dataset", "organization_id", "dataset_id"),
+        Index("ix_forecast_execution_org_dataset_version", "organization_id", "dataset_version_id"),
+        Index("ix_forecast_execution_org_ingestion_batch", "organization_id", "ingestion_batch_id"),
+        Index("ix_forecast_execution_org_source_system", "organization_id", "source_system_id"),
+        Index(
+            "ix_forecast_execution_org_trust_assessment",
+            "organization_id",
+            "trust_assessment_id",
+        ),
+        Index("ix_forecast_execution_org_readiness", "organization_id", "readiness_assessment_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -125,7 +173,10 @@ class ForecastExecution(Base):
     )
 
     candidates: Mapped[list[ForecastCandidate]] = relationship(cascade="all, delete-orphan")
-    points: Mapped[list[ForecastPoint]] = relationship(cascade="all, delete-orphan")
+    points: Mapped[list[ForecastPoint]] = relationship(
+        cascade="all, delete-orphan",
+        foreign_keys=lambda: [ForecastPoint.forecast_execution_id],
+    )
     steps: Mapped[list[ForecastExecutionStep]] = relationship(cascade="all, delete-orphan")
 
 
@@ -218,7 +269,15 @@ class ForecastPoint(Base):
             "entity_reference",
             name="uq_forecast_point",
         ),
+        UniqueConstraint("organization_id", "id", name="uq_forecast_points_org_id"),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_forecast_points_org_execution",
+            ondelete="CASCADE",
+        ),
         Index("ix_forecast_point_org_period", "organization_id", "forecast_period_start"),
+        Index("ix_forecast_point_org_execution", "organization_id", "forecast_execution_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -247,6 +306,13 @@ class ForecastScenario(Base):
     __tablename__ = "forecast_scenarios"
     __table_args__ = (
         UniqueConstraint("forecast_execution_id", "scenario_code", name="uq_forecast_scenario"),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_forecast_scenarios_org_execution",
+            ondelete="CASCADE",
+        ),
+        Index("ix_forecast_scenario_org_execution", "organization_id", "forecast_execution_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -272,6 +338,23 @@ class ForecastRevision(Base):
     __tablename__ = "forecast_revisions"
     __table_args__ = (
         Index("ix_forecast_revision_org_prior", "organization_id", "prior_forecast_execution_id"),
+        ForeignKeyConstraint(
+            ["organization_id", "prior_forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_forecast_revisions_org_prior_execution",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "revised_forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_forecast_revisions_org_revised_execution",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_forecast_revision_org_revised",
+            "organization_id",
+            "revised_forecast_execution_id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -300,6 +383,40 @@ class ForecastActual(Base):
     __tablename__ = "forecast_actuals"
     __table_args__ = (
         UniqueConstraint("organization_id", "forecast_point_id", name="uq_forecast_actual_point"),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_point_id"],
+            ["forecast_points.organization_id", "forecast_points.id"],
+            name="fk_forecast_actuals_org_forecast_point",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_forecast_actuals_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_forecast_actuals_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_forecast_actuals_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_forecast_actuals_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_forecast_actual_org_dataset", "organization_id", "dataset_id"),
+        Index("ix_forecast_actual_org_dataset_version", "organization_id", "dataset_version_id"),
+        Index("ix_forecast_actual_org_ingestion_batch", "organization_id", "ingestion_batch_id"),
+        Index("ix_forecast_actual_org_source_system", "organization_id", "source_system_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -337,6 +454,19 @@ class ForecastAccuracyResult(Base):
     __tablename__ = "forecast_accuracy_results"
     __table_args__ = (
         Index("ix_forecast_accuracy_org_execution", "organization_id", "forecast_execution_id"),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_forecast_accuracy_results_org_execution",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_point_id"],
+            ["forecast_points.organization_id", "forecast_points.id"],
+            name="fk_forecast_accuracy_results_org_forecast_point",
+            ondelete="CASCADE",
+        ),
+        Index("ix_forecast_accuracy_org_forecast_point", "organization_id", "forecast_point_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
