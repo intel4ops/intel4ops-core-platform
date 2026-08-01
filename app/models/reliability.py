@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -42,6 +43,50 @@ class ReliabilityExecution(Base):
         UniqueConstraint(
             "organization_id", "reproducibility_fingerprint", name="uq_reliability_reproducibility"
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_reliability_executions_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_reliability_executions_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_reliability_executions_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "ingestion_batch_id"],
+            ["ingestion_batches.organization_id", "ingestion_batches.id"],
+            name="fk_reliability_executions_org_ingestion_batch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "source_system_id"],
+            ["source_systems.organization_id", "source_systems.id"],
+            name="fk_reliability_executions_org_source_system",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_reliability_executions_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "readiness_assessment_id"],
+            [
+                "analytical_readiness_decisions.organization_id",
+                "analytical_readiness_decisions.id",
+            ],
+            name="fk_reliability_executions_org_readiness",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(ReliabilityExecutionStatus)})",
             name="ck_reliability_execution_status",
@@ -50,6 +95,32 @@ class ReliabilityExecution(Base):
         Index("ix_reliability_execution_asset_scope", "organization_id", "asset_scope_reference"),
         Index("ix_reliability_execution_dataset_id", "dataset_id"),
         Index("ix_reliability_execution_dataset_version_id", "dataset_version_id"),
+        Index("ix_reliability_execution_org_dataset", "organization_id", "dataset_id"),
+        Index(
+            "ix_reliability_execution_org_dataset_version",
+            "organization_id",
+            "dataset_version_id",
+        ),
+        Index(
+            "ix_reliability_execution_org_ingestion_batch",
+            "organization_id",
+            "ingestion_batch_id",
+        ),
+        Index(
+            "ix_reliability_execution_org_source_system",
+            "organization_id",
+            "source_system_id",
+        ),
+        Index(
+            "ix_reliability_execution_org_trust_assessment",
+            "organization_id",
+            "trust_assessment_id",
+        ),
+        Index(
+            "ix_reliability_execution_org_readiness",
+            "organization_id",
+            "readiness_assessment_id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -114,14 +185,26 @@ class ReliabilityExecution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
-    metrics: Mapped[list[ReliabilityMetric]] = relationship(cascade="all, delete-orphan")
-    models: Mapped[list[ReliabilityModelResult]] = relationship(cascade="all, delete-orphan")
+    metrics: Mapped[list[ReliabilityMetric]] = relationship(
+        cascade="all, delete-orphan",
+        foreign_keys=lambda: [ReliabilityMetric.reliability_execution_id],
+    )
+    models: Mapped[list[ReliabilityModelResult]] = relationship(
+        cascade="all, delete-orphan",
+        foreign_keys=lambda: [ReliabilityModelResult.reliability_execution_id],
+    )
     steps: Mapped[list[ReliabilityExecutionStep]] = relationship(cascade="all, delete-orphan")
 
 
 class ReliabilityMetric(Base):
     __tablename__ = "reliability_metrics"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "reliability_execution_id"],
+            ["reliability_executions.organization_id", "reliability_executions.id"],
+            name="fk_reliability_metrics_org_execution",
+            ondelete="CASCADE",
+        ),
         Index("ix_reliability_metric_org_execution", "organization_id", "reliability_execution_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -148,6 +231,19 @@ class ReliabilityMetric(Base):
 
 class ReliabilityModelResult(Base):
     __tablename__ = "reliability_model_results"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "reliability_execution_id"],
+            ["reliability_executions.organization_id", "reliability_executions.id"],
+            name="fk_reliability_model_results_org_execution",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_reliability_model_result_org_execution",
+            "organization_id",
+            "reliability_execution_id",
+        ),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT")
@@ -217,6 +313,12 @@ class ReliabilityMethodRegistration(Base):
 class ReliabilityReviewFeedback(Base):
     __tablename__ = "reliability_review_feedback"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "reliability_execution_id"],
+            ["reliability_executions.organization_id", "reliability_executions.id"],
+            name="fk_reliability_review_feedback_org_execution",
+            ondelete="CASCADE",
+        ),
         Index("ix_reliability_review_org_execution", "organization_id", "reliability_execution_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
