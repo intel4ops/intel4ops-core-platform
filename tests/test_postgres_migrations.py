@@ -43,6 +43,12 @@ from test_ti_b2_referential_integrity import (
 )
 from test_ti_b2_referential_integrity import REUSED_INDEXES as TI_B2_REUSED_INDEXES
 from test_ti_b2_referential_integrity import TENANT_FOREIGN_KEYS as TI_B2_FOREIGN_KEYS
+from test_ti_b3_referential_integrity import NEW_INDEXES as TI_B3_INDEXES
+from test_ti_b3_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_B3_PARENT_CONSTRAINTS,
+)
+from test_ti_b3_referential_integrity import REUSED_INDEXES as TI_B3_REUSED_INDEXES
+from test_ti_b3_referential_integrity import TENANT_FOREIGN_KEYS as TI_B3_FOREIGN_KEYS
 from test_trust_service import trust_foundation
 
 from app.models.entities import (
@@ -3408,3 +3414,87 @@ def test_ti_b2_allows_bounded_concurrent_same_tenant_inserts(
     with ThreadPoolExecutor(max_workers=2) as executor:
         statistical_ids = list(executor.map(create_statistical_review, (1, 2)))
     assert len(set(statistical_ids)) == 2
+
+
+@pytest.mark.postgres
+def test_ti_b3_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    child_tables = (
+        "forecast_executions",
+        "forecast_points",
+        "forecast_scenarios",
+        "forecast_revisions",
+        "forecast_actuals",
+        "forecast_accuracy_results",
+    )
+
+    def object_names() -> tuple[set[str], set[str], set[str]]:
+        inspector = inspect(postgres_engine)
+        return (
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_unique_constraints(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_foreign_keys(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_indexes(table_name)
+                if item["name"] is not None
+            },
+        )
+
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B3_FOREIGN_KEYS <= foreign_key_names
+    assert TI_B3_INDEXES <= index_names
+    assert TI_B3_REUSED_INDEXES <= unique_names | index_names
+
+    inspector = inspect(postgres_engine)
+    new_foreign_keys = {
+        str(item["name"]): item
+        for table_name in child_tables
+        for item in inspector.get_foreign_keys(table_name)
+        if item["name"] in TI_B3_FOREIGN_KEYS
+    }
+    assert set(new_foreign_keys) == TI_B3_FOREIGN_KEYS
+    assert (
+        sum(item["options"].get("ondelete") == "RESTRICT" for item in new_foreign_keys.values())
+        == 13
+    )
+    assert (
+        sum(item["options"].get("ondelete") == "CASCADE" for item in new_foreign_keys.values()) == 4
+    )
+
+    migration = import_module(
+        "migrations.versions.20260801_0028_ti_b3_forecasting_actuals_integrity"
+    )
+    with (
+        postgres_engine.connect() as connection,
+        patch.object(migration.op, "get_bind", return_value=connection),
+    ):
+        migration._assert_clean_tenant_references()
+
+    command.downgrade(config, "20260801_0027")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_B3_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_B3_INDEXES.isdisjoint(index_names)
+    assert TI_B3_REUSED_INDEXES <= unique_names | index_names
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B3_FOREIGN_KEYS <= foreign_key_names
+    assert TI_B3_INDEXES <= index_names
+    assert TI_B3_REUSED_INDEXES <= unique_names | index_names
