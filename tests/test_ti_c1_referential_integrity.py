@@ -1,8 +1,8 @@
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -15,22 +15,33 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, configure_mappers
+from test_forecasting_service import foundation as forecasting_foundation
+from test_forecasting_service import payload as forecasting_payload
 from test_progressive_orchestrator import (
     foundation as orchestration_foundation,
 )
 from test_progressive_orchestrator import request as orchestration_payload
+from test_reliability_service import reliability_foundation, reliability_payload
+from test_statistical_service import execution_payload, statistical_foundation
 
 import app.models  # noqa: F401
 from app.db.session import Base
+from app.models.forecasting import ForecastExecution
 from app.models.orchestration import (
     IntelligenceOrchestrationDecision,
     IntelligenceOrchestrationRequest,
     IntelligenceOrchestrationStatusHistory,
     IntelligenceOrchestrationStep,
 )
+from app.models.reliability import ReliabilityExecution
+from app.models.statistics import StatisticalExecution
+from app.services.forecasting_service import forecast_execution_service
 from app.services.orchestration_service import OrchestrationService
+from app.services.reliability_service import reliability_execution_service
+from app.services.statistical_service import statistical_execution_service
 
 PARENT_CONSTRAINTS = {
     "intelligence_orchestration_requests": "uq_orchestration_requests_org_id",
@@ -162,6 +173,24 @@ def test_metadata_contract_is_exact_and_mappers_configure() -> None:
     assert unique_counts["uq_orchestration_requests_organization_idempotency"] == 1
     assert unique_counts["uq_orchestration_requests_organization_correlation"] == 1
 
+    for child, name, parent, parent_column, ondelete in RELATIONSHIPS:
+        matches = [
+            constraint
+            for constraint in Base.metadata.tables[child].foreign_key_constraints
+            if constraint.name == name
+        ]
+        assert len(matches) == 1
+        constraint = matches[0]
+        assert [column.name for column in constraint.columns] == [
+            "organization_id",
+            parent_column,
+        ]
+        assert [element.target_fullname for element in constraint.elements] == [
+            f"{parent}.organization_id",
+            f"{parent}.id",
+        ]
+        assert constraint.ondelete == ondelete
+
     relationship_expectations = {
         IntelligenceOrchestrationRequest.decisions: "orchestration_request_id",
         IntelligenceOrchestrationDecision.request: "orchestration_request_id",
@@ -176,8 +205,8 @@ def test_metadata_contract_is_exact_and_mappers_configure() -> None:
         } == {column_name}
 
 
-def test_single_column_foreign_keys_and_set_null_references_remain() -> None:
-    for child, _, parent, parent_column, _ in RELATIONSHIPS:
+def test_single_column_foreign_keys_remain_except_remediated_execution_links() -> None:
+    for child, _, parent, parent_column, _ in RELATIONSHIPS[:7]:
         table = Base.metadata.tables[child]
         assert any(
             len(constraint.columns) == 1
@@ -192,14 +221,18 @@ def test_single_column_foreign_keys_and_set_null_references_remain() -> None:
         "forecast_executions",
     ):
         table = Base.metadata.tables[table_name]
-        matching = [
+        orchestration_foreign_keys = [
             constraint
             for constraint in table.foreign_key_constraints
-            if len(constraint.columns) == 1
-            and tuple(constraint.columns)[0].name == "orchestration_request_id"
+            if "orchestration_request_id" in {column.name for column in constraint.columns}
         ]
-        assert len(matching) == 1
-        assert matching[0].ondelete == "SET NULL"
+        assert len(orchestration_foreign_keys) == 1
+        constraint = orchestration_foreign_keys[0]
+        assert [column.name for column in constraint.columns] == [
+            "organization_id",
+            "orchestration_request_id",
+        ]
+        assert constraint.ondelete == "RESTRICT"
 
 
 def _orchestration_graph(
@@ -224,6 +257,139 @@ def _orchestration_graph(
         "trust_assessment_id": trust_id,
         "analytical_readiness_id": readiness_id,
     }
+
+
+def _lineage_request(
+    db: Session,
+    organization_id: UUID,
+    dataset_id: UUID,
+    trust_id: UUID,
+    readiness_id: UUID,
+) -> IntelligenceOrchestrationRequest:
+    row = IntelligenceOrchestrationRequest(
+        organization_id=organization_id,
+        request_code=f"ORC-{uuid4().hex[:16].upper()}",
+        correlation_id=f"ti-c1r-correlation-{uuid4().hex}",
+        idempotency_key=f"ti-c1r-idempotency-{uuid4().hex}",
+        definition_code="TI.C1R.LINEAGE",
+        definition_version="1.0.0",
+        requested_analytical_level="arithmetic",
+        dataset_id=dataset_id,
+        dataset_version_id=None,
+        dataset_reference=f"dataset:{dataset_id}",
+        trust_assessment_id=trust_id,
+        analytical_readiness_id=readiness_id,
+        requested_by_user_id=uuid4(),
+        status="received",
+        publish_finding=False,
+        parameters_summary={},
+        request_context={},
+        context_fingerprint=uuid4().hex * 2,
+        warnings=[],
+        limitations=[],
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def _execution_lineages(
+    db: Session,
+) -> tuple[
+    tuple[type[Any], UUID, IntelligenceOrchestrationRequest],
+    ...,
+]:
+    reliability_org, reliability_trust, reliability_readiness, reliability_actor = (
+        reliability_foundation(db, f"ti-c1r-rel-{uuid4().hex[:8]}")
+    )
+    reliability = reliability_execution_service.execute(
+        db,
+        reliability_org,
+        reliability_payload(reliability_trust, reliability_readiness),
+        reliability_actor,
+    )
+    reliability_request = _lineage_request(
+        db,
+        reliability_org,
+        cast(UUID, reliability.dataset_id),
+        reliability_trust,
+        reliability_readiness,
+    )
+    reliability.orchestration_request_id = reliability_request.id
+    db.commit()
+
+    statistics_org, _, statistics_trust, statistics_readiness, statistics_actor = (
+        statistical_foundation(db, f"ti-c1r-stat-{uuid4().hex[:8]}")
+    )
+    statistics = statistical_execution_service.execute(
+        db,
+        statistics_org,
+        execution_payload(
+            statistics_trust,
+            statistics_readiness,
+            key=f"ti-c1r-{uuid4().hex}",
+        ),
+        statistics_actor,
+    )
+    statistics_request = _lineage_request(
+        db,
+        statistics_org,
+        cast(UUID, statistics.dataset_id),
+        statistics_trust,
+        statistics_readiness,
+    )
+    statistics.orchestration_request_id = statistics_request.id
+    db.commit()
+
+    forecast_org, forecast_trust, forecast_readiness, forecast_actor = forecasting_foundation(
+        db, f"ti-c1r-forecast-{uuid4().hex[:8]}"
+    )
+    forecast = forecast_execution_service.execute(
+        db,
+        forecast_org,
+        forecasting_payload(
+            forecast_trust,
+            forecast_readiness,
+            fingerprint=uuid4().hex * 2,
+        ),
+        forecast_actor,
+    )
+    forecast_request = _lineage_request(
+        db,
+        forecast_org,
+        cast(UUID, forecast.dataset_id),
+        forecast_trust,
+        forecast_readiness,
+    )
+    forecast.orchestration_request_id = forecast_request.id
+    db.commit()
+
+    return (
+        (ReliabilityExecution, reliability.id, reliability_request),
+        (StatisticalExecution, statistics.id, statistics_request),
+        (ForecastExecution, forecast.id, forecast_request),
+    )
+
+
+def test_execution_lineage_restricts_request_deletion_and_preserves_reference(
+    db: Session,
+) -> None:
+    for model, execution_id, request in _execution_lineages(db):
+        with pytest.raises(IntegrityError):
+            db.delete(request)
+            db.commit()
+        db.rollback()
+        execution = db.get(model, execution_id)
+        assert execution is not None
+        assert execution.orchestration_request_id == request.id
+
+
+def test_unreferenced_orchestration_request_delete_succeeds(db: Session) -> None:
+    request, _ = _orchestration_graph(db, f"ti-c1r-unreferenced-{uuid4().hex[:8]}")
+    request_id = request.id
+    db.delete(request)
+    db.commit()
+    assert db.get(IntelligenceOrchestrationRequest, request_id) is None
 
 
 def test_real_sql_enforces_orchestration_request_and_child_tenants(db: Session) -> None:
@@ -405,6 +571,21 @@ def test_sqlite_migration_round_trip_restores_ti_c1_objects(tmp_path: Path) -> N
             },
         )
 
+    def execution_orchestration_foreign_keys() -> dict[str, list[ReflectedForeignKeyConstraint]]:
+        inspector = inspect(engine)
+        return {
+            table_name: [
+                item
+                for item in inspector.get_foreign_keys(table_name)
+                if "orchestration_request_id" in item["constrained_columns"]
+            ]
+            for table_name in (
+                "reliability_executions",
+                "statistical_executions",
+                "forecast_executions",
+            )
+        }
+
     try:
         command.upgrade(config, "head")
         unique_names, foreign_key_names, index_names = object_names()
@@ -412,6 +593,13 @@ def test_sqlite_migration_round_trip_restores_ti_c1_objects(tmp_path: Path) -> N
         assert TENANT_FOREIGN_KEYS <= foreign_key_names
         assert NEW_INDEXES <= index_names
         assert REUSED_INDEXES <= index_names
+        for values in execution_orchestration_foreign_keys().values():
+            assert len(values) == 1
+            assert values[0]["constrained_columns"] == [
+                "organization_id",
+                "orchestration_request_id",
+            ]
+            assert values[0]["options"].get("ondelete") == "RESTRICT"
 
         command.downgrade(config, "20260801_0028")
         unique_names, foreign_key_names, index_names = object_names()
@@ -419,11 +607,22 @@ def test_sqlite_migration_round_trip_restores_ti_c1_objects(tmp_path: Path) -> N
         assert TENANT_FOREIGN_KEYS.isdisjoint(foreign_key_names)
         assert NEW_INDEXES.isdisjoint(index_names)
         assert REUSED_INDEXES <= index_names
+        for values in execution_orchestration_foreign_keys().values():
+            assert len(values) == 1
+            assert values[0]["constrained_columns"] == ["orchestration_request_id"]
+            assert values[0]["options"].get("ondelete") == "SET NULL"
 
         command.upgrade(config, "head")
         unique_names, foreign_key_names, index_names = object_names()
         assert set(PARENT_CONSTRAINTS.values()) <= unique_names
         assert TENANT_FOREIGN_KEYS <= foreign_key_names
         assert NEW_INDEXES <= index_names
+        for values in execution_orchestration_foreign_keys().values():
+            assert len(values) == 1
+            assert values[0]["constrained_columns"] == [
+                "organization_id",
+                "orchestration_request_id",
+            ]
+            assert values[0]["options"].get("ondelete") == "RESTRICT"
     finally:
         engine.dispose()

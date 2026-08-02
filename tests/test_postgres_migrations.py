@@ -15,6 +15,7 @@ from alembic.config import Config
 from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import Table, create_engine, func, insert, inspect, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_forecasting_service import foundation as forecasting_foundation
@@ -57,6 +58,12 @@ from test_ti_c1_referential_integrity import (
 )
 from test_ti_c1_referential_integrity import REUSED_INDEXES as TI_C1_REUSED_INDEXES
 from test_ti_c1_referential_integrity import TENANT_FOREIGN_KEYS as TI_C1_FOREIGN_KEYS
+from test_ti_c1_referential_integrity import (
+    _execution_lineages as ti_c1_execution_lineages,
+)
+from test_ti_c1_referential_integrity import (
+    _orchestration_graph as ti_c1_orchestration_graph,
+)
 from test_trust_service import trust_foundation
 
 from app.models.entities import (
@@ -3551,6 +3558,21 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
             },
         )
 
+    def execution_orchestration_foreign_keys() -> dict[str, list[ReflectedForeignKeyConstraint]]:
+        inspector = inspect(postgres_engine)
+        return {
+            table_name: [
+                item
+                for item in inspector.get_foreign_keys(table_name)
+                if "orchestration_request_id" in item["constrained_columns"]
+            ]
+            for table_name in (
+                "reliability_executions",
+                "statistical_executions",
+                "forecast_executions",
+            )
+        }
+
     unique_names, foreign_key_names, index_names = object_names()
     assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
     assert TI_C1_FOREIGN_KEYS <= foreign_key_names
@@ -3578,13 +3600,17 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
         "statistical_executions",
         "forecast_executions",
     ):
-        single = [
+        orchestration_foreign_keys = [
             item
             for item in inspector.get_foreign_keys(table_name)
-            if item["constrained_columns"] == ["orchestration_request_id"]
+            if "orchestration_request_id" in item["constrained_columns"]
         ]
-        assert len(single) == 1
-        assert single[0]["options"].get("ondelete") == "SET NULL"
+        assert len(orchestration_foreign_keys) == 1
+        assert orchestration_foreign_keys[0]["constrained_columns"] == [
+            "organization_id",
+            "orchestration_request_id",
+        ]
+        assert orchestration_foreign_keys[0]["options"].get("ondelete") == "RESTRICT"
 
     migration = import_module("migrations.versions.20260801_0029_ti_c1_orchestration_integrity")
     with (
@@ -3599,6 +3625,10 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
     assert TI_C1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
     assert TI_C1_INDEXES.isdisjoint(index_names)
     assert TI_C1_REUSED_INDEXES <= index_names
+    for values in execution_orchestration_foreign_keys().values():
+        assert len(values) == 1
+        assert values[0]["constrained_columns"] == ["orchestration_request_id"]
+        assert values[0]["options"].get("ondelete") == "SET NULL"
 
     command.upgrade(config, "head")
     unique_names, foreign_key_names, index_names = object_names()
@@ -3606,6 +3636,37 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
     assert TI_C1_FOREIGN_KEYS <= foreign_key_names
     assert TI_C1_INDEXES <= index_names
     assert TI_C1_REUSED_INDEXES <= index_names
+    for values in execution_orchestration_foreign_keys().values():
+        assert len(values) == 1
+        assert values[0]["constrained_columns"] == [
+            "organization_id",
+            "orchestration_request_id",
+        ]
+        assert values[0]["options"].get("ondelete") == "RESTRICT"
+
+
+@pytest.mark.postgres
+def test_ti_c1_execution_lineage_restricts_request_delete_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        for model, execution_id, request in ti_c1_execution_lineages(session):
+            with pytest.raises(IntegrityError):
+                session.delete(request)
+                session.commit()
+            session.rollback()
+            execution = session.get(model, execution_id)
+            assert execution is not None
+            assert execution.orchestration_request_id == request.id
+
+        unreferenced, _ = ti_c1_orchestration_graph(
+            session, f"ti-c1r-pg-unreferenced-{uuid4().hex[:8]}"
+        )
+        request_id = unreferenced.id
+        session.delete(unreferenced)
+        session.commit()
+        assert session.get(IntelligenceOrchestrationRequest, request_id) is None
 
 
 @pytest.mark.postgres
