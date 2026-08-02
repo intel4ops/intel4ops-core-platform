@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from importlib import import_module
 from threading import Barrier
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -13,7 +13,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from governed_provenance_helpers import add_eligible_dataset_version
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import Table, create_engine, func, insert, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +21,8 @@ from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
 from test_ingestion_service import foundation as ingestion_foundation
+from test_progressive_orchestrator import foundation as orchestration_foundation
+from test_progressive_orchestrator import request as orchestration_payload
 from test_reliability_service import (
     add_reliability_definition,
     reliability_foundation,
@@ -49,6 +51,12 @@ from test_ti_b3_referential_integrity import (
 )
 from test_ti_b3_referential_integrity import REUSED_INDEXES as TI_B3_REUSED_INDEXES
 from test_ti_b3_referential_integrity import TENANT_FOREIGN_KEYS as TI_B3_FOREIGN_KEYS
+from test_ti_c1_referential_integrity import NEW_INDEXES as TI_C1_INDEXES
+from test_ti_c1_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_C1_PARENT_CONSTRAINTS,
+)
+from test_ti_c1_referential_integrity import REUSED_INDEXES as TI_C1_REUSED_INDEXES
+from test_ti_c1_referential_integrity import TENANT_FOREIGN_KEYS as TI_C1_FOREIGN_KEYS
 from test_trust_service import trust_foundation
 
 from app.models.entities import (
@@ -67,7 +75,11 @@ from app.models.forecasting import (
 )
 from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
 from app.models.oikb import OIKBDefinition
-from app.models.orchestration import IntelligenceOrchestrationRequest
+from app.models.orchestration import (
+    IntelligenceOrchestrationDecision,
+    IntelligenceOrchestrationRequest,
+    IntelligenceOrchestrationStep,
+)
 from app.models.reliability import (
     ReliabilityExecution,
     ReliabilityExecutionStep,
@@ -3498,3 +3510,189 @@ def test_ti_b3_migration_round_trip_enforces_expected_schema(
     assert TI_B3_FOREIGN_KEYS <= foreign_key_names
     assert TI_B3_INDEXES <= index_names
     assert TI_B3_REUSED_INDEXES <= unique_names | index_names
+
+
+@pytest.mark.postgres
+def test_ti_c1_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    child_tables = (
+        "intelligence_orchestration_requests",
+        "intelligence_orchestration_decisions",
+        "intelligence_orchestration_steps",
+        "intelligence_orchestration_status_history",
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+    )
+
+    def object_names() -> tuple[set[str], set[str], set[str]]:
+        inspector = inspect(postgres_engine)
+        return (
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_unique_constraints(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_foreign_keys(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_indexes(table_name)
+                if item["name"] is not None
+            },
+        )
+
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C1_INDEXES <= index_names
+    assert TI_C1_REUSED_INDEXES <= index_names
+
+    inspector = inspect(postgres_engine)
+    new_foreign_keys = {
+        str(item["name"]): item
+        for table_name in child_tables
+        for item in inspector.get_foreign_keys(table_name)
+        if item["name"] in TI_C1_FOREIGN_KEYS
+    }
+    assert set(new_foreign_keys) == TI_C1_FOREIGN_KEYS
+    assert (
+        sum(item["options"].get("ondelete") == "CASCADE" for item in new_foreign_keys.values()) == 3
+    )
+    assert (
+        sum(item["options"].get("ondelete") == "RESTRICT" for item in new_foreign_keys.values())
+        == 7
+    )
+
+    for table_name in (
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+    ):
+        single = [
+            item
+            for item in inspector.get_foreign_keys(table_name)
+            if item["constrained_columns"] == ["orchestration_request_id"]
+        ]
+        assert len(single) == 1
+        assert single[0]["options"].get("ondelete") == "SET NULL"
+
+    migration = import_module("migrations.versions.20260801_0029_ti_c1_orchestration_integrity")
+    with (
+        postgres_engine.connect() as connection,
+        patch.object(migration.op, "get_bind", return_value=connection),
+    ):
+        migration._assert_clean_tenant_references()
+
+    command.downgrade(config, "20260801_0028")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_C1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C1_INDEXES.isdisjoint(index_names)
+    assert TI_C1_REUSED_INDEXES <= index_names
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C1_INDEXES <= index_names
+    assert TI_C1_REUSED_INDEXES <= index_names
+
+
+@pytest.mark.postgres
+def test_ti_c1_allows_bounded_concurrent_same_tenant_child_inserts(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, dataset_id, trust_id, readiness_id = orchestration_foundation(
+            session, f"ti-c1-concurrency-{uuid4().hex[:8]}"
+        )
+        request_row = OrchestrationService().orchestrate(
+            session,
+            organization_id,
+            orchestration_payload(
+                dataset_id,
+                trust_id,
+                readiness_id,
+                key=f"ti-c1-concurrency-{uuid4().hex}",
+            ),
+            uuid4(),
+        )
+        decision = session.scalar(
+            select(IntelligenceOrchestrationDecision).where(
+                IntelligenceOrchestrationDecision.orchestration_request_id == request_row.id
+            )
+        )
+        step = session.scalar(
+            select(IntelligenceOrchestrationStep).where(
+                IntelligenceOrchestrationStep.orchestration_request_id == request_row.id
+            )
+        )
+        assert decision is not None
+        assert step is not None
+        decision_values = dict(
+            session.execute(
+                select(IntelligenceOrchestrationDecision.__table__).where(
+                    IntelligenceOrchestrationDecision.id == decision.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+        step_values = dict(
+            session.execute(
+                select(IntelligenceOrchestrationStep.__table__).where(
+                    IntelligenceOrchestrationStep.id == step.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    decision_barrier = Barrier(2)
+
+    def create_decision(sequence: int) -> UUID:
+        with Session(postgres_engine) as session:
+            values = dict(decision_values)
+            values["id"] = uuid4()
+            values["decision_sequence"] = sequence
+            values["content_hash"] = uuid4().hex * 2
+            decision_barrier.wait()
+            session.execute(
+                insert(cast(Table, IntelligenceOrchestrationDecision.__table__)).values(**values)
+            )
+            session.commit()
+            return cast(UUID, values["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decision_ids = list(executor.map(create_decision, (101, 102)))
+    assert len(set(decision_ids)) == 2
+
+    step_barrier = Barrier(2)
+
+    def create_step(sequence: int) -> UUID:
+        with Session(postgres_engine) as session:
+            values = dict(step_values)
+            values["id"] = uuid4()
+            values["step_sequence"] = sequence
+            values["content_hash"] = uuid4().hex * 2
+            step_barrier.wait()
+            session.execute(
+                insert(cast(Table, IntelligenceOrchestrationStep.__table__)).values(**values)
+            )
+            session.commit()
+            return cast(UUID, values["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        step_ids = list(executor.map(create_step, (101, 102)))
+    assert len(set(step_ids)) == 2
