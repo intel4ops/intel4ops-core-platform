@@ -162,9 +162,7 @@ class StatisticalExecution(Base):
     organization_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT")
     )
-    orchestration_request_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("intelligence_orchestration_requests.id", ondelete="SET NULL"), nullable=True
-    )
+    orchestration_request_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     oikb_definition_id: Mapped[UUID] = mapped_column(
         ForeignKey("oikb_definitions.id", ondelete="RESTRICT")
     )
