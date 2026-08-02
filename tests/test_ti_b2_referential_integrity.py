@@ -324,7 +324,12 @@ def test_metadata_mappers_and_indexes_define_exact_ti_b2_contract() -> None:
         }
         assert ("organization_id", "oikb_definition_id") not in composite_columns
         assert ("organization_id", "oikb_definition_version_id") not in composite_columns
-        assert ("organization_id", "orchestration_request_id") not in composite_columns
+    # Package tests certify their owned schema without forbidding additive later-package objects.
+    assert {
+        "fk_reliability_executions_org_orchestration_request",
+        "fk_statistical_executions_org_orchestration_request",
+        "fk_forecast_executions_org_orchestration_request",
+    }.isdisjoint(TENANT_FOREIGN_KEYS)
     suppression = Base.metadata.tables["anomaly_suppression_records"]
     assert not any(
         isinstance(item, ForeignKeyConstraint)
