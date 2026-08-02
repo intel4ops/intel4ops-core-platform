@@ -106,6 +106,15 @@ class StatisticalExecution(Base):
             name="fk_statistical_executions_org_readiness",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_statistical_executions_org_orchestration_request",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(StatisticalExecutionStatus)})",
             name="ck_statistical_execution_status",
@@ -141,6 +150,11 @@ class StatisticalExecution(Base):
             "ix_statistical_execution_org_readiness",
             "organization_id",
             "readiness_assessment_id",
+        ),
+        Index(
+            "ix_statistical_execution_org_orchestration_request",
+            "organization_id",
+            "orchestration_request_id",
         ),
     )
 

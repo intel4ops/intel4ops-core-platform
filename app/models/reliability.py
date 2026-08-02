@@ -87,6 +87,15 @@ class ReliabilityExecution(Base):
             name="fk_reliability_executions_org_readiness",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_reliability_executions_org_orchestration_request",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(ReliabilityExecutionStatus)})",
             name="ck_reliability_execution_status",
@@ -120,6 +129,11 @@ class ReliabilityExecution(Base):
             "ix_reliability_execution_org_readiness",
             "organization_id",
             "readiness_assessment_id",
+        ),
+        Index(
+            "ix_reliability_execution_org_orchestration_request",
+            "organization_id",
+            "orchestration_request_id",
         ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

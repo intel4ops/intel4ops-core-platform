@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -75,6 +76,35 @@ class IntelligenceOrchestrationRequest(Base):
             "correlation_id",
             name="uq_orchestration_requests_organization_correlation",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_orchestration_requests_org_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_id"],
+            ["datasets.organization_id", "datasets.id"],
+            name="fk_orchestration_requests_org_dataset",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "dataset_version_id"],
+            ["dataset_versions.organization_id", "dataset_versions.id"],
+            name="fk_orchestration_requests_org_dataset_version",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "trust_assessment_id"],
+            ["trust_assessments.organization_id", "trust_assessments.id"],
+            name="fk_orchestration_requests_org_trust_assessment",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "analytical_readiness_id"],
+            ["analytical_readiness_decisions.organization_id", "analytical_readiness_decisions.id"],
+            name="fk_orchestration_requests_org_readiness",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(OrchestrationStatus)})",
             name="ck_orchestration_request_status",
@@ -98,6 +128,22 @@ class IntelligenceOrchestrationRequest(Base):
         Index("ix_orchestration_requests_dataset_id", "dataset_id"),
         Index("ix_orchestration_requests_trust_assessment_id", "trust_assessment_id"),
         Index("ix_orchestration_requests_readiness_id", "analytical_readiness_id"),
+        Index("ix_orchestration_requests_org_dataset", "organization_id", "dataset_id"),
+        Index(
+            "ix_orchestration_requests_org_dataset_version",
+            "organization_id",
+            "dataset_version_id",
+        ),
+        Index(
+            "ix_orchestration_requests_org_trust_assessment",
+            "organization_id",
+            "trust_assessment_id",
+        ),
+        Index(
+            "ix_orchestration_requests_org_readiness",
+            "organization_id",
+            "analytical_readiness_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -137,13 +183,22 @@ class IntelligenceOrchestrationRequest(Base):
     )
 
     decisions: Mapped[list["IntelligenceOrchestrationDecision"]] = relationship(
-        back_populates="request", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="request",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="IntelligenceOrchestrationDecision.orchestration_request_id",
     )
     steps: Mapped[list["IntelligenceOrchestrationStep"]] = relationship(
-        back_populates="request", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="request",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="IntelligenceOrchestrationStep.orchestration_request_id",
     )
     history: Mapped[list["IntelligenceOrchestrationStatusHistory"]] = relationship(
-        back_populates="request", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="request",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="IntelligenceOrchestrationStatusHistory.orchestration_request_id",
     )
 
 
@@ -163,6 +218,15 @@ class IntelligenceOrchestrationDecision(Base):
             "ix_orchestration_decisions_organization_request",
             "organization_id",
             "orchestration_request_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_orchestration_decisions_org_request",
+            ondelete="CASCADE",
         ),
         Index(
             "ix_orchestration_decisions_selected_engine",
@@ -203,7 +267,10 @@ class IntelligenceOrchestrationDecision(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
-    request: Mapped[IntelligenceOrchestrationRequest] = relationship(back_populates="decisions")
+    request: Mapped[IntelligenceOrchestrationRequest] = relationship(
+        back_populates="decisions",
+        foreign_keys=[orchestration_request_id],
+    )
 
 
 class IntelligenceOrchestrationStep(Base):
@@ -223,6 +290,15 @@ class IntelligenceOrchestrationStep(Base):
             "ix_orchestration_steps_organization_request",
             "organization_id",
             "orchestration_request_id",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_orchestration_steps_org_request",
+            ondelete="CASCADE",
         ),
         Index(
             "ix_orchestration_steps_execution",
@@ -267,7 +343,10 @@ class IntelligenceOrchestrationStep(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
-    request: Mapped[IntelligenceOrchestrationRequest] = relationship(back_populates="steps")
+    request: Mapped[IntelligenceOrchestrationRequest] = relationship(
+        back_populates="steps",
+        foreign_keys=[orchestration_request_id],
+    )
 
 
 class IntelligenceEngineRegistration(Base):
@@ -320,6 +399,15 @@ class IntelligenceOrchestrationStatusHistory(Base):
             "organization_id",
             "orchestration_request_id",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_orchestration_history_org_request",
+            ondelete="CASCADE",
+        ),
         Index("ix_orchestration_history_changed_at", "changed_at"),
     )
 
@@ -338,4 +426,7 @@ class IntelligenceOrchestrationStatusHistory(Base):
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     metadata_json: Mapped[dict[str, object]] = mapped_column(portable_json, default=dict)
 
-    request: Mapped[IntelligenceOrchestrationRequest] = relationship(back_populates="history")
+    request: Mapped[IntelligenceOrchestrationRequest] = relationship(
+        back_populates="history",
+        foreign_keys=[orchestration_request_id],
+    )
