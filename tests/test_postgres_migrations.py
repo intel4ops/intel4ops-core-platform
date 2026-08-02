@@ -58,9 +58,7 @@ from test_ti_c1_referential_integrity import (
 )
 from test_ti_c1_referential_integrity import REUSED_INDEXES as TI_C1_REUSED_INDEXES
 from test_ti_c1_referential_integrity import TENANT_FOREIGN_KEYS as TI_C1_FOREIGN_KEYS
-from test_ti_c1_referential_integrity import (
-    _execution_lineages as ti_c1_execution_lineages,
-)
+from test_ti_c1_referential_integrity import _lineage_request as ti_c1_lineage_request
 from test_ti_c1_referential_integrity import (
     _orchestration_graph as ti_c1_orchestration_graph,
 )
@@ -81,7 +79,7 @@ from app.models.forecasting import (
     ForecastPoint,
 )
 from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
-from app.models.oikb import OIKBDefinition
+from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
 from app.models.orchestration import (
     IntelligenceOrchestrationDecision,
     IntelligenceOrchestrationRequest,
@@ -3645,13 +3643,130 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
         assert values[0]["options"].get("ondelete") == "RESTRICT"
 
 
+def _ti_c1_postgres_execution_lineages(
+    session: Session,
+) -> tuple[tuple[type[Any], UUID, IntelligenceOrchestrationRequest], ...]:
+    reliability_org, reliability_trust, reliability_readiness, reliability_actor = (
+        reliability_foundation(session, f"ti-c1r-pg-rel-{uuid4().hex[:8]}")
+    )
+    reliability = reliability_execution_service.execute(
+        session,
+        reliability_org,
+        reliability_payload(reliability_trust, reliability_readiness),
+        reliability_actor,
+    )
+    reliability_request = ti_c1_lineage_request(
+        session,
+        reliability_org,
+        cast(UUID, reliability.dataset_id),
+        reliability_trust,
+        reliability_readiness,
+    )
+    reliability.orchestration_request_id = reliability_request.id
+    session.commit()
+
+    statistics_org, _, statistics_trust, statistics_readiness, statistics_actor = (
+        statistical_foundation(session, f"ti-c1r-pg-stat-{uuid4().hex[:8]}")
+    )
+    statistics = statistical_execution_service.execute(
+        session,
+        statistics_org,
+        execution_payload(
+            statistics_trust,
+            statistics_readiness,
+            key=f"ti-c1r-pg-{uuid4().hex}",
+        ),
+        statistics_actor,
+    )
+    statistics_request = ti_c1_lineage_request(
+        session,
+        statistics_org,
+        cast(UUID, statistics.dataset_id),
+        statistics_trust,
+        statistics_readiness,
+    )
+    statistics.orchestration_request_id = statistics_request.id
+    session.commit()
+
+    forecast_org, forecast_trust, forecast_readiness, forecast_actor = forecasting_foundation(
+        session, f"ti-c1r-pg-forecast-{uuid4().hex[:8]}"
+    )
+    stable_code = f"ORG.FORECASTING.TI_C1R_{uuid4().hex.upper()}"
+    definition = OIKBDefinition(
+        stable_code=stable_code,
+        name="TI-C1R tenant forecast",
+        description="Tenant-owned forecasting fixture for delete-semantics certification.",
+        knowledge_class="forecasting_method",
+        analytical_level="forecasting",
+        domain="forecasting",
+        subdomain="tenant_integrity",
+        owner_organization_id=forecast_org,
+        scope_type="organization",
+        scope_key=f"organization:{forecast_org}",
+        is_system_definition=False,
+        created_by=forecast_actor,
+    )
+    session.add(definition)
+    session.flush()
+    version = OIKBDefinitionVersion(
+        definition_id=definition.id,
+        semantic_version="1.0.0",
+        lifecycle_status="active",
+        quality_level="provisional",
+        effective_from=datetime.now(UTC),
+        expression_schema={"operation": "forecast", "candidate_methods": ["NAIVE"]},
+        output_type="forecast_series",
+        output_unit="count",
+        rounding_policy={"decimal_places": 4},
+        null_policy="structured_null",
+        zero_denominator_policy="structured_null",
+        trust_requirement={"minimum_status": "completed"},
+        readiness_requirement={"analytical_level": "forecasting"},
+        fingerprint=uuid4().hex * 2,
+        validation_satisfied=True,
+        created_by=forecast_actor,
+        activated_by=forecast_actor,
+        activated_at=datetime.now(UTC),
+    )
+    session.add(version)
+    session.commit()
+    assert definition.owner_organization_id == forecast_org
+    assert definition.scope_key == f"organization:{forecast_org}"
+
+    forecast = ForecastExecutionService().execute(
+        session,
+        forecast_org,
+        forecasting_payload(
+            forecast_trust,
+            forecast_readiness,
+            fingerprint=uuid4().hex * 2,
+        ).model_copy(update={"definition_code": stable_code}),
+        forecast_actor,
+    )
+    forecast_request = ti_c1_lineage_request(
+        session,
+        forecast_org,
+        cast(UUID, forecast.dataset_id),
+        forecast_trust,
+        forecast_readiness,
+    )
+    forecast.orchestration_request_id = forecast_request.id
+    session.commit()
+
+    return (
+        (ReliabilityExecution, reliability.id, reliability_request),
+        (StatisticalExecution, statistics.id, statistics_request),
+        (ForecastExecution, forecast.id, forecast_request),
+    )
+
+
 @pytest.mark.postgres
 def test_ti_c1_execution_lineage_restricts_request_delete_on_postgres(
     postgres_engine: Engine,
 ) -> None:
     command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
     with Session(postgres_engine) as session:
-        for model, execution_id, request in ti_c1_execution_lineages(session):
+        for model, execution_id, request in _ti_c1_postgres_execution_lineages(session):
             with pytest.raises(IntegrityError):
                 session.delete(request)
                 session.commit()
