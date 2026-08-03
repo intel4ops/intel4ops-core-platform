@@ -62,8 +62,18 @@ from test_ti_c1_referential_integrity import _lineage_request as ti_c1_lineage_r
 from test_ti_c1_referential_integrity import (
     _orchestration_graph as ti_c1_orchestration_graph,
 )
+from test_ti_c2_referential_integrity import NEW_INDEXES as TI_C2_INDEXES
+from test_ti_c2_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_C2_PARENT_CONSTRAINTS,
+)
+from test_ti_c2_referential_integrity import RELATIONSHIPS as TI_C2_RELATIONSHIPS
+from test_ti_c2_referential_integrity import REUSED_INDEXES as TI_C2_REUSED_INDEXES
+from test_ti_c2_referential_integrity import TENANT_FOREIGN_KEYS as TI_C2_FOREIGN_KEYS
+from test_ti_c2_referential_integrity import _action as ti_c2_action
+from test_ti_c2_referential_integrity import _organization as ti_c2_organization
 from test_trust_service import trust_foundation
 
+from app.models.actions import ActionPlanStep
 from app.models.entities import (
     Finding,
     MembershipRole,
@@ -3641,6 +3651,146 @@ def test_ti_c1_migration_round_trip_enforces_expected_schema(
             "orchestration_request_id",
         ]
         assert values[0]["options"].get("ondelete") == "RESTRICT"
+
+
+@pytest.mark.postgres
+def test_ti_c2_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    child_tables = (
+        "operational_actions",
+        "action_plan_steps",
+        "action_dependencies",
+        "action_resource_requirements",
+        "action_events",
+        "action_evidence",
+        "action_outcomes",
+        "action_model_feedback",
+    )
+
+    def object_names() -> tuple[set[str], set[str], set[str]]:
+        inspector = inspect(postgres_engine)
+        return (
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_unique_constraints(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_foreign_keys(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_indexes(table_name)
+                if item["name"] is not None
+            },
+        )
+
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C2_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C2_INDEXES <= index_names
+    assert TI_C2_REUSED_INDEXES <= index_names
+
+    new_foreign_keys = {
+        str(item["name"]): item
+        for table_name in child_tables
+        for item in inspect(postgres_engine).get_foreign_keys(table_name)
+        if item["name"] in TI_C2_FOREIGN_KEYS
+    }
+    assert set(new_foreign_keys) == TI_C2_FOREIGN_KEYS
+    assert (
+        sum(item["options"].get("ondelete") == "CASCADE" for item in new_foreign_keys.values()) == 7
+    )
+    assert (
+        sum(item["options"].get("ondelete") == "RESTRICT" for item in new_foreign_keys.values())
+        == 5
+    )
+
+    for child, name, parent, parent_column, ondelete in TI_C2_RELATIONSHIPS:
+        reflected = new_foreign_keys[name]
+        assert reflected["constrained_columns"] == ["organization_id", parent_column]
+        assert reflected["referred_table"] == parent
+        assert reflected["referred_columns"] == ["organization_id", "id"]
+        assert reflected["options"].get("ondelete") == ondelete
+
+    migration = import_module("migrations.versions.20260802_0030_ti_c2_action_workflow_integrity")
+    with (
+        postgres_engine.connect() as connection,
+        patch.object(migration.op, "get_bind", return_value=connection),
+    ):
+        migration._assert_clean_tenant_references()
+
+    command.downgrade(config, "20260801_0029")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_C2_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C2_INDEXES.isdisjoint(index_names)
+    assert TI_C2_REUSED_INDEXES <= index_names
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C2_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C2_INDEXES <= index_names
+    assert TI_C2_REUSED_INDEXES <= index_names
+
+
+@pytest.mark.postgres
+def test_ti_c2_postgres_enforces_tenant_boundary_and_concurrent_same_tenant_writes(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        first_org = ti_c2_organization(f"ti-c2-pg-first-{uuid4().hex[:8]}")
+        second_org = ti_c2_organization(f"ti-c2-pg-second-{uuid4().hex[:8]}")
+        session.add_all([first_org, second_org])
+        session.flush()
+        action = ti_c2_action(first_org.id, "pg-first")
+        session.add(action)
+        session.commit()
+        organization_id = first_org.id
+        action_id = action.id
+
+        invalid = ActionPlanStep(
+            organization_id=second_org.id,
+            action_id=action_id,
+            sequence_number=1,
+            title="Invalid",
+            description="Cross-tenant plan step.",
+        )
+        session.add(invalid)
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+        assert session.get(ActionPlanStep, invalid.id) is None
+
+    barrier = Barrier(2)
+
+    def create_step(sequence: int) -> UUID:
+        with Session(postgres_engine) as session:
+            row = ActionPlanStep(
+                organization_id=organization_id,
+                action_id=action_id,
+                sequence_number=sequence,
+                title=f"Concurrent {sequence}",
+                description="Same-tenant concurrent insert.",
+            )
+            session.add(row)
+            barrier.wait()
+            session.commit()
+            return row.id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        step_ids = list(executor.map(create_step, (101, 102)))
+    assert len(set(step_ids)) == 2
 
 
 def _ti_c1_postgres_execution_lineages(
