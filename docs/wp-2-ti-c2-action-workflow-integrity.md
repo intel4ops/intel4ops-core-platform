@@ -87,11 +87,22 @@ Violations raise `RuntimeError` with the constraint name and count. The migratio
 repair, backfill, or identifier fabrication. Offline PostgreSQL SQL generation skips data
 diagnostics and emits schema DDL only.
 
-The repository has a legacy metadata-driven table-creation migration. Therefore, an empty
-database reconstructed with current metadata can already expose the new named objects before
-revision `20260802_0030` runs. Online creation checks object names and avoids duplicate creation;
-an established database at `20260801_0029` receives all missing objects. Offline SQL retains the
-complete one-unique, 12-foreign-key, five-index contract.
+Historical revision `20260725_0014` now contains a static snapshot of the original Action
+Workflow schema. It no longer imports application models or constructs tables from mutable
+`Base.metadata`. An empty database therefore receives only the original eight tables, original
+single-column foreign keys, six original unique constraints, and ten original indexes at that
+revision.
+
+Later tenant-integrity objects remain owned by their additive revisions:
+
+- `20260801_0027` introduces TI-B2 reliability and statistical integrity;
+- `20260801_0028` introduces TI-B3 forecasting integrity;
+- `20260801_0029` introduces TI-C1 orchestration integrity; and
+- `20260802_0030` introduces TI-C2 Action Workflow integrity.
+
+The `0030` online object checks remain defensive for databases created before the determinism
+remediation. Offline SQL retains the complete one-unique, 12-foreign-key, five-index TI-C2
+contract.
 
 ## Rollback
 
@@ -114,6 +125,9 @@ The bounded certification suite verifies:
 - dual action/prerequisite references;
 - seven `CASCADE` and five `RESTRICT` runtime behaviors;
 - diagnostics for cross-tenant, orphan, missing-tenant, and duplicate-parent data;
+- the frozen `0014` column, nullability, default, unique, index, and single-FK contract;
+- absence of mutable application-model imports from revision `0014`;
+- temporal ownership of TI-B2, TI-B3, TI-C1, and TI-C2 schema objects;
 - SQLite upgrade, downgrade, and re-upgrade;
 - PostgreSQL catalog shape, diagnostics, downgrade/re-upgrade, and bounded concurrent inserts
   when an approved disposable PostgreSQL database is available.
