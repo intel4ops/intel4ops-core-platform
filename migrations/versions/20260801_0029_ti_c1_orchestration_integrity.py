@@ -153,12 +153,6 @@ def _legacy_foreign_key_name(table_name: str, postgresql_name: str) -> str:
     return postgresql_name
 
 
-def _batch_options() -> dict[str, object]:
-    if op.get_bind().dialect.name == "sqlite":
-        return {"naming_convention": SQLITE_NAMING_CONVENTION}
-    return {}
-
-
 def _assert_clean_tenant_references() -> None:
     bind = op.get_bind()
     for child, constraint_name, parent, parent_column, _ in COMPOSITE_FOREIGN_KEYS:
@@ -216,11 +210,21 @@ def upgrade() -> None:
             )
 
     for table_name, postgresql_name in LEGACY_ORCHESTRATION_FOREIGN_KEYS:
-        with op.batch_alter_table(table_name, **_batch_options()) as batch_op:
-            batch_op.drop_constraint(
-                _legacy_foreign_key_name(table_name, postgresql_name),
-                type_="foreignkey",
-            )
+        if op.get_bind().dialect.name == "sqlite":
+            with op.batch_alter_table(
+                table_name,
+                naming_convention=SQLITE_NAMING_CONVENTION,
+            ) as batch_op:
+                batch_op.drop_constraint(
+                    _legacy_foreign_key_name(table_name, postgresql_name),
+                    type_="foreignkey",
+                )
+        else:
+            with op.batch_alter_table(table_name) as batch_op:
+                batch_op.drop_constraint(
+                    _legacy_foreign_key_name(table_name, postgresql_name),
+                    type_="foreignkey",
+                )
 
     for child, constraint_name, parent, parent_column, ondelete in COMPOSITE_FOREIGN_KEYS:
         with op.batch_alter_table(child) as batch_op:
@@ -250,14 +254,27 @@ def downgrade() -> None:
             batch_op.drop_constraint(constraint_name, type_="foreignkey")
 
     for table_name, postgresql_name in reversed(LEGACY_ORCHESTRATION_FOREIGN_KEYS):
-        with op.batch_alter_table(table_name, **_batch_options()) as batch_op:
-            batch_op.create_foreign_key(
-                _legacy_foreign_key_name(table_name, postgresql_name),
-                "intelligence_orchestration_requests",
-                ["orchestration_request_id"],
-                ["id"],
-                ondelete="SET NULL",
-            )
+        if op.get_bind().dialect.name == "sqlite":
+            with op.batch_alter_table(
+                table_name,
+                naming_convention=SQLITE_NAMING_CONVENTION,
+            ) as batch_op:
+                batch_op.create_foreign_key(
+                    _legacy_foreign_key_name(table_name, postgresql_name),
+                    "intelligence_orchestration_requests",
+                    ["orchestration_request_id"],
+                    ["id"],
+                    ondelete="SET NULL",
+                )
+        else:
+            with op.batch_alter_table(table_name) as batch_op:
+                batch_op.create_foreign_key(
+                    _legacy_foreign_key_name(table_name, postgresql_name),
+                    "intelligence_orchestration_requests",
+                    ["orchestration_request_id"],
+                    ["id"],
+                    ondelete="SET NULL",
+                )
 
     for table_name, constraint_name in reversed(PARENT_UNIQUES):
         with op.batch_alter_table(table_name) as batch_op:
