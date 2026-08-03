@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from importlib import import_module
 from threading import Barrier
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -13,14 +13,17 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from governed_provenance_helpers import add_eligible_dataset_version
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import Table, create_engine, func, insert, inspect, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
 from test_ingestion_service import foundation as ingestion_foundation
+from test_progressive_orchestrator import foundation as orchestration_foundation
+from test_progressive_orchestrator import request as orchestration_payload
 from test_reliability_service import (
     add_reliability_definition,
     reliability_foundation,
@@ -49,6 +52,16 @@ from test_ti_b3_referential_integrity import (
 )
 from test_ti_b3_referential_integrity import REUSED_INDEXES as TI_B3_REUSED_INDEXES
 from test_ti_b3_referential_integrity import TENANT_FOREIGN_KEYS as TI_B3_FOREIGN_KEYS
+from test_ti_c1_referential_integrity import NEW_INDEXES as TI_C1_INDEXES
+from test_ti_c1_referential_integrity import (
+    PARENT_CONSTRAINTS as TI_C1_PARENT_CONSTRAINTS,
+)
+from test_ti_c1_referential_integrity import REUSED_INDEXES as TI_C1_REUSED_INDEXES
+from test_ti_c1_referential_integrity import TENANT_FOREIGN_KEYS as TI_C1_FOREIGN_KEYS
+from test_ti_c1_referential_integrity import _lineage_request as ti_c1_lineage_request
+from test_ti_c1_referential_integrity import (
+    _orchestration_graph as ti_c1_orchestration_graph,
+)
 from test_trust_service import trust_foundation
 
 from app.models.entities import (
@@ -66,8 +79,12 @@ from app.models.forecasting import (
     ForecastPoint,
 )
 from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
-from app.models.oikb import OIKBDefinition
-from app.models.orchestration import IntelligenceOrchestrationRequest
+from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
+from app.models.orchestration import (
+    IntelligenceOrchestrationDecision,
+    IntelligenceOrchestrationRequest,
+    IntelligenceOrchestrationStep,
+)
 from app.models.reliability import (
     ReliabilityExecution,
     ReliabilityExecutionStep,
@@ -3498,3 +3515,360 @@ def test_ti_b3_migration_round_trip_enforces_expected_schema(
     assert TI_B3_FOREIGN_KEYS <= foreign_key_names
     assert TI_B3_INDEXES <= index_names
     assert TI_B3_REUSED_INDEXES <= unique_names | index_names
+
+
+@pytest.mark.postgres
+def test_ti_c1_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    child_tables = (
+        "intelligence_orchestration_requests",
+        "intelligence_orchestration_decisions",
+        "intelligence_orchestration_steps",
+        "intelligence_orchestration_status_history",
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+    )
+
+    def object_names() -> tuple[set[str], set[str], set[str]]:
+        inspector = inspect(postgres_engine)
+        return (
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_unique_constraints(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_foreign_keys(table_name)
+                if item["name"] is not None
+            },
+            {
+                str(item["name"])
+                for table_name in child_tables
+                for item in inspector.get_indexes(table_name)
+                if item["name"] is not None
+            },
+        )
+
+    def execution_orchestration_foreign_keys() -> dict[str, list[ReflectedForeignKeyConstraint]]:
+        inspector = inspect(postgres_engine)
+        return {
+            table_name: [
+                item
+                for item in inspector.get_foreign_keys(table_name)
+                if "orchestration_request_id" in item["constrained_columns"]
+            ]
+            for table_name in (
+                "reliability_executions",
+                "statistical_executions",
+                "forecast_executions",
+            )
+        }
+
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C1_INDEXES <= index_names
+    assert TI_C1_REUSED_INDEXES <= index_names
+
+    inspector = inspect(postgres_engine)
+    new_foreign_keys = {
+        str(item["name"]): item
+        for table_name in child_tables
+        for item in inspector.get_foreign_keys(table_name)
+        if item["name"] in TI_C1_FOREIGN_KEYS
+    }
+    assert set(new_foreign_keys) == TI_C1_FOREIGN_KEYS
+    assert (
+        sum(item["options"].get("ondelete") == "CASCADE" for item in new_foreign_keys.values()) == 3
+    )
+    assert (
+        sum(item["options"].get("ondelete") == "RESTRICT" for item in new_foreign_keys.values())
+        == 7
+    )
+
+    for table_name in (
+        "reliability_executions",
+        "statistical_executions",
+        "forecast_executions",
+    ):
+        orchestration_foreign_keys = [
+            item
+            for item in inspector.get_foreign_keys(table_name)
+            if "orchestration_request_id" in item["constrained_columns"]
+        ]
+        assert len(orchestration_foreign_keys) == 1
+        assert orchestration_foreign_keys[0]["constrained_columns"] == [
+            "organization_id",
+            "orchestration_request_id",
+        ]
+        assert orchestration_foreign_keys[0]["options"].get("ondelete") == "RESTRICT"
+
+    migration = import_module("migrations.versions.20260801_0029_ti_c1_orchestration_integrity")
+    with (
+        postgres_engine.connect() as connection,
+        patch.object(migration.op, "get_bind", return_value=connection),
+    ):
+        migration._assert_clean_tenant_references()
+
+    command.downgrade(config, "20260801_0028")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_C1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C1_INDEXES.isdisjoint(index_names)
+    assert TI_C1_REUSED_INDEXES <= index_names
+    for values in execution_orchestration_foreign_keys().values():
+        assert len(values) == 1
+        assert values[0]["constrained_columns"] == ["orchestration_request_id"]
+        assert values[0]["options"].get("ondelete") == "SET NULL"
+
+    command.upgrade(config, "head")
+    unique_names, foreign_key_names, index_names = object_names()
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C1_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C1_INDEXES <= index_names
+    assert TI_C1_REUSED_INDEXES <= index_names
+    for values in execution_orchestration_foreign_keys().values():
+        assert len(values) == 1
+        assert values[0]["constrained_columns"] == [
+            "organization_id",
+            "orchestration_request_id",
+        ]
+        assert values[0]["options"].get("ondelete") == "RESTRICT"
+
+
+def _ti_c1_postgres_execution_lineages(
+    session: Session,
+) -> tuple[tuple[type[Any], UUID, IntelligenceOrchestrationRequest], ...]:
+    reliability_org, reliability_trust, reliability_readiness, reliability_actor = (
+        reliability_foundation(session, f"ti-c1r-pg-rel-{uuid4().hex[:8]}")
+    )
+    reliability = reliability_execution_service.execute(
+        session,
+        reliability_org,
+        reliability_payload(reliability_trust, reliability_readiness),
+        reliability_actor,
+    )
+    reliability_request = ti_c1_lineage_request(
+        session,
+        reliability_org,
+        cast(UUID, reliability.dataset_id),
+        reliability_trust,
+        reliability_readiness,
+    )
+    reliability.orchestration_request_id = reliability_request.id
+    session.commit()
+
+    statistics_org, _, statistics_trust, statistics_readiness, statistics_actor = (
+        statistical_foundation(session, f"ti-c1r-pg-stat-{uuid4().hex[:8]}")
+    )
+    statistics = statistical_execution_service.execute(
+        session,
+        statistics_org,
+        execution_payload(
+            statistics_trust,
+            statistics_readiness,
+            key=f"ti-c1r-pg-{uuid4().hex}",
+        ),
+        statistics_actor,
+    )
+    statistics_request = ti_c1_lineage_request(
+        session,
+        statistics_org,
+        cast(UUID, statistics.dataset_id),
+        statistics_trust,
+        statistics_readiness,
+    )
+    statistics.orchestration_request_id = statistics_request.id
+    session.commit()
+
+    forecast_org, forecast_trust, forecast_readiness, forecast_actor = forecasting_foundation(
+        session, f"ti-c1r-pg-forecast-{uuid4().hex[:8]}"
+    )
+    stable_code = f"ORG.FORECASTING.TI_C1R_{uuid4().hex.upper()}"
+    definition = OIKBDefinition(
+        stable_code=stable_code,
+        name="TI-C1R tenant forecast",
+        description="Tenant-owned forecasting fixture for delete-semantics certification.",
+        knowledge_class="forecasting_method",
+        analytical_level="forecasting",
+        domain="forecasting",
+        subdomain="tenant_integrity",
+        owner_organization_id=forecast_org,
+        scope_type="organization",
+        scope_key=f"organization:{forecast_org}",
+        is_system_definition=False,
+        created_by=forecast_actor,
+    )
+    session.add(definition)
+    session.flush()
+    version = OIKBDefinitionVersion(
+        definition_id=definition.id,
+        semantic_version="1.0.0",
+        lifecycle_status="active",
+        quality_level="provisional",
+        effective_from=datetime.now(UTC),
+        expression_schema={"operation": "forecast", "candidate_methods": ["NAIVE"]},
+        output_type="forecast_series",
+        output_unit="count",
+        rounding_policy={"decimal_places": 4},
+        null_policy="structured_null",
+        zero_denominator_policy="structured_null",
+        trust_requirement={"minimum_status": "completed"},
+        readiness_requirement={"analytical_level": "forecasting"},
+        fingerprint=uuid4().hex * 2,
+        validation_satisfied=True,
+        created_by=forecast_actor,
+        activated_by=forecast_actor,
+        activated_at=datetime.now(UTC),
+    )
+    session.add(version)
+    session.commit()
+    assert definition.owner_organization_id == forecast_org
+    assert definition.scope_key == f"organization:{forecast_org}"
+
+    forecast = ForecastExecutionService().execute(
+        session,
+        forecast_org,
+        forecasting_payload(
+            forecast_trust,
+            forecast_readiness,
+            fingerprint=uuid4().hex * 2,
+        ).model_copy(update={"definition_code": stable_code}),
+        forecast_actor,
+    )
+    forecast_request = ti_c1_lineage_request(
+        session,
+        forecast_org,
+        cast(UUID, forecast.dataset_id),
+        forecast_trust,
+        forecast_readiness,
+    )
+    forecast.orchestration_request_id = forecast_request.id
+    session.commit()
+
+    return (
+        (ReliabilityExecution, reliability.id, reliability_request),
+        (StatisticalExecution, statistics.id, statistics_request),
+        (ForecastExecution, forecast.id, forecast_request),
+    )
+
+
+@pytest.mark.postgres
+def test_ti_c1_execution_lineage_restricts_request_delete_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        for model, execution_id, request in _ti_c1_postgres_execution_lineages(session):
+            with pytest.raises(IntegrityError):
+                session.delete(request)
+                session.commit()
+            session.rollback()
+            execution = session.get(model, execution_id)
+            assert execution is not None
+            assert execution.orchestration_request_id == request.id
+
+        unreferenced, _ = ti_c1_orchestration_graph(
+            session, f"ti-c1r-pg-unreferenced-{uuid4().hex[:8]}"
+        )
+        request_id = unreferenced.id
+        session.delete(unreferenced)
+        session.commit()
+        assert session.get(IntelligenceOrchestrationRequest, request_id) is None
+
+
+@pytest.mark.postgres
+def test_ti_c1_allows_bounded_concurrent_same_tenant_child_inserts(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, dataset_id, trust_id, readiness_id = orchestration_foundation(
+            session, f"ti-c1-concurrency-{uuid4().hex[:8]}"
+        )
+        request_row = OrchestrationService().orchestrate(
+            session,
+            organization_id,
+            orchestration_payload(
+                dataset_id,
+                trust_id,
+                readiness_id,
+                key=f"ti-c1-concurrency-{uuid4().hex}",
+            ),
+            uuid4(),
+        )
+        decision = session.scalar(
+            select(IntelligenceOrchestrationDecision).where(
+                IntelligenceOrchestrationDecision.orchestration_request_id == request_row.id
+            )
+        )
+        step = session.scalar(
+            select(IntelligenceOrchestrationStep).where(
+                IntelligenceOrchestrationStep.orchestration_request_id == request_row.id
+            )
+        )
+        assert decision is not None
+        assert step is not None
+        decision_values = dict(
+            session.execute(
+                select(IntelligenceOrchestrationDecision.__table__).where(
+                    IntelligenceOrchestrationDecision.id == decision.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+        step_values = dict(
+            session.execute(
+                select(IntelligenceOrchestrationStep.__table__).where(
+                    IntelligenceOrchestrationStep.id == step.id
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    decision_barrier = Barrier(2)
+
+    def create_decision(sequence: int) -> UUID:
+        with Session(postgres_engine) as session:
+            values = dict(decision_values)
+            values["id"] = uuid4()
+            values["decision_sequence"] = sequence
+            values["content_hash"] = uuid4().hex * 2
+            decision_barrier.wait()
+            session.execute(
+                insert(cast(Table, IntelligenceOrchestrationDecision.__table__)).values(**values)
+            )
+            session.commit()
+            return cast(UUID, values["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decision_ids = list(executor.map(create_decision, (101, 102)))
+    assert len(set(decision_ids)) == 2
+
+    step_barrier = Barrier(2)
+
+    def create_step(sequence: int) -> UUID:
+        with Session(postgres_engine) as session:
+            values = dict(step_values)
+            values["id"] = uuid4()
+            values["step_sequence"] = sequence
+            values["content_hash"] = uuid4().hex * 2
+            step_barrier.wait()
+            session.execute(
+                insert(cast(Table, IntelligenceOrchestrationStep.__table__)).values(**values)
+            )
+            session.commit()
+            return cast(UUID, values["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        step_ids = list(executor.map(create_step, (101, 102)))
+    assert len(set(step_ids)) == 2
