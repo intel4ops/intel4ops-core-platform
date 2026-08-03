@@ -1,8 +1,10 @@
+import ast
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from importlib import import_module
+from pathlib import Path
 from threading import Barrier
 from typing import Any, cast
 from unittest.mock import patch
@@ -356,6 +358,255 @@ def alembic_config(database_url: str) -> Config:
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+ORIGINAL_ACTION_UNIQUES = {
+    "uq_action_idempotency",
+    "uq_action_plan_step_sequence",
+    "uq_action_dependency_pair",
+    "uq_action_event_idempotency",
+    "uq_action_outcome_type",
+    "uq_action_feedback",
+}
+
+ORIGINAL_ACTION_INDEXES = {
+    "ix_action_org_status",
+    "ix_action_org_source",
+    "ix_action_org_due",
+    "ix_action_plan_step_org_action",
+    "ix_action_dependency_org_action",
+    "ix_action_resource_org_action",
+    "ix_action_event_org_action",
+    "ix_action_evidence_org_action",
+    "ix_action_outcome_org_action",
+    "ix_action_feedback_org_action",
+}
+
+ACTION_TABLES_AT_0014 = {
+    "operational_actions",
+    "action_plan_steps",
+    "action_dependencies",
+    "action_resource_requirements",
+    "action_events",
+    "action_evidence",
+    "action_outcomes",
+    "action_model_feedback",
+}
+
+ORIGINAL_ACTION_COLUMN_CONTRACT = {
+    "operational_actions": (
+        "id organization_id source_type source_reference reliability_execution_id "
+        "finding_id forecast_execution_id orchestration_request_id recommendation_type "
+        "recommendation_rule_version title description rationale asset_reference "
+        "component_reference failure_mode priority priority_score priority_components status "
+        "approval_required approval_level approval_role approval_status assigned_user_id "
+        "assigned_role assigned_team verification_required verification_owner_id due_at "
+        "scheduled_start scheduled_finish completed_at verified_at expected_avoided_cost "
+        "expected_intervention_cost currency_code confidence_score limitations "
+        "evidence_references idempotency_fingerprint created_by_user_id created_at updated_at",
+        "reliability_execution_id finding_id forecast_execution_id orchestration_request_id "
+        "asset_reference component_reference failure_mode assigned_user_id assigned_role "
+        "assigned_team verification_owner_id due_at scheduled_start scheduled_finish "
+        "completed_at verified_at expected_avoided_cost expected_intervention_cost "
+        "currency_code confidence_score",
+    ),
+    "action_plan_steps": (
+        "id organization_id action_id sequence_number title description required_skill "
+        "labor_category estimated_labor_hours required_tools required_permits "
+        "work_order_reference external_system_reference status created_at",
+        "required_skill labor_category estimated_labor_hours work_order_reference "
+        "external_system_reference",
+    ),
+    "action_dependencies": (
+        "id organization_id action_id prerequisite_action_id dependency_type mandatory status "
+        "blocking_reason resolved_at created_at",
+        "blocking_reason resolved_at",
+    ),
+    "action_resource_requirements": (
+        "id organization_id action_id resource_type resource_identifier description "
+        "required_quantity available_quantity mandatory inventory_check_status "
+        "reservation_status reservation_reference source_system_reference required_by "
+        "shortage limitation created_at",
+        "available_quantity reservation_reference source_system_reference required_by limitation",
+    ),
+    "action_events": (
+        "id organization_id action_id event_type prior_status new_status actor_user_id actor_role "
+        "reason_code note metadata_json idempotency_key occurred_at",
+        "prior_status new_status note",
+    ),
+    "action_evidence": (
+        "id organization_id action_id lifecycle_stage evidence_type source_type "
+        "source_identifier document_reference measurement_value measurement_unit observed_at "
+        "actor_user_id notes metadata_json integrity_fingerprint created_at",
+        "document_reference measurement_value measurement_unit observed_at notes "
+        "integrity_fingerprint",
+    ),
+    "action_outcomes": (
+        "id organization_id action_id outcome_type avoided_cost intervention_cost "
+        "downtime_avoided production_preserved risk_reduction currency_code confidence_score "
+        "calculation_method verification_method verified_by_user_id verified_at assumptions "
+        "limitations created_at",
+        "avoided_cost intervention_cost downtime_avoided production_preserved risk_reduction "
+        "currency_code confidence_score verification_method verified_by_user_id verified_at",
+    ),
+    "action_model_feedback": (
+        "id organization_id action_id reliability_execution_id "
+        "prediction_outcome_classification intervention_performed failure_occurred failure_at "
+        "risk_reduced predicted_probability predicted_horizon_days actual_time_to_event_days "
+        "recommendation_accepted recommendation_executed calibration_feedback "
+        "human_review_status notes created_at",
+        "failure_at risk_reduced predicted_probability predicted_horizon_days "
+        "actual_time_to_event_days notes",
+    ),
+}
+
+
+def _schema_object_names(engine: Engine) -> tuple[set[str], set[str], set[str]]:
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    return (
+        {
+            str(item["name"])
+            for table_name in tables
+            for item in inspector.get_unique_constraints(table_name)
+            if item["name"] is not None
+        },
+        {
+            str(item["name"])
+            for table_name in tables
+            for item in inspector.get_foreign_keys(table_name)
+            if item["name"] is not None
+        },
+        {
+            str(item["name"])
+            for table_name in tables
+            for item in inspector.get_indexes(table_name)
+            if item["name"] is not None
+        },
+    )
+
+
+def _assert_original_action_schema_at_0014(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert ACTION_TABLES_AT_0014 <= set(inspector.get_table_names())
+
+    for table_name, (column_names, nullable_names) in ORIGINAL_ACTION_COLUMN_CONTRACT.items():
+        columns = inspector.get_columns(table_name)
+        assert tuple(str(column["name"]) for column in columns) == tuple(column_names.split())
+        assert {str(column["name"]) for column in columns if bool(column["nullable"])} == set(
+            nullable_names.split()
+        )
+        assert all(column["default"] is None for column in columns)
+
+    unique_names = {
+        str(item["name"])
+        for table_name in ACTION_TABLES_AT_0014
+        for item in inspector.get_unique_constraints(table_name)
+        if item["name"] is not None
+    }
+    index_names = {
+        str(item["name"])
+        for table_name in ACTION_TABLES_AT_0014
+        for item in inspector.get_indexes(table_name)
+        if item["name"] is not None
+    }
+    foreign_keys = [
+        item
+        for table_name in ACTION_TABLES_AT_0014
+        for item in inspector.get_foreign_keys(table_name)
+    ]
+
+    assert unique_names == ORIGINAL_ACTION_UNIQUES
+    assert index_names == ORIGINAL_ACTION_INDEXES
+    assert len(foreign_keys) == 21
+    assert all(len(item["constrained_columns"]) == 1 for item in foreign_keys)
+
+    all_unique_names, all_foreign_key_names, all_index_names = _schema_object_names(engine)
+    assert set(TI_B2_PARENT_CONSTRAINTS.values()).isdisjoint(all_unique_names)
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()).isdisjoint(all_unique_names)
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()).isdisjoint(all_unique_names)
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()).isdisjoint(all_unique_names)
+    assert TI_B2_FOREIGN_KEYS.isdisjoint(all_foreign_key_names)
+    assert TI_B3_FOREIGN_KEYS.isdisjoint(all_foreign_key_names)
+    assert TI_C1_FOREIGN_KEYS.isdisjoint(all_foreign_key_names)
+    assert TI_C2_FOREIGN_KEYS.isdisjoint(all_foreign_key_names)
+    assert TI_C2_INDEXES.isdisjoint(all_index_names)
+
+
+def _assert_tenant_integrity_revision_boundaries(engine: Engine, config: Config) -> None:
+    command.upgrade(config, "20260725_0014")
+    _assert_original_action_schema_at_0014(engine)
+
+    command.upgrade(config, "20260801_0027")
+    unique_names, foreign_key_names, _ = _schema_object_names(engine)
+    assert set(TI_B2_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B2_FOREIGN_KEYS <= foreign_key_names
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_B3_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C2_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+
+    command.upgrade(config, "20260801_0028")
+    unique_names, foreign_key_names, _ = _schema_object_names(engine)
+    assert set(TI_B3_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_B3_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C1_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+    assert TI_C2_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+
+    command.upgrade(config, "20260801_0029")
+    unique_names, foreign_key_names, _ = _schema_object_names(engine)
+    assert set(TI_C1_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C1_FOREIGN_KEYS <= foreign_key_names
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()).isdisjoint(unique_names)
+    assert TI_C2_FOREIGN_KEYS.isdisjoint(foreign_key_names)
+
+    command.upgrade(config, "20260802_0030")
+    unique_names, foreign_key_names, index_names = _schema_object_names(engine)
+    assert set(TI_C2_PARENT_CONSTRAINTS.values()) <= unique_names
+    assert TI_C2_FOREIGN_KEYS <= foreign_key_names
+    assert TI_C2_INDEXES <= index_names
+
+    command.downgrade(config, "20260725_0014")
+    _assert_original_action_schema_at_0014(engine)
+    command.upgrade(config, "head")
+
+
+def test_predictive_action_migration_is_static_and_revision_scoped(
+    tmp_path: Path,
+) -> None:
+    migration_path = Path("migrations/versions/20260725_0014_predictive_action_orchestration.py")
+    source = migration_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert all(not module.startswith("app") for module in imported_modules)
+    assert "Base.metadata" not in source
+
+    database_path = tmp_path / "migration-determinism.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    config = alembic_config(database_url)
+    engine = create_engine(database_url)
+    try:
+        _assert_tenant_integrity_revision_boundaries(engine, config)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.postgres
+def test_postgres_tenant_integrity_objects_appear_only_at_owning_revisions(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.downgrade(config, "base")
+    _assert_tenant_integrity_revision_boundaries(postgres_engine, config)
 
 
 def assert_schema_at_head(engine: Engine) -> None:
