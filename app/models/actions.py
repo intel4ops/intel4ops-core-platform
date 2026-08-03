@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -31,12 +32,49 @@ class OperationalAction(Base):
         UniqueConstraint(
             "organization_id", "idempotency_fingerprint", name="uq_action_idempotency"
         ),
+        UniqueConstraint("organization_id", "id", name="uq_operational_actions_org_id"),
+        ForeignKeyConstraint(
+            ["organization_id", "reliability_execution_id"],
+            ["reliability_executions.organization_id", "reliability_executions.id"],
+            name="fk_operational_actions_org_reliability_execution",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "forecast_execution_id"],
+            ["forecast_executions.organization_id", "forecast_executions.id"],
+            name="fk_operational_actions_org_forecast_execution",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "orchestration_request_id"],
+            [
+                "intelligence_orchestration_requests.organization_id",
+                "intelligence_orchestration_requests.id",
+            ],
+            name="fk_operational_actions_org_orchestration_request",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             f"status IN ({enum_values(ActionStatus)})", name="ck_operational_action_status"
         ),
         Index("ix_action_org_status", "organization_id", "status"),
         Index("ix_action_org_source", "organization_id", "source_type", "source_reference"),
         Index("ix_action_org_due", "organization_id", "due_at"),
+        Index(
+            "ix_action_org_reliability_execution",
+            "organization_id",
+            "reliability_execution_id",
+        ),
+        Index(
+            "ix_action_org_forecast_execution",
+            "organization_id",
+            "forecast_execution_id",
+        ),
+        Index(
+            "ix_action_org_orchestration_request",
+            "organization_id",
+            "orchestration_request_id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -104,6 +142,12 @@ class ActionPlanStep(Base):
     __tablename__ = "action_plan_steps"
     __table_args__ = (
         UniqueConstraint("action_id", "sequence_number", name="uq_action_plan_step_sequence"),
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_plan_steps_org_action",
+            ondelete="CASCADE",
+        ),
         Index("ix_action_plan_step_org_action", "organization_id", "action_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -132,7 +176,24 @@ class ActionDependency(Base):
     __table_args__ = (
         UniqueConstraint("action_id", "prerequisite_action_id", name="uq_action_dependency_pair"),
         CheckConstraint("action_id <> prerequisite_action_id", name="ck_action_dependency_self"),
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_dependencies_org_action",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "prerequisite_action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_dependencies_org_prerequisite",
+            ondelete="RESTRICT",
+        ),
         Index("ix_action_dependency_org_action", "organization_id", "action_id"),
+        Index(
+            "ix_action_dependency_org_prerequisite",
+            "organization_id",
+            "prerequisite_action_id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -154,7 +215,15 @@ class ActionDependency(Base):
 
 class ActionResourceRequirement(Base):
     __tablename__ = "action_resource_requirements"
-    __table_args__ = (Index("ix_action_resource_org_action", "organization_id", "action_id"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_resource_requirements_org_action",
+            ondelete="CASCADE",
+        ),
+        Index("ix_action_resource_org_action", "organization_id", "action_id"),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT")
@@ -182,6 +251,12 @@ class ActionEvent(Base):
     __tablename__ = "action_events"
     __table_args__ = (
         UniqueConstraint("action_id", "idempotency_key", name="uq_action_event_idempotency"),
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_events_org_action",
+            ondelete="CASCADE",
+        ),
         Index("ix_action_event_org_action", "organization_id", "action_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -205,7 +280,15 @@ class ActionEvent(Base):
 
 class ActionEvidence(Base):
     __tablename__ = "action_evidence"
-    __table_args__ = (Index("ix_action_evidence_org_action", "organization_id", "action_id"),)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_evidence_org_action",
+            ondelete="CASCADE",
+        ),
+        Index("ix_action_evidence_org_action", "organization_id", "action_id"),
+    )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT")
@@ -232,6 +315,12 @@ class ActionOutcome(Base):
     __tablename__ = "action_outcomes"
     __table_args__ = (
         UniqueConstraint("action_id", "outcome_type", name="uq_action_outcome_type"),
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_outcomes_org_action",
+            ondelete="CASCADE",
+        ),
         Index("ix_action_outcome_org_action", "organization_id", "action_id"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -262,7 +351,24 @@ class ActionModelFeedback(Base):
     __tablename__ = "action_model_feedback"
     __table_args__ = (
         UniqueConstraint("action_id", "reliability_execution_id", name="uq_action_feedback"),
+        ForeignKeyConstraint(
+            ["organization_id", "action_id"],
+            ["operational_actions.organization_id", "operational_actions.id"],
+            name="fk_action_model_feedback_org_action",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "reliability_execution_id"],
+            ["reliability_executions.organization_id", "reliability_executions.id"],
+            name="fk_action_model_feedback_org_reliability_execution",
+            ondelete="RESTRICT",
+        ),
         Index("ix_action_feedback_org_action", "organization_id", "action_id"),
+        Index(
+            "ix_action_feedback_org_reliability_execution",
+            "organization_id",
+            "reliability_execution_id",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
