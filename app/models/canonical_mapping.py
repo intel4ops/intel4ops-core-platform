@@ -446,6 +446,20 @@ class ValueCrosswalkEntry(MappingConfidenceMixin, TimestampMixin, Base):
             name="fk_value_crosswalk_entry_owner_crosswalk",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["owner_organization_id", "supersedes_entry_id"],
+            [
+                "value_crosswalk_entries.owner_organization_id",
+                "value_crosswalk_entries.id",
+            ],
+            name="fk_value_crosswalk_entry_owner_supersedes",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "owner_organization_id",
+            "id",
+            name="uq_value_crosswalk_entries_owner_id",
+        ),
         UniqueConstraint(
             "crosswalk_id",
             "normalized_source_value",
@@ -471,6 +485,11 @@ class ValueCrosswalkEntry(MappingConfidenceMixin, TimestampMixin, Base):
             "crosswalk_id",
             "normalized_source_value",
             "status",
+        ),
+        Index(
+            "ix_value_crosswalk_entry_owner_supersedes",
+            "owner_organization_id",
+            "supersedes_entry_id",
         ),
     )
 
@@ -1149,5 +1168,7 @@ def _immutable(*_: object) -> None:
 
 event.listen(MappingTemplateVersion, "before_update", _guard_published_version)
 event.listen(MappingTemplateVersion, "before_delete", _guard_published_delete)
+event.listen(MappingReview, "before_update", _immutable)
+event.listen(MappingReview, "before_delete", _immutable)
 event.listen(MappingAuditEvent, "before_update", _immutable)
 event.listen(MappingAuditEvent, "before_delete", _immutable)

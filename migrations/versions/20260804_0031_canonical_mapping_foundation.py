@@ -464,12 +464,26 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
+            ["owner_organization_id", "supersedes_entry_id"],
+            [
+                "value_crosswalk_entries.owner_organization_id",
+                "value_crosswalk_entries.id",
+            ],
+            name="fk_value_crosswalk_entry_owner_supersedes",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
             ["owner_organization_id"], ["organizations.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
             ["supersedes_entry_id"], ["value_crosswalk_entries.id"], ondelete="RESTRICT"
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "owner_organization_id",
+            "id",
+            name="uq_value_crosswalk_entries_owner_id",
+        ),
         sa.UniqueConstraint(
             "crosswalk_id",
             "normalized_source_value",
@@ -487,6 +501,12 @@ def upgrade() -> None:
         "ix_value_crosswalk_entry_owner_crosswalk",
         "value_crosswalk_entries",
         ["owner_organization_id", "crosswalk_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_value_crosswalk_entry_owner_supersedes",
+        "value_crosswalk_entries",
+        ["owner_organization_id", "supersedes_entry_id"],
         unique=False,
     )
     op.create_table(
