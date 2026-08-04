@@ -504,12 +504,20 @@ def _assert_original_action_schema_at_0014(engine: Engine) -> None:
         for item in inspector.get_unique_constraints(table_name)
         if item["name"] is not None
     }
-    index_names = {
-        str(item["name"])
+    reflected_indexes = [
+        item
         for table_name in ACTION_TABLES_AT_0014
         for item in inspector.get_indexes(table_name)
         if item["name"] is not None
-    }
+    ]
+    if any("duplicates_constraint" in item for item in reflected_indexes):
+        index_names = {
+            str(item["name"])
+            for item in reflected_indexes
+            if item.get("duplicates_constraint") is None
+        }
+    else:
+        index_names = {str(item["name"]) for item in reflected_indexes} - ORIGINAL_ACTION_UNIQUES
     foreign_keys = [
         item
         for table_name in ACTION_TABLES_AT_0014
