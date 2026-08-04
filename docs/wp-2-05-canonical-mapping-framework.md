@@ -1,6 +1,6 @@
-# WP-3.01 Canonical Mapping and Causal-Ready Data Foundation
+# WP-2.05 Canonical Mapping and Causal-Ready Data Foundation
 
-WP-3.01 introduces the governed boundary between immutable source records and
+WP-2.05 introduces the governed boundary between immutable source records and
 canonical operational entities, events, and metrics. It does not infer causal
 claims. It preserves the identities, time semantics, mapping decisions,
 confidence, and source lineage required by later causal analysis.
@@ -136,11 +136,11 @@ transport work only; domain behavior remains in services.
 Revision `20260804_0031` follows `20260802_0030`. It uses static Alembic table
 definitions and does not import application models or live metadata. Upgrade
 adds the raw-record parent candidate key, expands the existing lineage
-vocabulary, and creates the 23 tables. Downgrade removes only WP-3.01 objects,
+vocabulary, and creates the 23 tables. Downgrade removes only WP-2.05 objects,
 restores the prior lineage checks, and removes the candidate key. No historical
 migration is modified.
 
-Rollback is destructive for WP-3.01 data and therefore requires a backup or a
+Rollback is destructive for WP-2.05 data and therefore requires a backup or a
 disposable validation database. Runtime rollback should first stop mapping
 execution and preserve raw records; existing Connect, Trust, Intelligence,
 Command, Recovery, and Knowledge Graph records remain unchanged.
@@ -157,3 +157,16 @@ Command, Recovery, and Knowledge Graph records remain unchanged.
 - Fuzzy matching produces candidates only and never auto-merges.
 - Live ERP connectors, frontend mapping UX, Feature Store, causal inference,
   optimization, TI-D, and production authentication are outside this package.
+
+## Identifier note
+
+This package was originally drafted and reviewed under the label "WP-3.01,"
+which collides with the already-implemented Enterprise Operational Knowledge
+Graph package (see `docs/phase3/wp-3.01-knowledge-graph-specification.md` and
+`docs/phase3/wp-3.01-architecture-approval-record.md`), the actual holder of
+that identifier in the approved Enterprise Intelligence Network roadmap
+(`docs/phase3/enterprise-intelligence-network-architecture.md`). This work is
+Phase 2 Connect/data-foundation scope, not Enterprise Intelligence Network
+scope, and is renamed here to WP-2.05 to match the program's own prior
+decision ("WP-2.05 — Canonical Mapping Framework") and to eliminate the
+collision. No code, schema, or test content changed as part of this rename.
