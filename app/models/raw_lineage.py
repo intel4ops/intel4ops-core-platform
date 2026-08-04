@@ -150,6 +150,12 @@ class LineageNodeType(StrEnum):
     RAW_STORAGE_OBJECT = "raw_storage_object"
     RAW_RECORD_REFERENCE = "raw_record_reference"
     PROCESSING_RUN = "processing_run"
+    SOURCE_SCHEMA = "source_schema"
+    MAPPING_RUN = "mapping_run"
+    MAPPING_RECORD_RESULT = "mapping_record_result"
+    CANONICAL_ENTITY = "canonical_entity"
+    CANONICAL_EVENT = "canonical_event"
+    CANONICAL_METRIC = "canonical_metric"
     CUSTOM = "custom"
 
 
@@ -174,6 +180,9 @@ class LineageRelationshipType(StrEnum):
     SUPERSEDES = "supersedes"
     PRODUCED_BY = "produced_by"
     CONSUMED_BY = "consumed_by"
+    MAPPED_BY = "mapped_by"
+    CANONICALIZED_AS = "canonicalized_as"
+    RESOLVED_TO = "resolved_to"
     LINKED_TO = "linked_to"
     CUSTOM = "custom"
 
@@ -374,6 +383,11 @@ class RawRecordReference(Base):
         ),
         UniqueConstraint(
             "raw_storage_object_id", "record_sequence", name="uq_raw_records_object_sequence"
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_raw_record_references_org_id",
         ),
         CheckConstraint("record_sequence > 0", name="ck_raw_record_sequence_positive"),
         CheckConstraint(
