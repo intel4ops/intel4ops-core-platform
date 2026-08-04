@@ -44,7 +44,9 @@ Crosswalk entries are separate governed rows. They retain the original and
 normalized source values, canonical target, confidence attribution, approval
 status, effective interval, supersession pointer, and audit timestamps.
 Organization-owned entries carry the same owner as their parent crosswalk.
-Shared entries remain visible without weakening tenant-owned entries.
+Tenant-owned supersession references are protected by a composite owner and
+entry foreign key. Shared entries remain visible without weakening
+tenant-owned entries.
 
 ## Mapping execution
 
@@ -54,12 +56,14 @@ engine. It:
 1. verifies the tenant-owned dataset version and every raw record reference;
 2. resolves a visible, published mapping-template version;
 3. applies ordered field transformations;
-4. records hard unresolved or missing-field states instead of hiding them in an
-   aggregate confidence score;
-5. materializes a stable canonical entity, event, or metric;
-6. creates a source-to-canonical link and record-level result;
-7. registers mapping nodes and edges in the existing lineage graph;
-8. emits an immutable mapping audit event.
+4. applies governed allowed-value and bounded field-validation rules;
+5. records hard unresolved, ambiguous, conflicting, crosswalk-miss, validation,
+   or missing-field states instead of hiding them in an aggregate confidence
+   score;
+6. materializes a stable canonical entity, event, or metric;
+7. creates a source-to-canonical link and record-level result;
+8. registers mapping nodes and edges in the existing lineage graph;
+9. emits an immutable mapping audit event.
 
 An idempotency key is bound to a request fingerprint. Reuse with a different
 request returns a conflict. Confidence uses the minimum of supporting mapping
@@ -68,9 +72,15 @@ limitations.
 
 Supported deterministic transformations are type casting, date parsing,
 timezone normalization, governed unit factors, ISO-style currency-code
-normalization, approved crosswalk lookup, bounded derivation, constants, and
-text normalization. Custom executable functions remain unsupported without
-separate governance.
+normalization, approved crosswalk lookup, bounded multi-field derivation,
+constants, and text normalization. Custom executable functions remain
+unsupported without separate governance.
+
+Deterministic entity rules may reuse an existing tenant entity. A matching
+identity with conflicting attributes creates a hard `conflicting` result and
+review exception. Fuzzy rules produce bounded `EntityMatchCandidate` rows and
+an `ambiguous` result; they never auto-merge. Candidate decisions and exception
+reviews are tenant-scoped, and completed review rows are immutable.
 
 ## Temporal and causal readiness
 
@@ -97,6 +107,12 @@ completeness, unresolved and ambiguous ratios, conflicts, missing required
 fields, and lineage completeness. Any unresolved, ambiguous, conflicting, or
 missing-required-field result is a hard readiness blocker until governed policy
 allows otherwise.
+
+Mapping Trust signals expose completeness, blocking counts, unresolved and
+ambiguous ratios, conflict and required-field counts, transformation and
+normalization failures, lineage completeness, and p10/p50/p90 confidence
+distribution values. Mapping suggestions consider only canonical definitions
+visible to the requesting organization.
 
 Canonical profiles define the initial Job-to-Cash and Oilfield Services entity,
 event, metric, and mapping-template requirements. They use the existing
