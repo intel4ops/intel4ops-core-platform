@@ -1239,6 +1239,13 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "fk_mapping_record_results_org_mapping_run",
         "fk_mapping_record_results_org_raw_record",
     } <= {item["name"] for item in mapping_inspector.get_foreign_keys("mapping_record_results")}
+    assert "uq_value_crosswalk_entries_owner_id" in {
+        item["name"] for item in mapping_inspector.get_unique_constraints("value_crosswalk_entries")
+    }
+    assert {
+        "fk_value_crosswalk_entry_owner_crosswalk",
+        "fk_value_crosswalk_entry_owner_supersedes",
+    } <= {item["name"] for item in mapping_inspector.get_foreign_keys("value_crosswalk_entries")}
     assert (
         str(
             {

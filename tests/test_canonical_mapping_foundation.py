@@ -43,6 +43,7 @@ from app.schemas.canonical_mapping import (
     EntityMatchDecision,
     FieldMappingCreate,
     MappingInputRecord,
+    MappingReviewCreate,
     MappingRunCreate,
     MappingTemplateCreate,
     MappingTemplateVersionCreate,
@@ -61,6 +62,7 @@ from app.services.canonical_mapping_service import (
     canonical_registry_service,
     mapping_execution_service,
     mapping_review_service,
+    mapping_suggestion_service,
     mapping_template_service,
     mapping_trust_signal_service,
     schema_discovery_service,
@@ -233,6 +235,7 @@ def published_entity_mapping(
     db: Session,
     organization_id: UUID,
     actor: UUID,
+    name_validation_rule: dict[str, object] | None = None,
 ) -> tuple[CanonicalEntityType, MappingTemplateVersion]:
     entity_type = canonical_registry_service.create_type(
         db,
@@ -256,6 +259,7 @@ def published_entity_mapping(
             display_name="Name",
             data_type="string",
             is_required=True,
+            validation_rule=name_validation_rule,
         ),
         organization_id,
     )
@@ -370,6 +374,12 @@ def test_exact_table_contract_mapper_configuration_and_metadata() -> None:
         for constraint in record_fks
         if constraint.referred_table.name in {"mapping_runs", "raw_record_references"}
     )
+    entry_constraints = Base.metadata.tables["value_crosswalk_entries"].constraints
+    assert {
+        "fk_value_crosswalk_entry_owner_crosswalk",
+        "fk_value_crosswalk_entry_owner_supersedes",
+        "uq_value_crosswalk_entries_owner_id",
+    } <= {constraint.name for constraint in entry_constraints if constraint.name}
 
 
 def test_migration_is_static_revision_scoped_and_creates_exact_tables() -> None:
@@ -386,8 +396,8 @@ def test_migration_is_static_revision_scoped_and_creates_exact_tables() -> None:
 
 
 def test_source_schema_is_idempotent_and_tenant_safe(db: Session) -> None:
-    organization_id, _, dataset_id, version_id, _, _ = foundation(db, "mapping-schema")
-    other_id, _, _, _, _, _ = foundation(db, "mapping-schema-other")
+    organization_id, actor, dataset_id, version_id, _, _ = foundation(db, "mapping-schema")
+    other_id, other_actor, _, _, _, _ = foundation(db, "mapping-schema-other")
     payload = SourceSchemaDiscover(
         dataset_id=dataset_id,
         dataset_version_id=version_id,
@@ -409,6 +419,53 @@ def test_source_schema_is_idempotent_and_tenant_safe(db: Session) -> None:
     with pytest.raises(CanonicalMappingServiceError, match="outside tenant scope"):
         schema_discovery_service.discover(db, other_id, payload)
 
+    entity_type, _ = published_entity_mapping(db, organization_id, actor)
+    other_entity_type, _ = published_entity_mapping(db, other_id, other_actor)
+    visible_customer_field = canonical_registry_service.create_field(
+        db,
+        CanonicalFieldCreate(
+            canonical_type_kind="entity",
+            canonical_type_id=entity_type.id,
+            field_code="customer_id",
+            display_name="Customer ID",
+            data_type="string",
+        ),
+        organization_id,
+    )
+    hidden_customer_field = canonical_registry_service.create_field(
+        db,
+        CanonicalFieldCreate(
+            canonical_type_kind="entity",
+            canonical_type_id=other_entity_type.id,
+            field_code="customer_id",
+            display_name="Customer ID",
+            data_type="string",
+        ),
+        other_id,
+    )
+    suggestions = mapping_suggestion_service.suggest(db, organization_id, schema.id)
+    visible_field_ids = {
+        field.id
+        for field in db.scalars(
+            select(CanonicalFieldDefinition).where(
+                CanonicalFieldDefinition.canonical_type_id == entity_type.id
+            )
+        )
+    }
+    hidden_field_ids = {
+        field.id
+        for field in db.scalars(
+            select(CanonicalFieldDefinition).where(
+                CanonicalFieldDefinition.canonical_type_id == other_entity_type.id
+            )
+        )
+    }
+    suggested_ids = {suggestion["canonical_field_definition_id"] for suggestion in suggestions}
+    assert visible_customer_field.id in suggested_ids
+    assert hidden_customer_field.id not in suggested_ids
+    assert suggested_ids <= visible_field_ids
+    assert suggested_ids.isdisjoint(hidden_field_ids)
+
 
 def test_template_lifecycle_immutability_and_single_published_version(db: Session) -> None:
     organization_id, actor, _, _, _, _ = foundation(db, "mapping-template")
@@ -420,6 +477,22 @@ def test_template_lifecycle_immutability_and_single_published_version(db: Sessio
     stored = db.get(MappingTemplateVersion, version.id)
     assert stored is not None
     assert stored.definition_json == {"format": "customer_csv"}
+    field_mapping = db.scalar(
+        select(FieldMapping).where(FieldMapping.template_version_id == stored.id)
+    )
+    assert field_mapping is not None
+    with pytest.raises(CanonicalMappingServiceError) as exc:
+        mapping_template_service.add_transformation(
+            db,
+            field_mapping.id,
+            TransformationCreate(
+                sequence=99,
+                transformation_type="trim_normalize",
+                parameters_json={},
+            ),
+            organization_id,
+        )
+    assert exc.value.code == "VERSION_IMMUTABLE"
     mapping_template_service.transition(
         db,
         stored.id,
@@ -508,6 +581,43 @@ def test_crosswalk_entries_are_governed_versioned_and_tenant_visible(db: Session
         )
     assert exc.value.code == "CANONICAL_TYPE_NOT_FOUND"
 
+    other_crosswalk = value_crosswalk_service.create(
+        db,
+        ValueCrosswalkCreate(
+            crosswalk_code="other_status",
+            name="Other status",
+            canonical_field_definition_id=other_field.id,
+            scope_type="organization",
+            scope_key=f"organization:{other_id}",
+            owner_organization_id=other_id,
+        ),
+        other_actor,
+        other_id,
+    )
+    other_entry = value_crosswalk_service.add_entry(
+        db,
+        other_crosswalk.id,
+        ValueCrosswalkEntryCreate(
+            source_value="legacy",
+            canonical_target_value="legacy",
+        ),
+        other_id,
+    )
+    db.add(
+        ValueCrosswalkEntry(
+            owner_organization_id=organization_id,
+            crosswalk_id=crosswalk.id,
+            source_value="replacement",
+            normalized_source_value="replacement",
+            canonical_target_value="replacement",
+            status="draft",
+            supersedes_entry_id=other_entry.id,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
 
 def test_mapping_execution_replay_confidence_lineage_and_trust_signals(db: Session) -> None:
     organization_id, actor, _, version_id, _, raw_reference_id = foundation(
@@ -590,6 +700,10 @@ def test_mapping_execution_replay_confidence_lineage_and_trust_signals(db: Sessi
     signals = mapping_trust_signal_service.signals(db, organization_id, run.id)
     assert signals["trust_ready"] is True
     assert signals["mapping_completeness"] == Decimal("1")
+    assert signals["mapping_confidence_p10"] == Decimal("1.0000")
+    assert signals["mapping_confidence_p50"] == Decimal("1.0000")
+    assert signals["mapping_confidence_p90"] == Decimal("1.0000")
+    assert signals["lineage_completeness_ratio"] == Decimal("1")
 
     link = db.scalar(
         select(SourceCanonicalLink).where(
@@ -644,6 +758,153 @@ def test_mapping_execution_replay_confidence_lineage_and_trust_signals(db: Sessi
     assert exc.value.status == 409
 
 
+def test_entity_resolution_conflicts_and_fuzzy_matches_require_review(db: Session) -> None:
+    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+        db,
+        "mapping-resolution",
+    )
+    entity_type, template_version = published_entity_mapping(db, organization_id, actor)
+    first = mapping_execution_service.execute(
+        db,
+        organization_id,
+        MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            idempotency_key="resolution-original",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": "C-001", "customer_name": "Acme Energy"},
+                )
+            ],
+        ),
+        actor,
+    )
+    assert first.status == "completed"
+    exact_rule = EntityMatchRule(
+        entity_type_id=entity_type.id,
+        rule_code="customer_exact_id",
+        match_method="exact_identifier",
+        match_fields=["canonical_entity_key"],
+        confidence_weight=Decimal("1"),
+        normalization_json={},
+    )
+    fuzzy_rule = EntityMatchRule(
+        entity_type_id=entity_type.id,
+        rule_code="customer_name_fuzzy",
+        match_method="fuzzy_candidate",
+        match_fields=["name"],
+        confidence_weight=Decimal("0.8"),
+        normalization_json={"candidate_threshold": "0.80"},
+    )
+    db.add_all([exact_rule, fuzzy_rule])
+    db.commit()
+
+    conflicting_run = mapping_execution_service.execute(
+        db,
+        organization_id,
+        MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            idempotency_key="resolution-conflict",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={
+                        "customer_id": "C-001",
+                        "customer_name": "Acme Energy Holdings",
+                    },
+                )
+            ],
+        ),
+        actor,
+    )
+    conflicting_result = db.scalar(
+        select(MappingRecordResult).where(MappingRecordResult.mapping_run_id == conflicting_run.id)
+    )
+    assert conflicting_result is not None
+    assert conflicting_result.status == "conflicting"
+    conflicting_exception = db.scalar(
+        select(MappingException).where(
+            MappingException.mapping_record_result_id == conflicting_result.id
+        )
+    )
+    assert conflicting_exception is not None
+    assert conflicting_exception.exception_type == "conflicting_mapping"
+
+    ambiguous_run = mapping_execution_service.execute(
+        db,
+        organization_id,
+        MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            idempotency_key="resolution-ambiguous",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": "C-002", "customer_name": "Acme Energi"},
+                )
+            ],
+        ),
+        actor,
+    )
+    ambiguous_result = db.scalar(
+        select(MappingRecordResult).where(MappingRecordResult.mapping_run_id == ambiguous_run.id)
+    )
+    assert ambiguous_result is not None
+    assert ambiguous_result.status == "ambiguous"
+    candidate = db.scalar(
+        select(EntityMatchCandidate).where(
+            EntityMatchCandidate.organization_id == organization_id,
+            EntityMatchCandidate.source_canonical_link_id
+            == db.scalar(
+                select(SourceCanonicalLink.id).where(
+                    SourceCanonicalLink.mapping_run_id == ambiguous_run.id
+                )
+            ),
+        )
+    )
+    assert candidate is not None
+    assert candidate.status == "candidate"
+    assert candidate.match_score >= Decimal("0.80")
+    ambiguous_exception = db.scalar(
+        select(MappingException).where(
+            MappingException.mapping_record_result_id == ambiguous_result.id
+        )
+    )
+    assert ambiguous_exception is not None
+    assert ambiguous_exception.exception_type == "ambiguous_entity"
+    assert (
+        mapping_trust_signal_service.signals(db, organization_id, ambiguous_run.id)["trust_ready"]
+        is False
+    )
+    accepted = mapping_review_service.decide_candidate(
+        db,
+        organization_id,
+        candidate.id,
+        EntityMatchDecision(decision="accepted"),
+        actor,
+    )
+    assert accepted.status == "accepted"
+    db.refresh(ambiguous_result)
+    db.refresh(ambiguous_exception)
+    accepted_link = db.scalar(
+        select(SourceCanonicalLink).where(
+            SourceCanonicalLink.id == candidate.source_canonical_link_id
+        )
+    )
+    assert accepted_link is not None
+    assert accepted_link.canonical_target_id == candidate.candidate_entity_id
+    assert accepted_link.is_primary is True
+    assert ambiguous_result.status == "human_confirmed"
+    assert ambiguous_result.canonical_target_id == candidate.candidate_entity_id
+    assert ambiguous_exception.status == "resolved"
+    assert (
+        mapping_trust_signal_service.signals(db, organization_id, ambiguous_run.id)["trust_ready"]
+        is True
+    )
+
+
 def test_missing_required_fields_are_hard_readiness_blocks(db: Session) -> None:
     organization_id, actor, _, version_id, _, raw_reference_id = foundation(
         db,
@@ -675,6 +936,190 @@ def test_missing_required_fields_are_hard_readiness_blocks(db: Session) -> None:
         select(MappingException).where(MappingException.mapping_record_result_id == result.id)
     )
     assert exception is not None
+    assert mapping_trust_signal_service.signals(db, organization_id, run.id)["trust_ready"] is False
+    review = mapping_review_service.review_exception(
+        db,
+        organization_id,
+        exception.id,
+        MappingReviewCreate(decision="confirm", notes="Confirmed missing source field"),
+        actor,
+    )
+    with pytest.raises(CanonicalMappingServiceError) as exc:
+        mapping_review_service.review_exception(
+            db,
+            organization_id,
+            exception.id,
+            MappingReviewCreate(decision="confirm"),
+            actor,
+        )
+    assert exc.value.code == "MAPPING_EXCEPTION_FINAL"
+    review.notes = "attempted mutation"
+    with pytest.raises(ValueError, match="immutable"):
+        db.commit()
+    db.rollback()
+
+
+def test_governed_field_validation_failure_is_a_hard_exception(db: Session) -> None:
+    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+        db,
+        "mapping-validation",
+    )
+    _, template_version = published_entity_mapping(
+        db,
+        organization_id,
+        actor,
+        name_validation_rule={"pattern": r"^[A-Z][A-Za-z ]+$", "max_length": 40},
+    )
+    run = mapping_execution_service.execute(
+        db,
+        organization_id,
+        MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            idempotency_key="invalid-customer-name",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": "C-004", "customer_name": "123-invalid"},
+                )
+            ],
+        ),
+        actor,
+    )
+    result = db.scalar(
+        select(MappingRecordResult).where(MappingRecordResult.mapping_run_id == run.id)
+    )
+    assert result is not None
+    assert result.status == "unresolved"
+    exception = db.scalar(
+        select(MappingException).where(MappingException.mapping_record_result_id == result.id)
+    )
+    assert exception is not None
+    assert exception.exception_type == "validation_failure"
+    assert mapping_trust_signal_service.signals(db, organization_id, run.id)["trust_ready"] is False
+
+
+def test_crosswalk_miss_is_recorded_as_a_specific_hard_exception(db: Session) -> None:
+    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+        db,
+        "mapping-crosswalk-miss",
+    )
+    entity_type = canonical_registry_service.create_type(
+        db,
+        "entity",
+        CanonicalTypeCreate(
+            type_code="invoice",
+            display_name="Invoice",
+            scope_type="organization",
+            scope_key=f"organization:{organization_id}",
+            owner_organization_id=organization_id,
+        ),
+    )
+    assert isinstance(entity_type, CanonicalEntityType)
+    status_field = canonical_registry_service.create_field(
+        db,
+        CanonicalFieldCreate(
+            canonical_type_kind="entity",
+            canonical_type_id=entity_type.id,
+            field_code="status",
+            display_name="Status",
+            data_type="enum",
+            is_required=True,
+        ),
+        organization_id,
+    )
+    crosswalk = value_crosswalk_service.create(
+        db,
+        ValueCrosswalkCreate(
+            crosswalk_code="invoice_status",
+            name="Invoice status",
+            canonical_field_definition_id=status_field.id,
+            scope_type="organization",
+            scope_key=f"organization:{organization_id}",
+            owner_organization_id=organization_id,
+        ),
+        actor,
+        organization_id,
+    )
+    template = mapping_template_service.create(
+        db,
+        MappingTemplateCreate(
+            template_code="invoice_csv",
+            name="Invoice CSV",
+            scope_type="organization",
+            scope_key=f"organization:{organization_id}",
+            owner_organization_id=organization_id,
+            target_canonical_type_kind="entity",
+            target_canonical_type_id=entity_type.id,
+        ),
+        actor,
+        authorized_organization_id=organization_id,
+    )
+    template_version = mapping_template_service.create_version(
+        db,
+        template.id,
+        MappingTemplateVersionCreate(
+            semantic_version="1.0.0",
+            definition_json={"format": "invoice_csv"},
+        ),
+        actor,
+        organization_id,
+    )
+    field_mapping = mapping_template_service.add_field_mapping(
+        db,
+        template_version.id,
+        FieldMappingCreate(
+            source_field_path="invoice_status",
+            canonical_field_definition_id=status_field.id,
+            sequence=0,
+            is_required_for_publication=True,
+        ),
+        organization_id,
+    )
+    mapping_template_service.add_transformation(
+        db,
+        field_mapping.id,
+        TransformationCreate(
+            sequence=0,
+            transformation_type="crosswalk_lookup",
+            parameters_json={"crosswalk_id": str(crosswalk.id)},
+        ),
+        organization_id,
+    )
+    for target in ("candidate", "validated", "approved", "published"):
+        mapping_template_service.transition(
+            db,
+            template_version.id,
+            target,
+            actor,
+            organization_id,
+        )
+    run = mapping_execution_service.execute(
+        db,
+        organization_id,
+        MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            idempotency_key="crosswalk-miss",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"invoice_status": "UNKNOWN"},
+                )
+            ],
+        ),
+        actor,
+    )
+    result = db.scalar(
+        select(MappingRecordResult).where(MappingRecordResult.mapping_run_id == run.id)
+    )
+    assert result is not None
+    assert result.status == "unresolved"
+    exception = db.scalar(
+        select(MappingException).where(MappingException.mapping_record_result_id == result.id)
+    )
+    assert exception is not None
+    assert exception.exception_type == "crosswalk_miss"
     assert mapping_trust_signal_service.signals(db, organization_id, run.id)["trust_ready"] is False
 
 
@@ -772,6 +1217,20 @@ def test_deterministic_transformation_contracts(db: Session) -> None:
     )
     with pytest.raises(ValueError, match="separately governed"):
         transform(db, uuid4(), "value", custom)
+
+    derived = MappingTransformation(
+        field_mapping_id=uuid4(),
+        sequence=0,
+        transformation_type="derive",
+        parameters_json={"format": "{first_name} {last_name}"},
+    )
+    assert transform(
+        db,
+        uuid4(),
+        None,
+        derived,
+        {"first_name": "Acme", "last_name": "Energy"},
+    ) == ("Acme Energy", Decimal("1"))
 
 
 def test_canonical_event_metric_temporal_and_tenant_contracts(db: Session) -> None:
