@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from typing import Any, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -22,6 +24,7 @@ from app.models.canonical_mapping import (
     CanonicalTypeKind,
     CrosswalkEntryStatus,
     EntityMatchCandidate,
+    EntityMatchRule,
     FieldMapping,
     MappingAuditEvent,
     MappingException,
@@ -77,6 +80,10 @@ class CanonicalMappingServiceError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.status = status
+
+
+class CanonicalFieldValidationError(ValueError):
+    pass
 
 
 def _fail(code: str, message: str, status: int = 400) -> NoReturn:
@@ -458,7 +465,12 @@ class MappingTemplateService:
         field = db.get(FieldMapping, field_mapping_id)
         if field is None:
             _fail("FIELD_MAPPING_NOT_FOUND", "Field mapping was not found", 404)
-        self.require_version(db, field.template_version_id, organization_id)
+        version = self.require_version(db, field.template_version_id, organization_id)
+        if version.lifecycle_status not in {
+            MappingLifecycleStatus.DRAFT.value,
+            MappingLifecycleStatus.CANDIDATE.value,
+        }:
+            _fail("VERSION_IMMUTABLE", "Transformations cannot change after validation", 409)
         transformation = MappingTransformation(
             field_mapping_id=field.id,
             **payload.model_dump(),
@@ -795,10 +807,12 @@ class MappingExecutionService:
                         organization_id,
                         value,
                         transformation,
+                        input_record.values,
                     )
                     if confidence is not None:
                         confidence_scores.append(confidence)
-            except (ValueError, TypeError, KeyError) as exc:
+                self._validate_field(field, value)
+            except CanonicalFieldValidationError as exc:
                 self._exception_result(
                     db,
                     organization_id,
@@ -806,8 +820,30 @@ class MappingExecutionService:
                     raw,
                     template,
                     input_record,
-                    MappingExceptionType.TRANSFORMATION_FAILURE.value,
+                    MappingExceptionType.VALIDATION_FAILURE.value,
                     {"field": field.field_code, "error": str(exc)},
+                )
+                return
+            except (ValueError, TypeError, KeyError) as exc:
+                exception_type = (
+                    MappingExceptionType.CROSSWALK_MISS.value
+                    if transformation.transformation_type
+                    == TransformationType.CROSSWALK_LOOKUP.value
+                    else MappingExceptionType.TRANSFORMATION_FAILURE.value
+                )
+                self._exception_result(
+                    db,
+                    organization_id,
+                    run,
+                    raw,
+                    template,
+                    input_record,
+                    exception_type,
+                    {
+                        "field": field.field_code,
+                        "transformation_type": transformation.transformation_type,
+                        "error": str(exc),
+                    },
                 )
                 return
             output[field.field_code] = value
@@ -824,7 +860,7 @@ class MappingExecutionService:
             )
             return
         confidence = min(confidence_scores, default=Decimal("1"))
-        target = self._materialize_target(
+        target, record_status, match_candidates = self._materialize_target(
             db,
             organization_id,
             template,
@@ -836,7 +872,7 @@ class MappingExecutionService:
             organization_id=organization_id,
             mapping_run_id=run.id,
             raw_record_reference_id=raw.id,
-            status=MappingRecordStatus.MAPPED.value,
+            status=record_status,
             canonical_target_kind=template.target_canonical_type_kind,
             canonical_target_id=target.id,
             mapping_confidence_score=confidence,
@@ -868,12 +904,49 @@ class MappingExecutionService:
             confidence_interpretation="Primary deterministic source-to-canonical link.",
             confidence_limitations="Limited to the configured mapping template.",
         )
+        link.is_primary = record_status == MappingRecordStatus.MAPPED.value
         db.add(link)
         db.flush()
-        if isinstance(target, CanonicalEntity) and target.survivorship_source_link_id is None:
+        for rule, candidate_entity, match_score in match_candidates:
+            db.add(
+                EntityMatchCandidate(
+                    organization_id=organization_id,
+                    source_canonical_link_id=link.id,
+                    candidate_entity_id=candidate_entity.id,
+                    match_rule_id=rule.id,
+                    match_score=match_score,
+                    status=MatchCandidateStatus.CANDIDATE.value,
+                )
+            )
+        if (
+            record_status == MappingRecordStatus.MAPPED.value
+            and isinstance(target, CanonicalEntity)
+            and target.survivorship_source_link_id is None
+        ):
             target.survivorship_source_link_id = link.id
         self._register_lineage(db, organization_id, raw, run, result, target, confidence)
-        run.mapped_count += 1
+        if record_status == MappingRecordStatus.AMBIGUOUS.value:
+            self._add_exception(
+                db,
+                organization_id,
+                result,
+                MappingExceptionType.AMBIGUOUS_ENTITY.value,
+                {"candidate_count": len(match_candidates)},
+            )
+            run.exception_count += 1
+            run.rejected_count += 1
+        elif record_status == MappingRecordStatus.CONFLICTING.value:
+            self._add_exception(
+                db,
+                organization_id,
+                result,
+                MappingExceptionType.CONFLICTING_MAPPING.value,
+                {"canonical_target_id": str(target.id)},
+            )
+            run.exception_count += 1
+            run.rejected_count += 1
+        else:
+            run.mapped_count += 1
         _audit(
             db,
             organization_id,
@@ -932,12 +1005,31 @@ class MappingExecutionService:
         run.exception_count += 1
         run.rejected_count += 1
 
+    @staticmethod
+    def _add_exception(
+        db: Session,
+        organization_id: UUID,
+        result: MappingRecordResult,
+        exception_type: str,
+        detail: dict[str, object],
+    ) -> None:
+        db.add(
+            MappingException(
+                organization_id=organization_id,
+                mapping_record_result_id=result.id,
+                exception_type=exception_type,
+                status=MappingExceptionStatus.OPEN.value,
+                detail_json=detail,
+            )
+        )
+
     def _transform(
         self,
         db: Session,
         organization_id: UUID,
         value: object,
         transformation: MappingTransformation,
+        record_values: dict[str, object] | None = None,
     ) -> tuple[object, Decimal | None]:
         kind = transformation.transformation_type
         params = transformation.parameters_json
@@ -984,12 +1076,39 @@ class MappingExecutionService:
             )
         if kind == TransformationType.DERIVE.value:
             template = str(params["format"])
-            return template.format(value=value), Decimal("1")
+            context = dict(record_values or {})
+            context["value"] = value
+            return template.format(**context), Decimal("1")
         if kind == TransformationType.CONSTANT.value:
             return params.get("value"), Decimal("1")
         if kind == TransformationType.CUSTOM_FUNCTION.value:
             raise ValueError("Custom functions require a separately governed implementation")
         return value, Decimal("1")
+
+    @staticmethod
+    def _validate_field(field: CanonicalFieldDefinition, value: object) -> None:
+        if value is None:
+            return
+        if field.allowed_values is not None and value not in field.allowed_values:
+            raise CanonicalFieldValidationError("Value is outside the governed allowed set")
+        rule = field.validation_rule or {}
+        try:
+            if "minimum" in rule and Decimal(str(value)) < Decimal(str(rule["minimum"])):
+                raise CanonicalFieldValidationError("Value is below the governed minimum")
+            if "maximum" in rule and Decimal(str(value)) > Decimal(str(rule["maximum"])):
+                raise CanonicalFieldValidationError("Value exceeds the governed maximum")
+        except CanonicalFieldValidationError:
+            raise
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise CanonicalFieldValidationError(
+                "Value cannot be evaluated against the governed numeric range"
+            ) from exc
+        if "min_length" in rule and len(str(value)) < int(str(rule["min_length"])):
+            raise CanonicalFieldValidationError("Value is shorter than the governed minimum")
+        if "max_length" in rule and len(str(value)) > int(str(rule["max_length"])):
+            raise CanonicalFieldValidationError("Value exceeds the governed maximum length")
+        if "pattern" in rule and re.fullmatch(str(rule["pattern"]), str(value)) is None:
+            raise CanonicalFieldValidationError("Value does not match the governed pattern")
 
     @staticmethod
     def _as_bool(value: object) -> bool:
@@ -1010,7 +1129,11 @@ class MappingExecutionService:
         output: dict[str, object],
         confidence: Decimal,
         source_timestamp: datetime | None,
-    ) -> CanonicalEntity | CanonicalEvent | CanonicalMetric:
+    ) -> tuple[
+        CanonicalEntity | CanonicalEvent | CanonicalMetric,
+        str,
+        list[tuple[EntityMatchRule, CanonicalEntity, Decimal]],
+    ]:
         fingerprint = _fingerprint(
             {
                 "kind": template.target_canonical_type_kind,
@@ -1035,7 +1158,23 @@ class MappingExecutionService:
                 )
             )
             if existing is not None:
-                return existing
+                return existing, MappingRecordStatus.MAPPED.value, []
+            deterministic, conflict, candidates = entity_resolution_service.resolve(
+                db,
+                organization_id,
+                template.target_canonical_type_id,
+                output,
+            )
+            if deterministic is not None:
+                return (
+                    deterministic,
+                    (
+                        MappingRecordStatus.CONFLICTING.value
+                        if conflict
+                        else MappingRecordStatus.MAPPED.value
+                    ),
+                    [],
+                )
             target: CanonicalEntity | CanonicalEvent | CanonicalMetric = CanonicalEntity(
                 **common,
                 entity_type_id=template.target_canonical_type_id,
@@ -1098,7 +1237,9 @@ class MappingExecutionService:
             )
         db.add(target)
         db.flush()
-        return target
+        if isinstance(target, CanonicalEntity) and candidates:
+            return target, MappingRecordStatus.AMBIGUOUS.value, candidates
+        return target, MappingRecordStatus.MAPPED.value, []
 
     @staticmethod
     def _as_datetime(value: object) -> datetime:
@@ -1259,6 +1400,11 @@ class MappingReviewService:
         )
         if exception is None:
             _fail("MAPPING_EXCEPTION_NOT_FOUND", "Exception is outside tenant scope", 404)
+        if exception.status not in {
+            MappingExceptionStatus.OPEN.value,
+            MappingExceptionStatus.UNDER_REVIEW.value,
+        }:
+            _fail("MAPPING_EXCEPTION_FINAL", "Exception already has a final decision", 409)
         review = MappingReview(
             organization_id=organization_id,
             mapping_exception_id=exception.id,
@@ -1268,11 +1414,12 @@ class MappingReviewService:
             notes=payload.notes,
             override_value=payload.override_value,
         )
-        exception.status = (
-            MappingExceptionStatus.RESOLVED.value
-            if payload.decision in {"confirm", "override", "reject"}
-            else MappingExceptionStatus.UNDER_REVIEW.value
-        )
+        if payload.decision in {"confirm", "override"}:
+            exception.status = MappingExceptionStatus.RESOLVED.value
+        elif payload.decision == "reject":
+            exception.status = MappingExceptionStatus.WONT_FIX.value
+        else:
+            exception.status = MappingExceptionStatus.UNDER_REVIEW.value
         db.add(review)
         db.commit()
         db.refresh(review)
@@ -1299,12 +1446,184 @@ class MappingReviewService:
         candidate.status = payload.decision
         candidate.decided_by_user_id = actor_user_id
         candidate.decided_at = utc_now()
+        if payload.decision == MatchCandidateStatus.ACCEPTED.value:
+            source_link = db.scalar(
+                select(SourceCanonicalLink).where(
+                    SourceCanonicalLink.id == candidate.source_canonical_link_id,
+                    SourceCanonicalLink.organization_id == organization_id,
+                )
+            )
+            assert source_link is not None
+            source_link.canonical_target_id = candidate.candidate_entity_id
+            source_link.is_primary = True
+            source_link.mapping_confidence_score = candidate.match_score
+            source_link.confidence_method_code = "human_entity_match_review"
+            source_link.confidence_method_version = "1.0"
+            source_link.confidence_interpretation = (
+                "Entity match accepted by an authorized reviewer."
+            )
+            result = db.scalar(
+                select(MappingRecordResult).where(
+                    MappingRecordResult.organization_id == organization_id,
+                    MappingRecordResult.mapping_run_id == source_link.mapping_run_id,
+                    MappingRecordResult.raw_record_reference_id
+                    == source_link.raw_record_reference_id,
+                    MappingRecordResult.canonical_target_kind == CanonicalTypeKind.ENTITY.value,
+                )
+            )
+            assert result is not None
+            result.canonical_target_id = candidate.candidate_entity_id
+            result.status = MappingRecordStatus.HUMAN_CONFIRMED.value
+            result.mapping_confidence_score = candidate.match_score
+            result.confidence_method_code = "human_entity_match_review"
+            result.confidence_method_version = "1.0"
+            result.confidence_interpretation = "Entity match accepted by an authorized reviewer."
+            entity = db.get(CanonicalEntity, candidate.candidate_entity_id)
+            assert entity is not None
+            if entity.survivorship_source_link_id is None:
+                entity.survivorship_source_link_id = source_link.id
+            for sibling in db.scalars(
+                select(EntityMatchCandidate).where(
+                    EntityMatchCandidate.organization_id == organization_id,
+                    EntityMatchCandidate.source_canonical_link_id == source_link.id,
+                    EntityMatchCandidate.id != candidate.id,
+                    EntityMatchCandidate.status == MatchCandidateStatus.CANDIDATE.value,
+                )
+            ):
+                sibling.status = MatchCandidateStatus.SUPERSEDED.value
+                sibling.decided_by_user_id = actor_user_id
+                sibling.decided_at = candidate.decided_at
+            exception = db.scalar(
+                select(MappingException).where(
+                    MappingException.organization_id == organization_id,
+                    MappingException.mapping_record_result_id == result.id,
+                    MappingException.exception_type == MappingExceptionType.AMBIGUOUS_ENTITY.value,
+                )
+            )
+            if exception is not None:
+                exception.status = MappingExceptionStatus.RESOLVED.value
+                exception.resolution_summary = "Accepted governed entity-match candidate."
+            _audit(
+                db,
+                organization_id,
+                "entity_match_accepted",
+                "canonical_entity",
+                candidate.candidate_entity_id,
+                actor_user_id,
+                "Entity match candidate accepted",
+                {
+                    "candidate_id": str(candidate.id),
+                    "source_canonical_link_id": str(source_link.id),
+                },
+            )
         db.commit()
         db.refresh(candidate)
         return candidate
 
 
 class EntityResolutionService:
+    max_candidates = 20
+
+    def resolve(
+        self,
+        db: Session,
+        organization_id: UUID,
+        entity_type_id: UUID,
+        attributes: dict[str, object],
+    ) -> tuple[
+        CanonicalEntity | None,
+        bool,
+        list[tuple[EntityMatchRule, CanonicalEntity, Decimal]],
+    ]:
+        rules = list(
+            db.scalars(
+                select(EntityMatchRule)
+                .where(EntityMatchRule.entity_type_id == entity_type_id)
+                .order_by(EntityMatchRule.rule_code)
+            )
+        )
+        entities = list(
+            db.scalars(
+                select(CanonicalEntity).where(
+                    CanonicalEntity.organization_id == organization_id,
+                    CanonicalEntity.entity_type_id == entity_type_id,
+                )
+            )
+        )
+        fuzzy_candidates: list[tuple[EntityMatchRule, CanonicalEntity, Decimal]] = []
+        for rule in rules:
+            if rule.match_method == "fuzzy_candidate":
+                threshold = Decimal(str(rule.normalization_json.get("candidate_threshold", "0.75")))
+                for entity in entities:
+                    score = self._fuzzy_score(rule.match_fields, attributes, entity)
+                    if score >= threshold:
+                        fuzzy_candidates.append((rule, entity, score))
+                continue
+            matches = [
+                entity
+                for entity in entities
+                if self._deterministic_match(
+                    rule.match_method,
+                    rule.match_fields,
+                    attributes,
+                    entity,
+                )
+            ]
+            if matches:
+                entity = matches[0]
+                conflicts = len(matches) > 1 or _stable_json(
+                    entity.attributes_json
+                ) != _stable_json(attributes)
+                return entity, conflicts, []
+        fuzzy_candidates.sort(key=lambda item: item[2], reverse=True)
+        return None, False, fuzzy_candidates[: self.max_candidates]
+
+    @staticmethod
+    def _entity_value(entity: CanonicalEntity, field: str) -> object | None:
+        if field == "canonical_entity_key":
+            return entity.canonical_entity_key
+        return entity.attributes_json.get(field)
+
+    @staticmethod
+    def _normalized(value: object) -> str:
+        return " ".join(str(value).strip().casefold().split())
+
+    def _deterministic_match(
+        self,
+        method: str,
+        fields: list[str],
+        attributes: dict[str, object],
+        entity: CanonicalEntity,
+    ) -> bool:
+        if not fields:
+            return False
+        pairs = [(attributes.get(field), self._entity_value(entity, field)) for field in fields]
+        if any(left is None or right is None for left, right in pairs):
+            return False
+        if method == "exact_identifier":
+            return all(str(left) == str(right) for left, right in pairs)
+        if method in {"normalized_identifier", "deterministic_composite"}:
+            return all(self._normalized(left) == self._normalized(right) for left, right in pairs)
+        return False
+
+    def _fuzzy_score(
+        self,
+        fields: list[str],
+        attributes: dict[str, object],
+        entity: CanonicalEntity,
+    ) -> Decimal:
+        left = "|".join(
+            self._normalized(attributes[field]) for field in fields if field in attributes
+        )
+        right = "|".join(
+            self._normalized(value)
+            for field in fields
+            if (value := self._entity_value(entity, field)) is not None
+        )
+        if not left or not right:
+            return Decimal(0)
+        return Decimal(str(SequenceMatcher(None, left, right).ratio())).quantize(Decimal("0.0001"))
+
     def candidates(
         self,
         db: Session,
@@ -1403,7 +1722,22 @@ class MappingSuggestionService:
                 )
             )
         )
-        canonical_fields = list(db.scalars(select(CanonicalFieldDefinition)))
+        visible_type_ids = {
+            record.id
+            for kind in CanonicalTypeKind
+            for record in canonical_registry_service.list_types(
+                db,
+                kind.value,
+                organization_id,
+            )
+        }
+        canonical_fields = list(
+            db.scalars(
+                select(CanonicalFieldDefinition).where(
+                    CanonicalFieldDefinition.canonical_type_id.in_(visible_type_ids)
+                )
+            )
+        )
         by_code = {field.field_code.casefold(): field for field in canonical_fields}
         return [
             {
@@ -1441,20 +1775,121 @@ class MappingTrustSignalService:
             )
         )
         blocking = sum(item.status in self.blocking_statuses for item in results)
+        effective_mapped = sum(
+            item.status
+            in {
+                MappingRecordStatus.MAPPED.value,
+                MappingRecordStatus.HUMAN_CONFIRMED.value,
+            }
+            for item in results
+        )
         completeness = (
-            Decimal(run.mapped_count) / Decimal(run.input_count) if run.input_count else Decimal(0)
+            Decimal(effective_mapped) / Decimal(run.input_count) if run.input_count else Decimal(0)
         )
         confidence = sorted(
             item.mapping_confidence_score
             for item in results
             if item.mapping_confidence_score is not None
         )
+        exceptions = list(
+            db.scalars(
+                select(MappingException)
+                .join(
+                    MappingRecordResult,
+                    MappingRecordResult.id == MappingException.mapping_record_result_id,
+                )
+                .where(
+                    MappingException.organization_id == organization_id,
+                    MappingRecordResult.mapping_run_id == run.id,
+                )
+            )
+        )
+        source_links = list(
+            db.scalars(
+                select(SourceCanonicalLink).where(
+                    SourceCanonicalLink.organization_id == organization_id,
+                    SourceCanonicalLink.mapping_run_id == run.id,
+                )
+            )
+        )
+        result_count = len(results)
+        linked_targets = {
+            (
+                item.raw_record_reference_id,
+                item.canonical_target_kind,
+                item.canonical_target_id,
+            )
+            for item in source_links
+        }
+        linked_result_count = sum(
+            (
+                item.raw_record_reference_id,
+                item.canonical_target_kind,
+                item.canonical_target_id,
+            )
+            in linked_targets
+            for item in results
+            if item.canonical_target_id is not None
+        )
+        status_counts = {
+            status: sum(item.status == status for item in results)
+            for status in self.blocking_statuses
+        }
+        normalization_types = {
+            TransformationType.UNIT_CONVERT.value,
+            TransformationType.CURRENCY_NORMALIZE.value,
+            TransformationType.TIMEZONE_NORMALIZE.value,
+        }
         return {
             "mapping_completeness": completeness,
             "blocking_record_count": blocking,
-            "trust_ready": blocking == 0 and run.status == MappingRunStatus.COMPLETED.value,
+            "trust_ready": blocking == 0
+            and run.status
+            in {
+                MappingRunStatus.COMPLETED.value,
+                MappingRunStatus.PARTIALLY_COMPLETED.value,
+            },
             "minimum_mapping_confidence": confidence[0] if confidence else None,
+            "mapping_confidence_p10": self._percentile(confidence, Decimal("0.10")),
+            "mapping_confidence_p50": self._percentile(confidence, Decimal("0.50")),
+            "mapping_confidence_p90": self._percentile(confidence, Decimal("0.90")),
+            "unresolved_ratio": (
+                Decimal(status_counts[MappingRecordStatus.UNRESOLVED.value]) / Decimal(result_count)
+                if result_count
+                else Decimal(0)
+            ),
+            "ambiguous_ratio": (
+                Decimal(status_counts[MappingRecordStatus.AMBIGUOUS.value]) / Decimal(result_count)
+                if result_count
+                else Decimal(0)
+            ),
+            "missing_required_field_count": status_counts[
+                MappingRecordStatus.MISSING_REQUIRED_FIELD.value
+            ],
+            "conflicting_mapping_count": status_counts[MappingRecordStatus.CONFLICTING.value],
+            "transformation_failure_count": sum(
+                item.exception_type == MappingExceptionType.TRANSFORMATION_FAILURE.value
+                for item in exceptions
+            ),
+            "normalization_failure_count": sum(
+                item.exception_type == MappingExceptionType.TRANSFORMATION_FAILURE.value
+                and item.detail_json.get("transformation_type") in normalization_types
+                for item in exceptions
+            ),
+            "lineage_completeness_ratio": (
+                Decimal(linked_result_count) / Decimal(result_count) if result_count else Decimal(0)
+            ),
         }
+
+    @staticmethod
+    def _percentile(values: list[Decimal], percentile: Decimal) -> Decimal | None:
+        if not values:
+            return None
+        position = Decimal(len(values) - 1) * percentile
+        lower = int(position)
+        upper = min(lower + 1, len(values) - 1)
+        fraction = position - Decimal(lower)
+        return values[lower] + (values[upper] - values[lower]) * fraction
 
 
 canonical_registry_service = CanonicalRegistryService()
