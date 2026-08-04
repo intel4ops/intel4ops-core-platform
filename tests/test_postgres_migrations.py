@@ -165,6 +165,32 @@ from app.services.statistical_service import (
 )
 from app.services.trust_service import TrustAssessmentService
 
+WP_301_MAPPING_TABLES = {
+    "canonical_entity_types",
+    "canonical_field_definitions",
+    "canonical_event_types",
+    "canonical_metric_types",
+    "mapping_templates",
+    "mapping_template_versions",
+    "field_mappings",
+    "mapping_transformations",
+    "value_crosswalks",
+    "value_crosswalk_entries",
+    "entity_match_rules",
+    "source_schemas",
+    "source_fields",
+    "mapping_runs",
+    "mapping_record_results",
+    "mapping_exceptions",
+    "mapping_reviews",
+    "canonical_entities",
+    "canonical_events",
+    "canonical_metrics",
+    "source_canonical_links",
+    "entity_match_candidates",
+    "mapping_audit_events",
+}
+
 MANAGED_TABLES = {
     "organizations",
     "findings",
@@ -325,7 +351,7 @@ MANAGED_TABLES = {
     "knowledge_graph_query_runs",
     "knowledge_graph_query_steps",
     "knowledge_graph_projection_checkpoints",
-}
+} | WP_301_MAPPING_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1204,6 +1230,43 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         "knowledge_graph_query_steps",
         "knowledge_graph_projection_checkpoints",
     }
+    mapping_inspector = inspect(postgres_engine)
+    assert WP_301_MAPPING_TABLES <= set(mapping_inspector.get_table_names())
+    assert "uq_raw_record_references_org_id" in {
+        item["name"] for item in mapping_inspector.get_unique_constraints("raw_record_references")
+    }
+    assert {
+        "fk_mapping_record_results_org_mapping_run",
+        "fk_mapping_record_results_org_raw_record",
+    } <= {item["name"] for item in mapping_inspector.get_foreign_keys("mapping_record_results")}
+    assert "uq_value_crosswalk_entries_owner_id" in {
+        item["name"] for item in mapping_inspector.get_unique_constraints("value_crosswalk_entries")
+    }
+    assert {
+        "fk_value_crosswalk_entry_owner_crosswalk",
+        "fk_value_crosswalk_entry_owner_supersedes",
+    } <= {item["name"] for item in mapping_inspector.get_foreign_keys("value_crosswalk_entries")}
+    assert (
+        str(
+            {
+                column["name"]: column
+                for column in mapping_inspector.get_columns("mapping_record_results")
+            }["result_json"]["type"]
+        )
+        == "JSONB"
+    )
+    command.downgrade(config, "20260802_0030")
+    mapping_inspector = inspect(postgres_engine)
+    assert not (WP_301_MAPPING_TABLES & set(mapping_inspector.get_table_names()))
+    assert "uq_raw_record_references_org_id" not in {
+        item["name"] for item in mapping_inspector.get_unique_constraints("raw_record_references")
+    }
+    command.upgrade(config, "head")
+    mapping_inspector = inspect(postgres_engine)
+    assert WP_301_MAPPING_TABLES <= set(mapping_inspector.get_table_names())
+    assert "uq_raw_record_references_org_id" in {
+        item["name"] for item in mapping_inspector.get_unique_constraints("raw_record_references")
+    }
     commercial_inspector = inspect(postgres_engine)
     usage_columns = {
         column["name"]: column for column in commercial_inspector.get_columns("usage_events")
@@ -1623,6 +1686,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_220_tables
         - wp_221_tables
         - wp_301_tables
+        - WP_301_MAPPING_TABLES
         <= wp_203_tables
     )
 
