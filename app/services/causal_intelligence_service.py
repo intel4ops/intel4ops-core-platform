@@ -580,6 +580,10 @@ class CausalReviewService:
         prior_status = hypothesis.lifecycle_status
         if payload.decision == "revoke" and prior_status != CausalHypothesisStatus.CONFIRMED.value:
             _fail("invalid_transition", "only confirmed hypotheses can be revoked")
+        if payload.decision == "confirm":
+            self._require_evaluated_review(hypothesis, confirm=True)
+        elif payload.decision == "probable":
+            self._require_evaluated_review(hypothesis, confirm=False)
         if payload.decision != "defer":
             resulting_status = self._RESULTING_STATUS[payload.decision]
             hypothesis.lifecycle_status = resulting_status
@@ -628,6 +632,44 @@ class CausalReviewService:
             )
         db.refresh(review)
         return review
+
+    def _require_evaluated_review(self, hypothesis: CausalHypothesis, *, confirm: bool) -> None:
+        allowed_statuses = (
+            {
+                CausalHypothesisStatus.UNDER_REVIEW.value,
+                CausalHypothesisStatus.PROBABLE.value,
+            }
+            if confirm
+            else {CausalHypothesisStatus.UNDER_REVIEW.value}
+        )
+        if hypothesis.lifecycle_status not in allowed_statuses:
+            _fail(
+                "hypothesis_not_evaluated",
+                "causal approval requires a successfully evaluated hypothesis in an "
+                "eligible review state",
+            )
+        if confirm and hypothesis.proposed_edge_type in ASSOCIATION_ONLY_EDGE_TYPES:
+            _fail(
+                "association_cannot_confirm",
+                "association-only edge types cannot reach confirmed status",
+            )
+        if (
+            hypothesis.causal_evaluation_time is None
+            or hypothesis.hard_gate_outcome != "passed"
+            or hypothesis.evidence_count <= 0
+            or hypothesis.confidence_score is None
+            or hypothesis.hard_gate_failure_reasons
+        ):
+            _fail(
+                "hypothesis_not_evaluated",
+                "causal approval requires successful hard gates, supporting evidence, "
+                "calculated confidence, and no blocking gate reasons",
+            )
+        if confirm and hypothesis.confidence_score < PROBABLE_CONFIDENCE_THRESHOLD:
+            _fail(
+                "insufficient_causal_confidence",
+                "hypothesis confidence is below the minimum confirmation threshold",
+            )
 
     def _materialize_edge(self, db: Session, hypothesis: CausalHypothesis) -> CausalEdge:
         existing = db.scalar(
