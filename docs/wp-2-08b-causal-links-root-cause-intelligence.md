@@ -80,6 +80,22 @@ inserts, updates, and deletes. Additional evidence then requires a new
 hypothesis version. This defense uses the existing lifecycle fields and mapper
 events, so it requires no schema or migration change.
 
+An evidence insert, update, delete, or re-parenting operation against an
+`under_review` hypothesis atomically invalidates the earlier evaluation in the
+same transaction. The hypothesis returns to `evidence_pending`; evidence and
+contradiction counts are recomputed from the current links; evaluation time,
+hard-gate outcome, confidence, mapping-confidence, interpretation, and review
+outputs are cleared; and an immutable audit event records the invalidation.
+Evaluation, review, and evidence mutation serialize on the hypothesis row, so a
+review cannot commit against an evidence set that is changing concurrently.
+Review also rejects a link timestamp newer than the recorded evaluation using
+the structured `hypothesis_evaluation_stale` error.
+
+No evidence fingerprint column is needed: the lifecycle reset is transactional,
+the row lock orders competing mutation/evaluation/review operations, and the
+timestamp freshness check is a second review-time defense. This bounded
+approach preserves the certified schema and migration chain.
+
 `CausalReview`, `CausalOutcomeAssessment`, `CausalChainVersion`,
 `CausalIntervention`, and `CausalAuditEvent` are immutable once created.
 
