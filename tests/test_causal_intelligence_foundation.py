@@ -154,6 +154,43 @@ def confirm_hypothesis(
     return hyp, node_a, node_b, method
 
 
+def make_hypothesis(
+    db: Session, organization_id: UUID, actor: UUID, edge_type: str = "causes"
+) -> CausalHypothesis:
+    method = make_method(db, code=f"review_rule_{uuid4().hex[:8]}")
+    node_a, node_b = make_nodes(db, organization_id)
+    return causal_hypothesis_service.create(
+        db,
+        organization_id,
+        CausalHypothesisCreate(
+            source_node_id=node_a.id,
+            target_node_id=node_b.id,
+            proposed_edge_type=edge_type,
+            method_id=method.id,
+        ),
+        actor,
+    )
+
+
+def force_review_state(
+    db: Session,
+    hypothesis: CausalHypothesis,
+    *,
+    hard_gate_outcome: str | None = "passed",
+    evidence_count: int = 1,
+    confidence_score: Decimal | None = Decimal("0.8"),
+    failure_reasons: list[object] | None = None,
+) -> None:
+    hypothesis.lifecycle_status = "under_review"
+    hypothesis.causal_evaluation_time = datetime.now(UTC)
+    hypothesis.hard_gate_outcome = hard_gate_outcome
+    hypothesis.evidence_count = evidence_count
+    hypothesis.confidence_score = confidence_score
+    hypothesis.hard_gate_failure_reasons = failure_reasons or []
+    db.commit()
+    db.refresh(hypothesis)
+
+
 def test_exact_table_contract_mapper_configuration_and_metadata() -> None:
     configure_mappers()
     assert len(CAUSAL_TABLES) == 11
@@ -211,6 +248,163 @@ def test_hypothesis_evaluation_confirmation_and_edge_materialization(db: Session
     assert edge.source_node_id == node_a.id
     assert edge.target_node_id == node_b.id
     assert edge.edge_type == "causes"
+
+
+@pytest.mark.parametrize("decision", ["confirm", "probable"])
+def test_draft_cannot_receive_causal_approval(db: Session, decision: str) -> None:
+    organization_id, actor = make_org(db, f"causal-draft-{decision}")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db,
+            organization_id,
+            hypothesis.id,
+            CausalReviewCreate(decision=decision),
+            actor,
+        )
+
+    assert exc_info.value.code == "hypothesis_not_evaluated"
+    assert hypothesis.lifecycle_status == "draft"
+
+
+def test_proposed_cannot_be_confirmed_without_evaluation(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-proposed-confirm")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+    causal_hypothesis_service.propose(db, organization_id, hypothesis.id)
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "hypothesis_not_evaluated"
+
+
+def test_evidence_pending_cannot_be_confirmed_before_evaluation(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-pending-confirm")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+    causal_hypothesis_service.propose(db, organization_id, hypothesis.id)
+    causal_evidence_service.attach(
+        db,
+        organization_id,
+        hypothesis.id,
+        CausalEvidenceLinkCreate(evidence_kind="rule_trace", evidence_id=uuid4()),
+    )
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "hypothesis_not_evaluated"
+
+
+@pytest.mark.parametrize(
+    ("case", "hard_gate_outcome", "evidence_count", "confidence_score", "failure_reasons"),
+    [
+        (
+            "failed-gate",
+            "blocked",
+            1,
+            Decimal("0.8"),
+            [{"code": "readiness_blocked"}],
+        ),
+        ("zero-evidence", "passed", 0, Decimal("0.8"), []),
+        ("null-confidence", "passed", 1, None, []),
+        (
+            "blocking-reason",
+            "passed",
+            1,
+            Decimal("0.8"),
+            [{"code": "blocking_mapping_status"}],
+        ),
+    ],
+)
+def test_under_review_requires_complete_successful_evaluation(
+    db: Session,
+    case: str,
+    hard_gate_outcome: str,
+    evidence_count: int,
+    confidence_score: Decimal | None,
+    failure_reasons: list[object],
+) -> None:
+    organization_id, actor = make_org(db, f"causal-{case}")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+    force_review_state(
+        db,
+        hypothesis,
+        hard_gate_outcome=hard_gate_outcome,
+        evidence_count=evidence_count,
+        confidence_score=confidence_score,
+        failure_reasons=failure_reasons,
+    )
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "hypothesis_not_evaluated"
+    assert hypothesis.lifecycle_status == "under_review"
+
+
+def test_confirmation_requires_minimum_causal_confidence(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-low-confirmation-confidence")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+    force_review_state(db, hypothesis, confidence_score=Decimal("0.5"))
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "insufficient_causal_confidence"
+    assert hypothesis.lifecycle_status == "under_review"
+
+
+def test_valid_evaluated_hypothesis_can_progress_probable_then_confirmed(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-valid-review-path")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+
+    probable_review = causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="probable"), actor
+    )
+    assert probable_review.resulting_lifecycle_status == "probable"
+
+    confirmed_review = causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+    )
+    assert confirmed_review.resulting_lifecycle_status == "confirmed"
+
+
+@pytest.mark.parametrize("edge_type", ["correlates_with", "associated_with"])
+def test_association_only_edge_types_cannot_be_confirmed(db: Session, edge_type: str) -> None:
+    organization_id, actor = make_org(db, f"causal-association-{edge_type.replace('_', '-')}")
+    hypothesis, _a, _b, _method = confirm_hypothesis(
+        db, organization_id, actor, edge_type=edge_type
+    )
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "association_cannot_confirm"
+
+
+def test_revoke_behavior_remains_valid(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-valid-revoke")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+    )
+
+    review = causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="revoke"), actor
+    )
+
+    assert review.resulting_lifecycle_status == "revoked"
 
 
 def test_association_only_edge_type_can_never_reach_confirmed(db: Session) -> None:
@@ -629,6 +823,29 @@ def test_root_cause_ranking_scores_multiplicatively_and_tracks_weakest_link(db: 
     assert ranking[0].chain_code == "chain-1"
 
 
+def test_root_cause_ranking_rejects_missing_edge_confidence(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-ranking-missing-confidence")
+    hypothesis, node_a, node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+    )
+    edge = db.scalar(select(CausalEdge).where(CausalEdge.hypothesis_id == hypothesis.id))
+    assert edge is not None
+    edge.confidence_score = None
+    db.commit()
+    chain = causal_chain_service.create(
+        db, organization_id, "chain-missing-confidence", node_a.id, node_b.id
+    )
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        root_cause_ranking_service.compute_chain_version(db, organization_id, chain)
+
+    assert exc_info.value.code == "missing_edge_confidence"
+    assert (
+        db.scalar(select(CausalChainVersion).where(CausalChainVersion.chain_id == chain.id)) is None
+    )
+
+
 def test_cycle_detection_raises_and_does_not_silently_resolve(db: Session) -> None:
     organization_id, actor = make_org(db, "causal-cycle")
     method = make_method(db, "det_rule_cycle")
@@ -781,3 +998,77 @@ def test_causal_review_is_immutable_after_creation(db: Session) -> None:
     with pytest.raises(ValueError):
         db.commit()
     db.rollback()
+
+
+def test_evidence_can_be_updated_and_deleted_while_hypothesis_is_mutable(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-mutable")
+    hypothesis = make_hypothesis(db, organization_id, actor)
+    causal_hypothesis_service.propose(db, organization_id, hypothesis.id)
+    evidence = causal_evidence_service.attach(
+        db,
+        organization_id,
+        hypothesis.id,
+        CausalEvidenceLinkCreate(evidence_kind="rule_trace", evidence_id=uuid4()),
+    )
+
+    evidence.notes = "updated before evaluation"
+    db.commit()
+    db.delete(evidence)
+    db.commit()
+
+    assert db.get(CausalEvidenceLink, evidence.id) is None
+
+
+@pytest.mark.parametrize(
+    ("immutable_status", "decision"),
+    [("probable", "probable"), ("confirmed", "confirm")],
+)
+def test_evidence_update_and_delete_are_rejected_after_causal_approval(
+    db: Session, immutable_status: str, decision: str
+) -> None:
+    organization_id, actor = make_org(db, f"causal-evidence-{immutable_status}")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    evidence = db.scalar(
+        select(CausalEvidenceLink).where(CausalEvidenceLink.hypothesis_id == hypothesis.id)
+    )
+    assert evidence is not None
+    causal_review_service.review(
+        db,
+        organization_id,
+        hypothesis.id,
+        CausalReviewCreate(decision=decision),
+        actor,
+    )
+
+    evidence.notes = "not allowed"
+    with pytest.raises(ValueError, match="causal evidence is immutable"):
+        db.commit()
+    db.rollback()
+
+    evidence = db.get(CausalEvidenceLink, evidence.id)
+    assert evidence is not None
+    db.delete(evidence)
+    with pytest.raises(ValueError, match="causal evidence is immutable"):
+        db.commit()
+    db.rollback()
+
+
+def test_confirmed_hypothesis_requires_new_version_for_additional_evidence(
+    db: Session,
+) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-new-version")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+    )
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_evidence_service.attach(
+            db,
+            organization_id,
+            hypothesis.id,
+            CausalEvidenceLinkCreate(evidence_kind="rule_trace", evidence_id=uuid4()),
+        )
+
+    assert exc_info.value.code == "hypothesis_evidence_immutable"
+    assert "new hypothesis version" in str(exc_info.value)

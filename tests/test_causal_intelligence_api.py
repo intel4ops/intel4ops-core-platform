@@ -16,6 +16,45 @@ def _make_org(db: Session, slug: str) -> str:
     return str(organization.id)
 
 
+def _create_draft_hypothesis(client: TestClient, db: Session, suffix: str) -> tuple[str, str]:
+    method_response = client.post(
+        "/api/v1/causal/methods",
+        json={
+            "method_code": f"det_rule_direct_review_{suffix}",
+            "method_name": "Deterministic Rule",
+            "method_class": "deterministic_temporal_rule",
+            "method_version": "1.0.0",
+            "default_confidence_weight": "0.8",
+            "scope_type": "shared_core",
+            "scope_key": f"shared_core:det_rule_direct_review_{suffix}",
+        },
+    )
+    assert method_response.status_code == 201
+    organization_id = _make_org(db, f"causal-api-direct-{suffix}")
+    nodes = [
+        client.post(
+            f"/api/v1/organizations/{organization_id}/causal/nodes",
+            json={
+                "node_type": "external_factor",
+                "external_description": description,
+            },
+        )
+        for description in ("cause", "effect")
+    ]
+    assert all(response.status_code == 201 for response in nodes)
+    hypothesis = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses",
+        json={
+            "source_node_id": nodes[0].json()["id"],
+            "target_node_id": nodes[1].json()["id"],
+            "proposed_edge_type": "causes",
+            "method_id": method_response.json()["id"],
+        },
+    )
+    assert hypothesis.status_code == 201
+    return organization_id, hypothesis.json()["id"]
+
+
 def test_full_causal_workflow_via_api(client: TestClient, db: Session) -> None:
     method_response = client.post(
         "/api/v1/causal/methods",
@@ -99,6 +138,34 @@ def test_full_causal_workflow_via_api(client: TestClient, db: Session) -> None:
     ranking = client.get(f"/api/v1/organizations/{organization_id}/causal/root-causes")
     assert ranking.status_code == 200
     assert ranking.json() == []
+
+
+def test_direct_confirmation_of_draft_returns_structured_error(
+    client: TestClient, db: Session
+) -> None:
+    organization_id, hypothesis_id = _create_draft_hypothesis(client, db, "confirm")
+
+    response = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/reviews",
+        json={"decision": "confirm"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "hypothesis_not_evaluated"
+
+
+def test_direct_probable_review_of_unevaluated_hypothesis_is_rejected(
+    client: TestClient, db: Session
+) -> None:
+    organization_id, hypothesis_id = _create_draft_hypothesis(client, db, "probable")
+
+    response = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/reviews",
+        json={"decision": "probable"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "hypothesis_not_evaluated"
 
 
 def test_association_only_hypothesis_cannot_be_confirmed_via_api(
