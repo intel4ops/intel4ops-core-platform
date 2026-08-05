@@ -4345,3 +4345,137 @@ def test_ti_c1_allows_bounded_concurrent_same_tenant_child_inserts(
     with ThreadPoolExecutor(max_workers=2) as executor:
         step_ids = list(executor.map(create_step, (101, 102)))
     assert len(set(step_ids)) == 2
+
+
+CAUSAL_INTELLIGENCE_TABLES = (
+    "causal_method_definitions",
+    "causal_nodes",
+    "causal_hypotheses",
+    "causal_evidence_links",
+    "causal_reviews",
+    "causal_edges",
+    "causal_chains",
+    "causal_chain_versions",
+    "causal_interventions",
+    "causal_outcome_assessments",
+    "causal_audit_events",
+)
+
+
+@pytest.mark.postgres
+def test_causal_intelligence_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    inspector = inspect(postgres_engine)
+    table_names = set(inspector.get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES) <= table_names
+
+    action_outcome_uniques = {
+        item["name"] for item in inspector.get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" in action_outcome_uniques
+
+    hypothesis_checks = {
+        item["name"] for item in inspector.get_check_constraints("causal_hypotheses")
+    }
+    assert "ck_causal_hypothesis_association_not_confirmed" in hypothesis_checks
+
+    intervention_checks = {
+        item["name"] for item in inspector.get_check_constraints("causal_interventions")
+    }
+    assert "ck_causal_intervention_target_xor" in intervention_checks
+
+    command.downgrade(config, "20260804_0031")
+    table_names = set(inspect(postgres_engine).get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES).isdisjoint(table_names)
+    action_outcome_uniques = {
+        item["name"] for item in inspect(postgres_engine).get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" not in action_outcome_uniques
+
+    command.upgrade(config, "head")
+    table_names = set(inspect(postgres_engine).get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES) <= table_names
+    action_outcome_uniques = {
+        item["name"] for item in inspect(postgres_engine).get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" in action_outcome_uniques
+
+
+@pytest.mark.postgres
+def test_causal_intelligence_direct_sql_rejects_cross_tenant_hypothesis(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    with Session(postgres_engine) as session:
+        org_a = uuid4()
+        org_b = uuid4()
+        for org_id, slug in ((org_a, "causal-pg-tenant-a"), (org_b, "causal-pg-tenant-b")):
+            session.execute(
+                text(
+                    "INSERT INTO organizations "
+                    "(id, name, slug, country_code, default_currency, timezone, status, "
+                    "is_demo, created_at, updated_at) "
+                    "VALUES (:id, :slug, :slug, 'US', 'USD', 'UTC', 'active', false, now(), now())"
+                ),
+                {"id": org_id, "slug": slug},
+            )
+        method_id = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO causal_method_definitions "
+                "(id, method_code, method_name, method_class, method_version, "
+                "default_confidence_weight, parameters_schema, status, content_hash, "
+                "scope_type, scope_key, created_at, updated_at) "
+                "VALUES (:id, 'pg_direct_sql_method', 'PG Direct', 'sequence_pattern', '1.0.0', "
+                "0.5, '{}', 'active', 'pg-direct-hash', 'shared_core', "
+                "'shared_core:pg_direct_sql_method', now(), now())"
+            ),
+            {"id": method_id},
+        )
+        node_a = uuid4()
+        node_b = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO causal_nodes "
+                "(id, organization_id, node_type, content_fingerprint, created_at, updated_at) "
+                "VALUES (:id, :org_id, 'external_factor', :fp, now(), now())"
+            ),
+            {"id": node_a, "org_id": org_a, "fp": "fp-pg-a"},
+        )
+        session.execute(
+            text(
+                "INSERT INTO causal_nodes "
+                "(id, organization_id, node_type, content_fingerprint, created_at, updated_at) "
+                "VALUES (:id, :org_id, 'external_factor', :fp, now(), now())"
+            ),
+            {"id": node_b, "org_id": org_a, "fp": "fp-pg-b"},
+        )
+        session.commit()
+
+        with pytest.raises(IntegrityError):
+            session.execute(
+                text(
+                    "INSERT INTO causal_hypotheses "
+                    "(id, organization_id, source_node_id, target_node_id, proposed_edge_type, "
+                    "method_id, lifecycle_status, hard_gate_failure_reasons, content_hash, "
+                    "evidence_count, contradiction_count, created_by_user_id, created_at, "
+                    "updated_at) "
+                    "VALUES (:id, :org_b, :node_a, :node_b, 'causes', :method_id, 'draft', "
+                    "'[]', 'pg-cross-tenant-hash', 0, 0, :actor, now(), now())"
+                ),
+                {
+                    "id": uuid4(),
+                    "org_b": org_b,
+                    "node_a": node_a,
+                    "node_b": node_b,
+                    "method_id": method_id,
+                    "actor": uuid4(),
+                },
+            )
+        session.rollback()
