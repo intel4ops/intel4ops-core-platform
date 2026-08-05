@@ -20,6 +20,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
+from test_causal_intelligence_foundation import make_org as make_causal_org
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
@@ -76,6 +78,7 @@ from test_ti_c2_referential_integrity import _organization as ti_c2_organization
 from test_trust_service import trust_foundation
 
 from app.models.actions import ActionPlanStep
+from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.entities import (
     Finding,
     MembershipRole,
@@ -114,6 +117,7 @@ from app.models.trust import (
     TrustAssessment,
     TrustRuleResult,
 )
+from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.forecasting import ForecastExecutionCreate
@@ -130,6 +134,10 @@ from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.reliability import CensoringStatus, ReliabilityExecutionCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
+from app.services.causal_intelligence_service import (
+    CausalIntelligenceServiceError,
+    causal_review_service,
+)
 from app.services.finding_platform_service import (
     FindingPublicationService,
     FindingQueryService,
@@ -4345,3 +4353,209 @@ def test_ti_c1_allows_bounded_concurrent_same_tenant_child_inserts(
     with ThreadPoolExecutor(max_workers=2) as executor:
         step_ids = list(executor.map(create_step, (101, 102)))
     assert len(set(step_ids)) == 2
+
+
+CAUSAL_INTELLIGENCE_TABLES = (
+    "causal_method_definitions",
+    "causal_nodes",
+    "causal_hypotheses",
+    "causal_evidence_links",
+    "causal_reviews",
+    "causal_edges",
+    "causal_chains",
+    "causal_chain_versions",
+    "causal_interventions",
+    "causal_outcome_assessments",
+    "causal_audit_events",
+)
+
+
+@pytest.mark.postgres
+def test_causal_intelligence_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    inspector = inspect(postgres_engine)
+    table_names = set(inspector.get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES) <= table_names
+
+    action_outcome_uniques = {
+        item["name"] for item in inspector.get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" in action_outcome_uniques
+
+    hypothesis_checks = {
+        item["name"] for item in inspector.get_check_constraints("causal_hypotheses")
+    }
+    assert "ck_causal_hypothesis_association_not_confirmed" in hypothesis_checks
+
+    intervention_checks = {
+        item["name"] for item in inspector.get_check_constraints("causal_interventions")
+    }
+    assert "ck_causal_intervention_target_xor" in intervention_checks
+
+    command.downgrade(config, "20260804_0031")
+    table_names = set(inspect(postgres_engine).get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES).isdisjoint(table_names)
+    action_outcome_uniques = {
+        item["name"] for item in inspect(postgres_engine).get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" not in action_outcome_uniques
+
+    command.upgrade(config, "head")
+    table_names = set(inspect(postgres_engine).get_table_names())
+    assert set(CAUSAL_INTELLIGENCE_TABLES) <= table_names
+    action_outcome_uniques = {
+        item["name"] for item in inspect(postgres_engine).get_unique_constraints("action_outcomes")
+    }
+    assert "uq_action_outcomes_org_id" in action_outcome_uniques
+
+
+@pytest.mark.postgres
+def test_causal_intelligence_direct_sql_rejects_cross_tenant_hypothesis(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    with Session(postgres_engine) as session:
+        org_a = uuid4()
+        org_b = uuid4()
+        for org_id, slug in ((org_a, "causal-pg-tenant-a"), (org_b, "causal-pg-tenant-b")):
+            session.execute(
+                text(
+                    "INSERT INTO organizations "
+                    "(id, name, slug, country_code, default_currency, timezone, status, "
+                    "is_demo, created_at, updated_at) "
+                    "VALUES (:id, :slug, :slug, 'US', 'USD', 'UTC', 'active', false, now(), now())"
+                ),
+                {"id": org_id, "slug": slug},
+            )
+        method_id = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO causal_method_definitions "
+                "(id, method_code, method_name, method_class, method_version, "
+                "default_confidence_weight, parameters_schema, status, content_hash, "
+                "scope_type, scope_key, created_at, updated_at) "
+                "VALUES (:id, 'pg_direct_sql_method', 'PG Direct', 'sequence_pattern', '1.0.0', "
+                "0.5, '{}', 'active', 'pg-direct-hash', 'shared_core', "
+                "'shared_core:pg_direct_sql_method', now(), now())"
+            ),
+            {"id": method_id},
+        )
+        node_a = uuid4()
+        node_b = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO causal_nodes "
+                "(id, organization_id, node_type, content_fingerprint, created_at, updated_at) "
+                "VALUES (:id, :org_id, 'external_factor', :fp, now(), now())"
+            ),
+            {"id": node_a, "org_id": org_a, "fp": "fp-pg-a"},
+        )
+        session.execute(
+            text(
+                "INSERT INTO causal_nodes "
+                "(id, organization_id, node_type, content_fingerprint, created_at, updated_at) "
+                "VALUES (:id, :org_id, 'external_factor', :fp, now(), now())"
+            ),
+            {"id": node_b, "org_id": org_a, "fp": "fp-pg-b"},
+        )
+        session.commit()
+
+        with pytest.raises(IntegrityError):
+            session.execute(
+                text(
+                    "INSERT INTO causal_hypotheses "
+                    "(id, organization_id, source_node_id, target_node_id, proposed_edge_type, "
+                    "method_id, lifecycle_status, hard_gate_failure_reasons, content_hash, "
+                    "evidence_count, contradiction_count, created_by_user_id, created_at, "
+                    "updated_at) "
+                    "VALUES (:id, :org_b, :node_a, :node_b, 'causes', :method_id, 'draft', "
+                    "'[]', 'pg-cross-tenant-hash', 0, 0, :actor, now(), now())"
+                ),
+                {
+                    "id": uuid4(),
+                    "org_b": org_b,
+                    "node_a": node_a,
+                    "node_b": node_b,
+                    "method_id": method_id,
+                    "actor": uuid4(),
+                },
+            )
+        session.rollback()
+
+
+@pytest.mark.postgres
+def test_causal_evidence_mutation_and_confirmation_are_serialized(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor = make_causal_org(session, f"causal-concurrency-{uuid4().hex[:10]}")
+        hypothesis, _node_a, _node_b, _method = confirm_causal_hypothesis(
+            session, organization_id, actor
+        )
+        evidence_id = session.scalar(
+            select(CausalEvidenceLink.id).where(CausalEvidenceLink.hypothesis_id == hypothesis.id),
+        )
+        assert evidence_id is not None
+        hypothesis_id = hypothesis.id
+
+    barrier = Barrier(2)
+
+    def mutate_evidence() -> str:
+        with Session(postgres_engine) as session:
+            evidence = session.get(CausalEvidenceLink, evidence_id)
+            assert evidence is not None
+            barrier.wait()
+            evidence.notes = "concurrent evidence change"
+            try:
+                session.commit()
+            except ValueError:
+                session.rollback()
+                return "immutable"
+            return "mutated"
+
+    def confirm_hypothesis() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                causal_review_service.review(
+                    session,
+                    organization_id,
+                    hypothesis_id,
+                    CausalReviewCreate(decision="confirm"),
+                    actor,
+                )
+            except CausalIntelligenceServiceError as exc:
+                session.rollback()
+                return exc.code
+            return "confirmed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        mutation_future = executor.submit(mutate_evidence)
+        review_future = executor.submit(confirm_hypothesis)
+        mutation_result = mutation_future.result()
+        review_result = review_future.result()
+
+    with Session(postgres_engine) as session:
+        final_hypothesis = session.get(CausalHypothesis, hypothesis_id)
+        final_evidence = session.get(CausalEvidenceLink, evidence_id)
+        assert final_hypothesis is not None
+        assert final_evidence is not None
+        if final_hypothesis.lifecycle_status == "confirmed":
+            assert review_result == "confirmed"
+            assert mutation_result == "immutable"
+            assert final_evidence.notes is None
+        else:
+            assert final_hypothesis.lifecycle_status == "evidence_pending"
+            assert mutation_result == "mutated"
+            assert review_result in {
+                "hypothesis_not_evaluated",
+                "hypothesis_evaluation_stale",
+            }
+            assert final_evidence.notes == "concurrent evidence change"

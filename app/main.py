@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 from app.api.action_routes import router as action_router
 from app.api.canonical_mapping_routes import catalog_router as canonical_mapping_catalog_router
 from app.api.canonical_mapping_routes import tenant_router as canonical_mapping_tenant_router
+from app.api.causal_intelligence_routes import catalog_router as causal_intelligence_catalog_router
+from app.api.causal_intelligence_routes import tenant_router as causal_intelligence_tenant_router
 from app.api.command_routes import router as command_router
 from app.api.commercial_routes import catalog_router as commercial_catalog_router
 from app.api.commercial_routes import tenant_router as commercial_tenant_router
@@ -133,3 +135,5 @@ app.include_router(signature_catalog_router)
 app.include_router(signature_tenant_router)
 app.include_router(knowledge_graph_catalog_router)
 app.include_router(knowledge_graph_tenant_router)
+app.include_router(causal_intelligence_catalog_router)
+app.include_router(causal_intelligence_tenant_router)
