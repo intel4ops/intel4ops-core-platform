@@ -315,6 +315,7 @@ class ActionOutcome(Base):
     __tablename__ = "action_outcomes"
     __table_args__ = (
         UniqueConstraint("action_id", "outcome_type", name="uq_action_outcome_type"),
+        UniqueConstraint("organization_id", "id", name="uq_action_outcomes_org_id"),
         ForeignKeyConstraint(
             ["organization_id", "action_id"],
             ["operational_actions.organization_id", "operational_actions.id"],

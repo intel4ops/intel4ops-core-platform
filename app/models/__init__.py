@@ -23,6 +23,19 @@ from app.models.canonical_mapping import (
     ValueCrosswalk,
     ValueCrosswalkEntry,
 )
+from app.models.causal_intelligence import (
+    CausalAuditEvent,
+    CausalChain,
+    CausalChainVersion,
+    CausalEdge,
+    CausalEvidenceLink,
+    CausalHypothesis,
+    CausalIntervention,
+    CausalMethodDefinition,
+    CausalNode,
+    CausalOutcomeAssessment,
+    CausalReview,
+)
 from app.models.certification import (
     AnalyticalArtifactVersion,
     ReleaseCandidate,
@@ -184,6 +197,17 @@ from app.models.trust import (
 )
 
 __all__ = [
+    "CausalAuditEvent",
+    "CausalChain",
+    "CausalChainVersion",
+    "CausalEdge",
+    "CausalEvidenceLink",
+    "CausalHypothesis",
+    "CausalIntervention",
+    "CausalMethodDefinition",
+    "CausalNode",
+    "CausalOutcomeAssessment",
+    "CausalReview",
     "AnalyticalArtifactVersion",
     "ReleaseCandidate",
     "ReleaseCertification",
