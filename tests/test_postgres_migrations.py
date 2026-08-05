@@ -20,6 +20,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
+from test_causal_intelligence_foundation import make_org as make_causal_org
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
@@ -76,6 +78,7 @@ from test_ti_c2_referential_integrity import _organization as ti_c2_organization
 from test_trust_service import trust_foundation
 
 from app.models.actions import ActionPlanStep
+from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.entities import (
     Finding,
     MembershipRole,
@@ -114,6 +117,7 @@ from app.models.trust import (
     TrustAssessment,
     TrustRuleResult,
 )
+from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.forecasting import ForecastExecutionCreate
@@ -130,6 +134,10 @@ from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.reliability import CensoringStatus, ReliabilityExecutionCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
+from app.services.causal_intelligence_service import (
+    CausalIntelligenceServiceError,
+    causal_review_service,
+)
 from app.services.finding_platform_service import (
     FindingPublicationService,
     FindingQueryService,
@@ -4479,3 +4487,75 @@ def test_causal_intelligence_direct_sql_rejects_cross_tenant_hypothesis(
                 },
             )
         session.rollback()
+
+
+@pytest.mark.postgres
+def test_causal_evidence_mutation_and_confirmation_are_serialized(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor = make_causal_org(session, f"causal-concurrency-{uuid4().hex[:10]}")
+        hypothesis, _node_a, _node_b, _method = confirm_causal_hypothesis(
+            session, organization_id, actor
+        )
+        evidence_id = session.scalar(
+            select(CausalEvidenceLink.id).where(CausalEvidenceLink.hypothesis_id == hypothesis.id),
+        )
+        assert evidence_id is not None
+        hypothesis_id = hypothesis.id
+
+    barrier = Barrier(2)
+
+    def mutate_evidence() -> str:
+        with Session(postgres_engine) as session:
+            evidence = session.get(CausalEvidenceLink, evidence_id)
+            assert evidence is not None
+            barrier.wait()
+            evidence.notes = "concurrent evidence change"
+            try:
+                session.commit()
+            except ValueError:
+                session.rollback()
+                return "immutable"
+            return "mutated"
+
+    def confirm_hypothesis() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                causal_review_service.review(
+                    session,
+                    organization_id,
+                    hypothesis_id,
+                    CausalReviewCreate(decision="confirm"),
+                    actor,
+                )
+            except CausalIntelligenceServiceError as exc:
+                session.rollback()
+                return exc.code
+            return "confirmed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        mutation_future = executor.submit(mutate_evidence)
+        review_future = executor.submit(confirm_hypothesis)
+        mutation_result = mutation_future.result()
+        review_result = review_future.result()
+
+    with Session(postgres_engine) as session:
+        final_hypothesis = session.get(CausalHypothesis, hypothesis_id)
+        final_evidence = session.get(CausalEvidenceLink, evidence_id)
+        assert final_hypothesis is not None
+        assert final_evidence is not None
+        if final_hypothesis.lifecycle_status == "confirmed":
+            assert review_result == "confirmed"
+            assert mutation_result == "immutable"
+            assert final_evidence.notes is None
+        else:
+            assert final_hypothesis.lifecycle_status == "evidence_pending"
+            assert mutation_result == "mutated"
+            assert review_result in {
+                "hypothesis_not_evaluated",
+                "hypothesis_evaluation_stale",
+            }
+            assert final_evidence.notes == "concurrent evidence change"

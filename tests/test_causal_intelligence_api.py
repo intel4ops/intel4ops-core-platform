@@ -17,20 +17,22 @@ def _make_org(db: Session, slug: str) -> str:
 
 
 def _create_draft_hypothesis(client: TestClient, db: Session, suffix: str) -> tuple[str, str]:
+    code_suffix = suffix.replace("-", "_")
+    slug_suffix = suffix.replace("_", "-")
     method_response = client.post(
         "/api/v1/causal/methods",
         json={
-            "method_code": f"det_rule_direct_review_{suffix}",
+            "method_code": f"det_rule_direct_review_{code_suffix}",
             "method_name": "Deterministic Rule",
             "method_class": "deterministic_temporal_rule",
             "method_version": "1.0.0",
             "default_confidence_weight": "0.8",
             "scope_type": "shared_core",
-            "scope_key": f"shared_core:det_rule_direct_review_{suffix}",
+            "scope_key": f"shared_core:det_rule_direct_review_{code_suffix}",
         },
     )
     assert method_response.status_code == 201
-    organization_id = _make_org(db, f"causal-api-direct-{suffix}")
+    organization_id = _make_org(db, f"causal-api-direct-{slug_suffix}")
     nodes = [
         client.post(
             f"/api/v1/organizations/{organization_id}/causal/nodes",
@@ -166,6 +168,55 @@ def test_direct_probable_review_of_unevaluated_hypothesis_is_rejected(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "hypothesis_not_evaluated"
+
+
+def test_evidence_change_after_api_evaluation_requires_reevaluation(
+    client: TestClient, db: Session
+) -> None:
+    organization_id, hypothesis_id = _create_draft_hypothesis(client, db, "stale-evidence")
+    proposed = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/propose"
+    )
+    assert proposed.status_code == 200
+    first_evidence = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/evidence",
+        json={
+            "evidence_kind": "rule_trace",
+            "evidence_id": proposed.json()["source_node_id"],
+            "supports": True,
+        },
+    )
+    assert first_evidence.status_code == 201
+    evaluated = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/evaluate"
+    )
+    assert evaluated.status_code == 200
+    assert evaluated.json()["lifecycle_status"] == "under_review"
+
+    contradictory = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/evidence",
+        json={
+            "evidence_kind": "rule_trace",
+            "evidence_id": evaluated.json()["target_node_id"],
+            "supports": False,
+        },
+    )
+    assert contradictory.status_code == 201
+
+    stale_review = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/reviews",
+        json={"decision": "confirm"},
+    )
+    assert stale_review.status_code == 422
+    assert stale_review.json()["detail"]["code"] == "hypothesis_not_evaluated"
+
+    reevaluated = client.post(
+        f"/api/v1/organizations/{organization_id}/causal/hypotheses/{hypothesis_id}/evaluate"
+    )
+    assert reevaluated.status_code == 200
+    assert reevaluated.json()["evidence_count"] == 1
+    assert reevaluated.json()["contradiction_count"] == 1
+    assert reevaluated.json()["confidence_score"] == "0.4000"
 
 
 def test_association_only_hypothesis_cannot_be_confirmed_via_api(

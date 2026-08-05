@@ -1,10 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, configure_mappers
 
@@ -1072,3 +1072,174 @@ def test_confirmed_hypothesis_requires_new_version_for_additional_evidence(
 
     assert exc_info.value.code == "hypothesis_evidence_immutable"
     assert "new hypothesis version" in str(exc_info.value)
+
+
+def test_supporting_evidence_after_evaluation_invalidates_and_can_be_reevaluated(
+    db: Session,
+) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-support")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    prior_evaluation_time = hypothesis.causal_evaluation_time
+    assert prior_evaluation_time is not None
+
+    causal_evidence_service.attach(
+        db,
+        organization_id,
+        hypothesis.id,
+        CausalEvidenceLinkCreate(evidence_kind="rule_trace", evidence_id=uuid4()),
+    )
+    db.refresh(hypothesis)
+
+    assert hypothesis.lifecycle_status == "evidence_pending"
+    assert hypothesis.causal_evaluation_time is None
+    assert hypothesis.hard_gate_outcome is None
+    assert hypothesis.confidence_score is None
+    assert hypothesis.confidence_components is None
+    assert hypothesis.minimum_supporting_mapping_confidence is None
+    assert hypothesis.evidence_count == 2
+    assert hypothesis.contradiction_count == 0
+    audit = db.scalar(
+        select(CausalAuditEvent)
+        .where(
+            CausalAuditEvent.entity_id == hypothesis.id,
+            CausalAuditEvent.event_type == "hypothesis_evaluation_invalidated",
+        )
+        .order_by(CausalAuditEvent.occurred_at.desc())
+    )
+    assert audit is not None
+
+    for decision in ("probable", "confirm"):
+        with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+            causal_review_service.review(
+                db,
+                organization_id,
+                hypothesis.id,
+                CausalReviewCreate(decision=decision),
+                actor,
+            )
+        assert exc_info.value.code == "hypothesis_not_evaluated"
+
+    hypothesis = causal_evaluation_service.evaluate(db, organization_id, hypothesis.id)
+    assert hypothesis.lifecycle_status == "under_review"
+    assert hypothesis.hard_gate_outcome == "passed"
+    assert hypothesis.confidence_score == Decimal("0.8")
+    assert hypothesis.evidence_count == 2
+    assert hypothesis.contradiction_count == 0
+
+    review = causal_review_service.review(
+        db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+    )
+    assert review.resulting_lifecycle_status == "confirmed"
+
+
+def test_contradictory_evidence_after_evaluation_cannot_use_stale_confidence(
+    db: Session,
+) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-contradiction")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+
+    causal_evidence_service.attach(
+        db,
+        organization_id,
+        hypothesis.id,
+        CausalEvidenceLinkCreate(evidence_kind="rule_trace", evidence_id=uuid4(), supports=False),
+    )
+    db.refresh(hypothesis)
+
+    assert hypothesis.lifecycle_status == "evidence_pending"
+    assert hypothesis.evidence_count == 1
+    assert hypothesis.contradiction_count == 1
+    assert hypothesis.confidence_score is None
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+    assert exc_info.value.code == "hypothesis_not_evaluated"
+
+    hypothesis = causal_evaluation_service.evaluate(db, organization_id, hypothesis.id)
+    assert hypothesis.hard_gate_outcome == "passed"
+    assert hypothesis.evidence_count == 1
+    assert hypothesis.contradiction_count == 1
+    assert hypothesis.confidence_score == Decimal("0.4")
+    assert hypothesis.lifecycle_status == "evidence_pending"
+
+
+def test_evidence_update_after_evaluation_invalidates_prior_result(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-update")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    evidence = db.scalar(
+        select(CausalEvidenceLink).where(CausalEvidenceLink.hypothesis_id == hypothesis.id)
+    )
+    assert evidence is not None
+
+    evidence.supports = False
+    db.commit()
+    db.refresh(hypothesis)
+
+    assert hypothesis.lifecycle_status == "evidence_pending"
+    assert hypothesis.evidence_count == 0
+    assert hypothesis.contradiction_count == 1
+    assert hypothesis.confidence_score is None
+
+
+def test_evidence_deletion_after_evaluation_invalidates_prior_result(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-delete")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    evidence = db.scalar(
+        select(CausalEvidenceLink).where(CausalEvidenceLink.hypothesis_id == hypothesis.id)
+    )
+    assert evidence is not None
+
+    db.delete(evidence)
+    db.commit()
+    db.refresh(hypothesis)
+
+    assert hypothesis.lifecycle_status == "evidence_pending"
+    assert hypothesis.evidence_count == 0
+    assert hypothesis.contradiction_count == 0
+    assert hypothesis.confidence_score is None
+
+
+def test_evidence_reparenting_invalidates_both_evaluated_hypotheses(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-reparent")
+    first, _first_a, _first_b, _first_method = confirm_hypothesis(db, organization_id, actor)
+    second, _second_a, _second_b, _second_method = confirm_hypothesis(db, organization_id, actor)
+    moved_evidence = db.scalar(
+        select(CausalEvidenceLink).where(CausalEvidenceLink.hypothesis_id == first.id)
+    )
+    assert moved_evidence is not None
+
+    moved_evidence.hypothesis_id = second.id
+    db.commit()
+    db.refresh(first)
+    db.refresh(second)
+
+    assert first.lifecycle_status == "evidence_pending"
+    assert first.evidence_count == 0
+    assert second.lifecycle_status == "evidence_pending"
+    assert second.evidence_count == 2
+    assert first.confidence_score is None
+    assert second.confidence_score is None
+
+
+def test_review_rejects_evidence_timestamp_newer_than_evaluation(db: Session) -> None:
+    organization_id, actor = make_org(db, "causal-evidence-fresh-defense")
+    hypothesis, _node_a, _node_b, _method = confirm_hypothesis(db, organization_id, actor)
+    evidence = db.scalar(
+        select(CausalEvidenceLink).where(CausalEvidenceLink.hypothesis_id == hypothesis.id)
+    )
+    assert evidence is not None
+    assert hypothesis.causal_evaluation_time is not None
+    db.execute(
+        update(CausalEvidenceLink)
+        .where(CausalEvidenceLink.id == evidence.id)
+        .values(updated_at=hypothesis.causal_evaluation_time + timedelta(seconds=1))
+    )
+    db.commit()
+
+    with pytest.raises(CausalIntelligenceServiceError) as exc_info:
+        causal_review_service.review(
+            db, organization_id, hypothesis.id, CausalReviewCreate(decision="confirm"), actor
+        )
+
+    assert exc_info.value.code == "hypothesis_evaluation_stale"
