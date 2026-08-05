@@ -173,3 +173,12 @@ prior state. No historical migration is modified.
   package (see the bounded specification's causal-methods classification).
 - WP-2.14 optimization, commercial frontend work, and production authentication
   remain outside this package.
+- The Job-to-Cash and Oilfield Services causal-ontology profiles are static
+  registry content rather than persisted, governed `IndustryPackComponent`
+  rows. This is an interim substitute, not the end state: it has no tenant
+  scoping, no `pack_version_id` versioning, and no `IndustryPackGovernanceEvent`
+  audit trail, unlike every other pack capability. Persisting them is tracked
+  as bounded follow-up debt for a future package — outside this package's
+  authorized files — that widens `ck_pack_component_type` to add
+  `causal_ontology` and migrates the two seed profiles into
+  `IndustryPackComponent` rows.
