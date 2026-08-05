@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import NoReturn
 from uuid import UUID, uuid4
@@ -71,6 +71,24 @@ class CausalIntelligenceServiceError(RuntimeError):
 
 def _fail(code: str, message: str, status: int = 422) -> NoReturn:
     raise CausalIntelligenceServiceError(code, message, status)
+
+
+def _get_hypothesis_for_update(
+    db: Session, organization_id: UUID, hypothesis_id: UUID
+) -> CausalHypothesis | None:
+    return db.scalar(
+        select(CausalHypothesis)
+        .where(
+            CausalHypothesis.organization_id == organization_id,
+            CausalHypothesis.id == hypothesis_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _stable_json(value: object) -> str:
@@ -319,12 +337,7 @@ class CausalEvidenceService:
         hypothesis_id: UUID,
         payload: CausalEvidenceLinkCreate,
     ) -> CausalEvidenceLink:
-        hypothesis = db.scalar(
-            select(CausalHypothesis).where(
-                CausalHypothesis.organization_id == organization_id,
-                CausalHypothesis.id == hypothesis_id,
-            )
-        )
+        hypothesis = _get_hypothesis_for_update(db, organization_id, hypothesis_id)
         if hypothesis is None:
             _fail("hypothesis_not_found", "causal hypothesis not found", status=404)
         if hypothesis.lifecycle_status in CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES:
@@ -399,12 +412,7 @@ def _resolve_occurrence(
 
 class CausalEvaluationService:
     def evaluate(self, db: Session, organization_id: UUID, hypothesis_id: UUID) -> CausalHypothesis:
-        hypothesis = db.scalar(
-            select(CausalHypothesis).where(
-                CausalHypothesis.organization_id == organization_id,
-                CausalHypothesis.id == hypothesis_id,
-            )
-        )
+        hypothesis = _get_hypothesis_for_update(db, organization_id, hypothesis_id)
         if hypothesis is None:
             _fail("hypothesis_not_found", "causal hypothesis not found", status=404)
         if hypothesis.lifecycle_status in CAUSAL_HYPOTHESIS_TERMINAL_STATUSES:
@@ -502,7 +510,7 @@ class CausalEvaluationService:
 
         hypothesis.minimum_supporting_mapping_confidence = minimum_mapping_confidence
         hypothesis.evaluated_temporal_precision = precision
-        hypothesis.causal_evaluation_time = datetime.now(tz=hypothesis.created_at.tzinfo)
+        hypothesis.causal_evaluation_time = datetime.now(UTC)
 
         if reasons:
             hypothesis.hard_gate_outcome = "blocked"
@@ -574,21 +582,16 @@ class CausalReviewService:
         payload: CausalReviewCreate,
         actor: UUID,
     ) -> CausalReview:
-        hypothesis = db.scalar(
-            select(CausalHypothesis).where(
-                CausalHypothesis.organization_id == organization_id,
-                CausalHypothesis.id == hypothesis_id,
-            )
-        )
+        hypothesis = _get_hypothesis_for_update(db, organization_id, hypothesis_id)
         if hypothesis is None:
             _fail("hypothesis_not_found", "causal hypothesis not found", status=404)
         prior_status = hypothesis.lifecycle_status
         if payload.decision == "revoke" and prior_status != CausalHypothesisStatus.CONFIRMED.value:
             _fail("invalid_transition", "only confirmed hypotheses can be revoked")
         if payload.decision == "confirm":
-            self._require_evaluated_review(hypothesis, confirm=True)
+            self._require_evaluated_review(db, hypothesis, confirm=True)
         elif payload.decision == "probable":
-            self._require_evaluated_review(hypothesis, confirm=False)
+            self._require_evaluated_review(db, hypothesis, confirm=False)
         if payload.decision != "defer":
             resulting_status = self._RESULTING_STATUS[payload.decision]
             hypothesis.lifecycle_status = resulting_status
@@ -638,7 +641,9 @@ class CausalReviewService:
         db.refresh(review)
         return review
 
-    def _require_evaluated_review(self, hypothesis: CausalHypothesis, *, confirm: bool) -> None:
+    def _require_evaluated_review(
+        self, db: Session, hypothesis: CausalHypothesis, *, confirm: bool
+    ) -> None:
         allowed_statuses = (
             {
                 CausalHypothesisStatus.UNDER_REVIEW.value,
@@ -652,6 +657,23 @@ class CausalReviewService:
                 "hypothesis_not_evaluated",
                 "causal approval requires a successfully evaluated hypothesis in an "
                 "eligible review state",
+            )
+        evidence_changed_after_evaluation = False
+        if hypothesis.causal_evaluation_time is not None:
+            evaluation_time = _utc_datetime(hypothesis.causal_evaluation_time)
+            evidence_changed_after_evaluation = any(
+                _utc_datetime(updated_at) > evaluation_time
+                for updated_at in db.scalars(
+                    select(CausalEvidenceLink.updated_at).where(
+                        CausalEvidenceLink.organization_id == hypothesis.organization_id,
+                        CausalEvidenceLink.hypothesis_id == hypothesis.id,
+                    )
+                )
+            )
+        if evidence_changed_after_evaluation:
+            _fail(
+                "hypothesis_evaluation_stale",
+                "the evidence set changed after evaluation; re-evaluation is required",
             )
         if confirm and hypothesis.proposed_edge_type in ASSOCIATION_ONLY_EDGE_TYPES:
             _fail(

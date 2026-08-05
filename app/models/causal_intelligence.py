@@ -19,8 +19,11 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    func,
+    insert,
     inspect,
     select,
+    update,
 )
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, mapped_column
@@ -794,27 +797,121 @@ def _guard_terminal_hypothesis_delete(_: object, __: object, target: CausalHypot
         raise ValueError("terminal causal hypotheses are immutable")
 
 
+def _evidence_mutation_parent_keys(
+    connection: Connection, target: CausalEvidenceLink
+) -> set[tuple[UUID, UUID]]:
+    parent_keys = {(target.organization_id, target.hypothesis_id)}
+    if target.id is not None:
+        persisted_parent = connection.execute(
+            select(
+                CausalEvidenceLink.__table__.c.organization_id,
+                CausalEvidenceLink.__table__.c.hypothesis_id,
+            ).where(CausalEvidenceLink.__table__.c.id == target.id)
+        ).one_or_none()
+        if persisted_parent is not None:
+            parent_keys.add((persisted_parent.organization_id, persisted_parent.hypothesis_id))
+    return parent_keys
+
+
 def _guard_evidence_mutation(_: object, connection: Connection, target: CausalEvidenceLink) -> None:
-    state = inspect(target)
-    prior_organization_ids = state.attrs.organization_id.history.deleted
-    prior_hypothesis_ids = state.attrs.hypothesis_id.history.deleted
-    parent_keys = {
-        (target.organization_id, target.hypothesis_id),
-        (
-            prior_organization_ids[0] if prior_organization_ids else target.organization_id,
-            prior_hypothesis_ids[0] if prior_hypothesis_ids else target.hypothesis_id,
-        ),
-    }
-    for organization_id, hypothesis_id in parent_keys:
+    parent_keys = _evidence_mutation_parent_keys(connection, target)
+    setattr(target, "_causal_mutation_parent_keys", parent_keys)
+    for organization_id, hypothesis_id in sorted(
+        parent_keys, key=lambda key: (str(key[0]), str(key[1]))
+    ):
         lifecycle_status = connection.execute(
-            select(CausalHypothesis.lifecycle_status).where(
+            select(CausalHypothesis.lifecycle_status)
+            .where(
                 CausalHypothesis.organization_id == organization_id,
                 CausalHypothesis.id == hypothesis_id,
             )
+            .with_for_update()
         ).scalar_one_or_none()
         if lifecycle_status in CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES:
             raise ValueError(
                 "causal evidence is immutable after probable or terminal hypothesis status"
+            )
+
+
+def _invalidate_evaluation_after_evidence_change(
+    _: object, connection: Connection, target: CausalEvidenceLink
+) -> None:
+    parent_keys = getattr(
+        target,
+        "_causal_mutation_parent_keys",
+        {(target.organization_id, target.hypothesis_id)},
+    )
+    for organization_id, hypothesis_id in sorted(
+        parent_keys, key=lambda key: (str(key[0]), str(key[1]))
+    ):
+        supporting_count = connection.scalar(
+            select(func.count())
+            .select_from(CausalEvidenceLink)
+            .where(
+                CausalEvidenceLink.organization_id == organization_id,
+                CausalEvidenceLink.hypothesis_id == hypothesis_id,
+                CausalEvidenceLink.supports.is_(True),
+            )
+        )
+        contradiction_count = connection.scalar(
+            select(func.count())
+            .select_from(CausalEvidenceLink)
+            .where(
+                CausalEvidenceLink.organization_id == organization_id,
+                CausalEvidenceLink.hypothesis_id == hypothesis_id,
+                CausalEvidenceLink.supports.is_(False),
+            )
+        )
+        invalidated = connection.execute(
+            update(CausalHypothesis)
+            .where(
+                CausalHypothesis.organization_id == organization_id,
+                CausalHypothesis.id == hypothesis_id,
+                CausalHypothesis.lifecycle_status == CausalHypothesisStatus.UNDER_REVIEW.value,
+            )
+            .values(
+                lifecycle_status=CausalHypothesisStatus.EVIDENCE_PENDING.value,
+                evaluated_temporal_precision=None,
+                hard_gate_outcome=None,
+                hard_gate_failure_reasons=[],
+                causal_evaluation_time=None,
+                confidence_score=None,
+                confidence_level=None,
+                method_code=None,
+                method_version=None,
+                confidence_components=None,
+                confidence_interpretation=None,
+                confidence_limitations=None,
+                minimum_supporting_mapping_confidence=None,
+                evidence_count=supporting_count or 0,
+                contradiction_count=contradiction_count or 0,
+                review_status=None,
+                updated_at=utc_now(),
+            )
+        )
+        if invalidated.rowcount:
+            now = utc_now()
+            connection.execute(
+                insert(CausalAuditEvent).values(
+                    id=uuid4(),
+                    organization_id=organization_id,
+                    event_type="hypothesis_evaluation_invalidated",
+                    entity_type="causal_hypothesis",
+                    entity_id=hypothesis_id,
+                    actor_type="system",
+                    actor_user_id=None,
+                    occurred_at=now,
+                    summary=(
+                        "Evidence changed after evaluation; prior evaluation invalidated and "
+                        "hypothesis returned to evidence_pending"
+                    ),
+                    metadata_json={
+                        "reason": "evidence_set_changed",
+                        "prior_status": CausalHypothesisStatus.UNDER_REVIEW.value,
+                        "resulting_status": CausalHypothesisStatus.EVIDENCE_PENDING.value,
+                    },
+                    created_at=now,
+                )
             )
 
 
@@ -827,6 +924,9 @@ event.listen(CausalHypothesis, "before_delete", _guard_terminal_hypothesis_delet
 event.listen(CausalEvidenceLink, "before_insert", _guard_evidence_mutation)
 event.listen(CausalEvidenceLink, "before_update", _guard_evidence_mutation)
 event.listen(CausalEvidenceLink, "before_delete", _guard_evidence_mutation)
+event.listen(CausalEvidenceLink, "after_insert", _invalidate_evaluation_after_evidence_change)
+event.listen(CausalEvidenceLink, "after_update", _invalidate_evaluation_after_evidence_change)
+event.listen(CausalEvidenceLink, "after_delete", _invalidate_evaluation_after_evidence_change)
 event.listen(CausalReview, "before_update", _immutable)
 event.listen(CausalReview, "before_delete", _immutable)
 event.listen(CausalChainVersion, "before_update", _immutable)
