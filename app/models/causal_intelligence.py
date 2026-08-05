@@ -20,7 +20,9 @@ from sqlalchemy import (
     Uuid,
     event,
     inspect,
+    select,
 )
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -94,6 +96,11 @@ CAUSAL_HYPOTHESIS_TERMINAL_STATUSES = {
     CausalHypothesisStatus.SUPERSEDED.value,
     CausalHypothesisStatus.REVOKED.value,
     CausalHypothesisStatus.ARCHIVED.value,
+}
+
+CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES = {
+    CausalHypothesisStatus.PROBABLE.value,
+    *CAUSAL_HYPOTHESIS_TERMINAL_STATUSES,
 }
 
 CAUSAL_HYPOTHESIS_ALLOWED_TERMINAL_TRANSITIONS = {
@@ -787,12 +794,39 @@ def _guard_terminal_hypothesis_delete(_: object, __: object, target: CausalHypot
         raise ValueError("terminal causal hypotheses are immutable")
 
 
+def _guard_evidence_mutation(_: object, connection: Connection, target: CausalEvidenceLink) -> None:
+    state = inspect(target)
+    prior_organization_ids = state.attrs.organization_id.history.deleted
+    prior_hypothesis_ids = state.attrs.hypothesis_id.history.deleted
+    parent_keys = {
+        (target.organization_id, target.hypothesis_id),
+        (
+            prior_organization_ids[0] if prior_organization_ids else target.organization_id,
+            prior_hypothesis_ids[0] if prior_hypothesis_ids else target.hypothesis_id,
+        ),
+    }
+    for organization_id, hypothesis_id in parent_keys:
+        lifecycle_status = connection.execute(
+            select(CausalHypothesis.lifecycle_status).where(
+                CausalHypothesis.organization_id == organization_id,
+                CausalHypothesis.id == hypothesis_id,
+            )
+        ).scalar_one_or_none()
+        if lifecycle_status in CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES:
+            raise ValueError(
+                "causal evidence is immutable after probable or terminal hypothesis status"
+            )
+
+
 def _immutable(*_: object) -> None:
     raise ValueError("this causal intelligence record is immutable")
 
 
 event.listen(CausalHypothesis, "before_update", _guard_terminal_hypothesis)
 event.listen(CausalHypothesis, "before_delete", _guard_terminal_hypothesis_delete)
+event.listen(CausalEvidenceLink, "before_insert", _guard_evidence_mutation)
+event.listen(CausalEvidenceLink, "before_update", _guard_evidence_mutation)
+event.listen(CausalEvidenceLink, "before_delete", _guard_evidence_mutation)
 event.listen(CausalReview, "before_update", _immutable)
 event.listen(CausalReview, "before_delete", _immutable)
 event.listen(CausalChainVersion, "before_update", _immutable)

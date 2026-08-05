@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.canonical_mapping import CanonicalEvent, CanonicalMetric, SourceCanonicalLink
 from app.models.causal_intelligence import (
+    CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES,
     CAUSAL_HYPOTHESIS_TERMINAL_STATUSES,
     CausalAuditEvent,
     CausalChain,
@@ -326,8 +327,12 @@ class CausalEvidenceService:
         )
         if hypothesis is None:
             _fail("hypothesis_not_found", "causal hypothesis not found", status=404)
-        if hypothesis.lifecycle_status in CAUSAL_HYPOTHESIS_TERMINAL_STATUSES:
-            _fail("hypothesis_terminal", "cannot attach evidence to a terminal hypothesis")
+        if hypothesis.lifecycle_status in CAUSAL_HYPOTHESIS_EVIDENCE_IMMUTABLE_STATUSES:
+            _fail(
+                "hypothesis_evidence_immutable",
+                "evidence cannot change after a hypothesis reaches an immutable evidence state; "
+                "create a new hypothesis version",
+            )
         link = CausalEvidenceLink(
             organization_id=organization_id,
             hypothesis_id=hypothesis_id,
@@ -798,7 +803,13 @@ class RootCauseRankingService:
         score = Decimal("1")
         weakest: Decimal | None = None
         for edge in path:
-            weight = edge.confidence_score if edge.confidence_score is not None else Decimal("0.5")
+            if edge.confidence_score is None:
+                _fail(
+                    "missing_edge_confidence",
+                    f"causal edge {edge.id} cannot be ranked without calculated confidence",
+                    status=409,
+                )
+            weight = edge.confidence_score
             score *= weight
             if weakest is None or weight < weakest:
                 weakest = weight
