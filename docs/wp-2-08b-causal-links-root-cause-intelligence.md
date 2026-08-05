@@ -63,6 +63,23 @@ structurally impossible for `correlates_with`/`associated_with` hypotheses to
 ever reach `confirmed` — this is enforced at the database level, not merely by
 service-layer convention.
 
+Approval is also an explicit service invariant rather than a call-order
+convention. A `probable` decision is accepted only from `under_review`; a
+`confirm` decision is accepted only from `under_review` or `probable`. Both
+require a recorded evaluation time, `hard_gate_outcome = passed`, supporting
+evidence, calculated confidence, and an empty blocking-reasons collection.
+Confirmation additionally requires the governed minimum confidence threshold
+and rejects association-only edge types before persistence. Direct review calls
+therefore cannot bypass proposal, evidence attachment, evaluation, Trust/
+readiness, temporal, or lineage gates.
+
+Evidence links remain manageable during mutable working states (`draft`,
+`proposed`, `evidence_pending`, and `under_review`). Once a hypothesis reaches
+`probable` or any terminal evidentiary state, model event guards reject evidence
+inserts, updates, and deletes. Additional evidence then requires a new
+hypothesis version. This defense uses the existing lifecycle fields and mapper
+events, so it requires no schema or migration change.
+
 `CausalReview`, `CausalOutcomeAssessment`, `CausalChainVersion`,
 `CausalIntervention`, and `CausalAuditEvent` are immutable once created.
 
@@ -108,7 +125,10 @@ compounds), and the weakest single-edge confidence along the path is retained
 separately on `CausalChainVersion` as `weakest_link_confidence`. Chain versions
 are immutable, append-only snapshots; a chain's current state is simply its
 highest `version_number` row, so no supersession pointer or mutation is ever
-needed on a computed version.
+needed on a computed version. An edge whose persisted confidence is `NULL` is a
+causal data-integrity failure: ranking raises the structured
+`missing_edge_confidence` error and creates no chain version. The service never
+invents or substitutes a plausible confidence value.
 
 ## Intervention and outcome learning
 
