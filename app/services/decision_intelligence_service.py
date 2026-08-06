@@ -825,12 +825,21 @@ class DecisionApprovalService:
         db.add(approval)
         db.flush()
         if payload.decision == "approve":
+            # The newest approval becomes the sole governing authorization; older
+            # approval rows remain immutable historical evidence but no longer
+            # authorize conversion.
             recommendation.approved_by_approval_id = approval.id
             recommendation.lifecycle_status = "approved"
-        elif payload.decision == "reject":
-            recommendation.lifecycle_status = "rejected"
         else:
-            recommendation.lifecycle_status = "reviewed"
+            # reject / defer / request_changes all invalidate any prior approval:
+            # approved_by_approval_id must never be left pointing at a decision
+            # that a later, contradicting review has overridden, since
+            # convert_to_action() trusts this pointer as the current governing
+            # approval.
+            recommendation.approved_by_approval_id = None
+            recommendation.lifecycle_status = (
+                "rejected" if payload.decision == "reject" else "reviewed"
+            )
         _audit(
             db,
             organization_id,
@@ -873,10 +882,19 @@ class DecisionApprovalService:
                 code="converted_action_not_found",
             )
             return cast(OperationalAction, action)
-        if recommendation.approved_by_approval_id is None:
+        if (
+            recommendation.lifecycle_status != "approved"
+            or recommendation.approved_by_approval_id is None
+        ):
+            # Covers both "never approved" and "was approved but a later
+            # reject/defer/request_changes decision cleared the authorization" --
+            # decide() guarantees approved_by_approval_id is populated if and
+            # only if the most recent decision was "approve", so this single
+            # check is sufficient, but lifecycle_status is verified explicitly
+            # (not just inferred from the pointer) as defense in depth.
             raise DecisionIntelligenceServiceError(
-                "approved recommendation is required",
-                code="approval_required",
+                "recommendation is not currently approved",
+                code="recommendation_not_approved",
                 status=409,
             )
         approval = db.scalar(
@@ -887,14 +905,21 @@ class DecisionApprovalService:
             )
             .with_for_update()
         )
-        if (
-            approval is None
-            or approval.recommendation_id != recommendation.id
-            or approval.decision != "approve"
-        ):
+        if approval is None or approval.recommendation_id != recommendation.id:
             raise DecisionIntelligenceServiceError(
-                "valid approval for this recommendation is required",
+                "the governing approval does not belong to this recommendation",
                 code="approval_mismatch",
+                status=409,
+            )
+        if approval.decision != "approve":
+            # Defensive: no code path should be able to leave
+            # approved_by_approval_id pointing at a non-approve decision, but this
+            # is not database-enforced (a CHECK constraint cannot span two
+            # tables), so it is re-verified here rather than trusted.
+            raise DecisionIntelligenceServiceError(
+                "the referenced approval is no longer the recommendation's "
+                "governing decision",
+                code="recommendation_approval_stale",
                 status=409,
             )
         alternative = _get_tenant(
