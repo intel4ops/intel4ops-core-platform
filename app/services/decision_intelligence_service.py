@@ -917,8 +917,7 @@ class DecisionApprovalService:
             # is not database-enforced (a CHECK constraint cannot span two
             # tables), so it is re-verified here rather than trusted.
             raise DecisionIntelligenceServiceError(
-                "the referenced approval is no longer the recommendation's "
-                "governing decision",
+                "the referenced approval is no longer the recommendation's governing decision",
                 code="recommendation_approval_stale",
                 status=409,
             )
