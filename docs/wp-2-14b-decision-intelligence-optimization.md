@@ -59,6 +59,31 @@ SciPy is bounded to `>=1.12,<2.0`. Authorized optimization functions are:
 The pure solver module has no database, authorization, or business-governance
 dependency.
 
+## Known limitations
+
+- `fk_decision_recommendations_org_approval` (the circular composite FK described
+  above) is created via a dialect-aware SQLite batch-table-recreate versus a
+  direct PostgreSQL `ALTER TABLE` inside the Alembic migration, so both dialects
+  enforce it when schema is provisioned through `alembic upgrade`. The ORM model
+  itself declares this constraint with `.ddl_if(dialect="postgresql")`, because
+  plain `Base.metadata.create_all()` (used by the SQLite-backed default test
+  fixture) cannot perform Alembic's batch-recreate technique for a circular
+  foreign key and would otherwise fail to build the schema on SQLite. The
+  practical effect is that the fast, SQLite-backed default test suite does not
+  get database-level enforcement of this one constraint; service-layer checks in
+  `DecisionApprovalService` independently validate that an approval belongs to
+  its recommendation and carries an `approve` decision before conversion, and
+  the disposable-PostgreSQL suite exercises the real constraint directly.
+- `work_maintenance_sequencing` (`sequence_work`) computes an unconstrained
+  critical path over dependencies and deadlines only; it does not model
+  workforce/equipment capacity (limiting how many tasks may run concurrently).
+  Capacity-constrained scheduling is a materially harder problem (resource-
+  constrained project scheduling) and is deferred rather than approximated.
+- `DecisionRecommendation.expires_at` and the `superseded`/`expired` lifecycle
+  statuses are defined on the model and CHECK-constrained, but no service method
+  currently transitions a recommendation into either state — they are reserved
+  for a future bounded extension, not yet reachable.
+
 ## Validation
 
 Certification must include Ruff, Mypy, full SQLite tests, disposable PostgreSQL
