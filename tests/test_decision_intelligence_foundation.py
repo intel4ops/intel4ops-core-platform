@@ -5,7 +5,7 @@ from time import perf_counter
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, configure_mappers
 
@@ -117,8 +117,9 @@ def make_org(db: Session, slug: str) -> tuple[UUID, UUID]:
 def add_graph(
     db: Session, organization_id: UUID, actor_id: UUID
 ) -> tuple[DecisionRecommendation, DecisionAlternative]:
+    unique_suffix = uuid4().hex[:12]
     method = DecisionMethodDefinition(
-        method_code=f"test_method_{str(organization_id)[:8]}",
+        method_code=f"test_method_{unique_suffix}",
         method_name="Test Method",
         method_class="mixed_integer_linear_programming",
         method_version="1.0.0",
@@ -140,7 +141,7 @@ def add_graph(
         content_hash="a" * 64,
     )
     problem = DecisionProblem(
-        problem_code=f"problem_{str(organization_id)[:8]}",
+        problem_code=f"problem_{unique_suffix}",
         problem_name="Test Problem",
         use_case_code="recovery_portfolio_selection",
         description="Test problem",
@@ -178,7 +179,7 @@ def add_graph(
         timezone="UTC",
         currency_code="USD",
         scenario_fingerprint="c" * 64,
-        idempotency_key=f"scenario-{organization_id}",
+        idempotency_key=f"scenario-{unique_suffix}",
         validation_status="passed",
         gate_reasons=[],
         created_by_user_id=actor_id,
@@ -195,7 +196,7 @@ def add_graph(
         status="solved_optimal",
         input_fingerprint="d" * 64,
         scenario_fingerprint=scenario.scenario_fingerprint,
-        idempotency_key=f"execution-{organization_id}",
+        idempotency_key=f"execution-{unique_suffix}",
         time_limit_seconds=30,
         objective_values={"primary": 100},
         violations=[],
@@ -255,7 +256,7 @@ def add_graph(
         objective_explanation={"primary": 100},
         constraint_explanation={},
         evidence_summary=[],
-        idempotency_key=f"recommendation-{organization_id}",
+        idempotency_key=f"recommendation-{unique_suffix}",
         created_by_user_id=actor_id,
     )
     db.add(recommendation)
@@ -487,7 +488,7 @@ def test_conversion_requires_exact_approved_row_and_is_idempotent(db: Session) -
         decision_approval_service.convert_to_action(
             db, organization_id, recommendation.id, actor_id
         )
-    assert error.value.code == "approval_required"
+    assert error.value.code == "recommendation_not_approved"
     rejected = decision_approval_service.decide(
         db,
         organization_id,
@@ -532,3 +533,266 @@ def test_conversion_requires_exact_approved_row_and_is_idempotent(db: Session) -
     assert refreshed is not None
     assert refreshed.lifecycle_status == "converted_to_action"
     assert refreshed.approved_by_approval_id == approval.id
+
+
+@pytest.mark.parametrize("override_decision", ["reject", "defer", "request_changes"])
+def test_overriding_decision_clears_stale_approval_authorization(
+    db: Session, override_decision: str
+) -> None:
+    slug_decision = override_decision.replace("_", "-")
+    organization_id, actor_id = make_org(db, f"decision-override-{slug_decision}")
+    recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    approval = decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved", idempotency_key="approve-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    db.refresh(recommendation)
+    assert recommendation.lifecycle_status == "approved"
+    assert recommendation.approved_by_approval_id == approval.id
+
+    decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision=override_decision, rationale="Overridden", idempotency_key="override-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    db.refresh(recommendation)
+    assert recommendation.approved_by_approval_id is None
+    assert recommendation.lifecycle_status == (
+        "rejected" if override_decision == "reject" else "reviewed"
+    )
+
+    with pytest.raises(DecisionIntelligenceServiceError) as error:
+        decision_approval_service.convert_to_action(
+            db, organization_id, recommendation.id, actor_id
+        )
+    assert error.value.code == "recommendation_not_approved"
+
+
+def test_reapproval_after_rejection_becomes_sole_governing_approval(db: Session) -> None:
+    organization_id, actor_id = make_org(db, "decision-reapproval")
+    recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="First pass", idempotency_key="approve-key-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="reject", rationale="Changed my mind", idempotency_key="reject-key-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    second_approval = decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Reconsidered", idempotency_key="approve-key-2"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    db.refresh(recommendation)
+    assert recommendation.lifecycle_status == "approved"
+    assert recommendation.approved_by_approval_id == second_approval.id
+
+    action = decision_approval_service.convert_to_action(
+        db, organization_id, recommendation.id, actor_id
+    )
+    assert action is not None
+
+
+def test_defense_in_depth_checks_lifecycle_status_not_only_pointer(db: Session) -> None:
+    """Simulates the exact pre-fix defect shape directly: approved_by_approval_id
+    still references a genuinely valid approve-decision row, but lifecycle_status
+    was (hypothetically, e.g. via a future bug) left out of sync. Conversion must
+    still be refused because convert_to_action() checks lifecycle_status
+    explicitly rather than trusting the pointer alone."""
+    organization_id, actor_id = make_org(db, "decision-defense-in-depth")
+    recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    approval = decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved", idempotency_key="approve-key-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    recommendation.lifecycle_status = "rejected"
+    recommendation.approved_by_approval_id = approval.id
+    db.commit()
+
+    with pytest.raises(DecisionIntelligenceServiceError) as error:
+        decision_approval_service.convert_to_action(
+            db, organization_id, recommendation.id, actor_id
+        )
+    assert error.value.code == "recommendation_not_approved"
+
+
+def test_approval_belonging_to_another_recommendation_cannot_convert(db: Session) -> None:
+    organization_id, actor_id = make_org(db, "decision-foreign-approval")
+    recommendation_a, _alt_a = add_graph(db, organization_id, actor_id)
+    recommendation_b, _alt_b = add_graph(db, organization_id, actor_id)
+    approval_for_b = decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation_b.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved b", idempotency_key="approve-key-b1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    recommendation_a.lifecycle_status = "approved"
+    recommendation_a.approved_by_approval_id = approval_for_b.id
+    db.commit()
+
+    with pytest.raises(DecisionIntelligenceServiceError) as error:
+        decision_approval_service.convert_to_action(
+            db, organization_id, recommendation_a.id, actor_id
+        )
+    assert error.value.code == "approval_mismatch"
+
+
+def test_cross_tenant_approval_cannot_convert(db: Session) -> None:
+    organization_a, actor_a = make_org(db, "decision-tenant-a")
+    organization_b, actor_b = make_org(db, "decision-tenant-b")
+    recommendation_a, _alt_a = add_graph(db, organization_a, actor_a)
+    recommendation_b, _alt_b = add_graph(db, organization_b, actor_b)
+    approval_for_b = decision_approval_service.decide(
+        db,
+        organization_b,
+        recommendation_b.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved b", idempotency_key="approve-key-b2"
+        ),
+        actor_b,
+        "organization_admin",
+    )
+    recommendation_a.lifecycle_status = "approved"
+    recommendation_a.approved_by_approval_id = approval_for_b.id
+    db.commit()
+
+    with pytest.raises(DecisionIntelligenceServiceError) as error:
+        decision_approval_service.convert_to_action(
+            db, organization_a, recommendation_a.id, actor_a
+        )
+    assert error.value.code == "approval_mismatch"
+
+
+def test_converted_recommendation_rejects_further_decisions(db: Session) -> None:
+    organization_id, actor_id = make_org(db, "decision-post-conversion")
+    recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved", idempotency_key="approve-key-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    decision_approval_service.convert_to_action(db, organization_id, recommendation.id, actor_id)
+
+    with pytest.raises(DecisionIntelligenceServiceError) as error:
+        decision_approval_service.decide(
+            db,
+            organization_id,
+            recommendation.id,
+            DecisionApprovalCreate(
+                decision="reject", rationale="Too late", idempotency_key="too-late"
+            ),
+            actor_id,
+            "organization_admin",
+        )
+    assert error.value.code == "terminal_recommendation"
+
+
+def test_decision_sensitivity_result_is_immutable(db: Session) -> None:
+    organization_id, actor_id = make_org(db, "decision-sensitivity-immutable")
+    _recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    solution = db.scalar(
+        select(DecisionSolution).where(DecisionSolution.organization_id == organization_id)
+    )
+    assert solution is not None
+    result = DecisionSensitivityResult(
+        organization_id=organization_id,
+        solution_id=solution.id,
+        parameter_code="budget_limit",
+        perturbation_type="parameter_perturbation",
+        original_value=Decimal("100"),
+        perturbed_value=Decimal("110"),
+        objective_change=None,
+        recommendation_stable=True,
+        break_even_value=None,
+        shadow_price=None,
+        result_metadata={},
+    )
+    db.add(result)
+    db.commit()
+
+    result.recommendation_stable = False
+    with pytest.raises(ValueError, match="immutable"):
+        db.commit()
+    db.rollback()
+
+    fresh = db.get(DecisionSensitivityResult, result.id)
+    assert fresh is not None
+    db.delete(fresh)
+    with pytest.raises(ValueError, match="immutable"):
+        db.commit()
+    db.rollback()
+
+
+def test_decision_audit_event_is_immutable(db: Session) -> None:
+    organization_id, actor_id = make_org(db, "decision-audit-immutable")
+    recommendation, _alternative = add_graph(db, organization_id, actor_id)
+    decision_approval_service.decide(
+        db,
+        organization_id,
+        recommendation.id,
+        DecisionApprovalCreate(
+            decision="approve", rationale="Approved", idempotency_key="approve-key-1"
+        ),
+        actor_id,
+        "organization_admin",
+    )
+    event = db.scalar(
+        select(DecisionAuditEvent).where(DecisionAuditEvent.organization_id == organization_id)
+    )
+    assert event is not None
+
+    event.summary = "tampered"
+    with pytest.raises(ValueError, match="immutable"):
+        db.commit()
+    db.rollback()
+
+    fresh = db.get(DecisionAuditEvent, event.id)
+    assert fresh is not None
+    db.delete(fresh)
+    with pytest.raises(ValueError, match="immutable"):
+        db.commit()
+    db.rollback()
