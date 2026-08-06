@@ -22,6 +22,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
 from test_causal_intelligence_foundation import make_org as make_causal_org
+from test_decision_intelligence_foundation import add_graph as add_decision_graph
+from test_decision_intelligence_foundation import make_org as make_decision_org
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
@@ -79,6 +81,7 @@ from test_trust_service import trust_foundation
 
 from app.models.actions import ActionPlanStep
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
+from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
     Finding,
     MembershipRole,
@@ -119,6 +122,7 @@ from app.models.trust import (
 )
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
+from app.schemas.decision_intelligence import DecisionApprovalCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.forecasting import ForecastExecutionCreate
 from app.schemas.ingestion import (
@@ -137,6 +141,10 @@ from app.schemas.trust import TrustAssessmentCreate
 from app.services.causal_intelligence_service import (
     CausalIntelligenceServiceError,
     causal_review_service,
+)
+from app.services.decision_intelligence_service import (
+    DecisionIntelligenceServiceError,
+    decision_approval_service,
 )
 from app.services.finding_platform_service import (
     FindingPublicationService,
@@ -197,6 +205,25 @@ WP_301_MAPPING_TABLES = {
     "source_canonical_links",
     "entity_match_candidates",
     "mapping_audit_events",
+}
+WP_214B_DECISION_TABLES = {
+    "decision_method_definitions",
+    "decision_problems",
+    "decision_problem_versions",
+    "decision_objectives",
+    "decision_constraints",
+    "decision_variable_definitions",
+    "decision_scenarios",
+    "decision_scenario_inputs",
+    "decision_executions",
+    "decision_solutions",
+    "decision_alternatives",
+    "decision_recommendations",
+    "decision_recommendation_evidence",
+    "decision_sensitivity_results",
+    "decision_approvals",
+    "decision_outcome_links",
+    "decision_audit_events",
 }
 
 MANAGED_TABLES = {
@@ -360,6 +387,7 @@ MANAGED_TABLES = {
     "knowledge_graph_query_steps",
     "knowledge_graph_projection_checkpoints",
 } | WP_301_MAPPING_TABLES
+MANAGED_TABLES |= WP_214B_DECISION_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1163,6 +1191,20 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_214b_tables = WP_214B_DECISION_TABLES
+    decision_inspector = inspect(postgres_engine)
+    assert wp_214b_tables <= set(decision_inspector.get_table_names())
+    assert {
+        "fk_decision_recommendations_org_approval",
+        "fk_decision_recommendations_org_action",
+        "fk_decision_recommendations_org_alternative",
+        "fk_decision_recommendations_org_solution",
+    } <= {item["name"] for item in decision_inspector.get_foreign_keys("decision_recommendations")}
+    command.downgrade(config, "20260806_0032")
+    assert not (wp_214b_tables & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     wp_217_tables = {
         "products",
         "product_versions",
@@ -1695,6 +1737,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_221_tables
         - wp_301_tables
         - WP_301_MAPPING_TABLES
+        - wp_214b_tables
         <= wp_203_tables
     )
 
@@ -4559,3 +4602,130 @@ def test_causal_evidence_mutation_and_confirmation_are_serialized(
                 "hypothesis_evaluation_stale",
             }
             assert final_evidence.notes == "concurrent evidence change"
+
+
+@pytest.mark.postgres
+def test_decision_reject_and_convert_race_cannot_produce_action_from_rejected_recommendation(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor = make_decision_org(
+            session, f"decision-race-reject-{uuid4().hex[:10]}"
+        )
+        recommendation, _alternative = add_decision_graph(session, organization_id, actor)
+        recommendation_id = recommendation.id
+        decision_approval_service.decide(
+            session,
+            organization_id,
+            recommendation_id,
+            DecisionApprovalCreate(
+                decision="approve", rationale="Approved", idempotency_key="race-approve-1"
+            ),
+            actor,
+            "organization_admin",
+        )
+
+    barrier = Barrier(2)
+
+    def reject() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                decision_approval_service.decide(
+                    session,
+                    organization_id,
+                    recommendation_id,
+                    DecisionApprovalCreate(
+                        decision="reject",
+                        rationale="Concurrent rejection",
+                        idempotency_key="race-reject-1",
+                    ),
+                    actor,
+                    "organization_admin",
+                )
+            except DecisionIntelligenceServiceError as exc:
+                session.rollback()
+                return exc.code
+            return "rejected"
+
+    def convert() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                decision_approval_service.convert_to_action(
+                    session, organization_id, recommendation_id, actor
+                )
+            except DecisionIntelligenceServiceError as exc:
+                session.rollback()
+                return exc.code
+            return "converted"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reject_future = executor.submit(reject)
+        convert_future = executor.submit(convert)
+        reject_result = reject_future.result()
+        convert_result = convert_future.result()
+
+    with Session(postgres_engine) as session:
+        final_recommendation = session.get(DecisionRecommendation, recommendation_id)
+        assert final_recommendation is not None
+        if final_recommendation.lifecycle_status == "converted_to_action":
+            assert convert_result == "converted"
+            assert reject_result == "terminal_recommendation"
+            assert final_recommendation.converted_action_id is not None
+        else:
+            assert final_recommendation.lifecycle_status == "rejected"
+            assert reject_result == "rejected"
+            assert convert_result == "recommendation_not_approved"
+            assert final_recommendation.converted_action_id is None
+            assert final_recommendation.approved_by_approval_id is None
+
+
+@pytest.mark.postgres
+def test_decision_concurrent_duplicate_conversions_create_exactly_one_action(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor = make_decision_org(
+            session, f"decision-race-convert-{uuid4().hex[:10]}"
+        )
+        recommendation, _alternative = add_decision_graph(session, organization_id, actor)
+        recommendation_id = recommendation.id
+        decision_approval_service.decide(
+            session,
+            organization_id,
+            recommendation_id,
+            DecisionApprovalCreate(
+                decision="approve", rationale="Approved", idempotency_key="race-approve-2"
+            ),
+            actor,
+            "organization_admin",
+        )
+
+    barrier = Barrier(2)
+
+    def convert() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            action = decision_approval_service.convert_to_action(
+                session, organization_id, recommendation_id, actor
+            )
+            return cast(UUID, action.id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(convert)
+        second_future = executor.submit(convert)
+        first_action_id = first_future.result()
+        second_action_id = second_future.result()
+
+    assert first_action_id == second_action_id
+
+    with Session(postgres_engine) as session:
+        approval_count = session.scalar(
+            select(func.count())
+            .select_from(DecisionApproval)
+            .where(DecisionApproval.recommendation_id == recommendation_id)
+        )
+        assert approval_count == 1

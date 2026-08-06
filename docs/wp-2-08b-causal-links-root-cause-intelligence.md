@@ -2,7 +2,7 @@
 
 WP-2.08B introduces the platform's first governed causal-claims graph. It sits
 downstream of canonical mapping (WP-2.05), Trust and Analytical Readiness, and
-Findings, and upstream of the future WP-2.14 optimization layer, prioritization,
+Findings, and upstream of the future WP-2.14B optimization layer, prioritization,
 and Recovery. It does not infer causality automatically, does not perform
 counterfactual simulation, and never presents an association as confirmed
 causality.
@@ -207,7 +207,7 @@ prior state. No historical migration is modified.
 - Statistical causal-discovery methods, Bayesian networks, structural causal
   models, and counterfactual simulation are explicitly out of scope for this
   package (see the bounded specification's causal-methods classification).
-- WP-2.14 optimization, commercial frontend work, and production authentication
+- WP-2.14B optimization, commercial frontend work, and production authentication
   remain outside this package.
 - The Job-to-Cash and Oilfield Services causal-ontology profiles are static
   registry content rather than persisted, governed `IndustryPackComponent`

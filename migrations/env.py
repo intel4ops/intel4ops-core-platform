@@ -8,6 +8,7 @@ from app.db.session import Base
 from app.models import (
     canonical_mapping,  # noqa: F401
     causal_intelligence,  # noqa: F401
+    decision_intelligence,  # noqa: F401
     entities,  # noqa: F401
     findings,  # noqa: F401
     forecasting,  # noqa: F401
