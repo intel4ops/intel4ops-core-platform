@@ -198,6 +198,25 @@ WP_301_MAPPING_TABLES = {
     "entity_match_candidates",
     "mapping_audit_events",
 }
+WP_214B_DECISION_TABLES = {
+    "decision_method_definitions",
+    "decision_problems",
+    "decision_problem_versions",
+    "decision_objectives",
+    "decision_constraints",
+    "decision_variable_definitions",
+    "decision_scenarios",
+    "decision_scenario_inputs",
+    "decision_executions",
+    "decision_solutions",
+    "decision_alternatives",
+    "decision_recommendations",
+    "decision_recommendation_evidence",
+    "decision_sensitivity_results",
+    "decision_approvals",
+    "decision_outcome_links",
+    "decision_audit_events",
+}
 
 MANAGED_TABLES = {
     "organizations",
@@ -360,6 +379,7 @@ MANAGED_TABLES = {
     "knowledge_graph_query_steps",
     "knowledge_graph_projection_checkpoints",
 } | WP_301_MAPPING_TABLES
+MANAGED_TABLES |= WP_214B_DECISION_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1163,6 +1183,20 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    wp_214b_tables = WP_214B_DECISION_TABLES
+    decision_inspector = inspect(postgres_engine)
+    assert wp_214b_tables <= set(decision_inspector.get_table_names())
+    assert {
+        "fk_decision_recommendations_org_approval",
+        "fk_decision_recommendations_org_action",
+        "fk_decision_recommendations_org_alternative",
+        "fk_decision_recommendations_org_solution",
+    } <= {item["name"] for item in decision_inspector.get_foreign_keys("decision_recommendations")}
+    command.downgrade(config, "20260806_0032")
+    assert not (wp_214b_tables & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert_schema_at_head(postgres_engine)
+
     wp_217_tables = {
         "products",
         "product_versions",
@@ -1695,6 +1729,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_221_tables
         - wp_301_tables
         - WP_301_MAPPING_TABLES
+        - wp_214b_tables
         <= wp_203_tables
     )
 
