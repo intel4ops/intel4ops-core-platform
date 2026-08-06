@@ -829,6 +829,8 @@ for _model in (
     DecisionApproval,
     DecisionRecommendationEvidence,
     DecisionOutcomeLink,
+    DecisionSensitivityResult,
+    DecisionAuditEvent,
 ):
     event.listen(_model, "before_update", _immutable_result)
     event.listen(_model, "before_delete", _immutable_result)
