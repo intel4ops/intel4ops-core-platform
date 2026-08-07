@@ -3,6 +3,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.access_routes import me_router
+from app.api.access_routes import organization_router as access_organization_router
 from app.api.action_routes import router as action_router
 from app.api.canonical_mapping_routes import catalog_router as canonical_mapping_catalog_router
 from app.api.canonical_mapping_routes import tenant_router as canonical_mapping_tenant_router
@@ -21,6 +23,8 @@ from app.api.industry_pack_routes import catalog_router as industry_pack_catalog
 from app.api.industry_pack_routes import tenant_router as industry_pack_tenant_router
 from app.api.ingestion_routes import router as ingestion_router
 from app.api.intelligence_routes import router as intelligence_router
+from app.api.invitation_routes import accept_router as invitation_accept_router
+from app.api.invitation_routes import router as invitation_router
 from app.api.job_to_cash_routes import router as job_to_cash_router
 from app.api.knowledge_graph_routes import catalog_router as knowledge_graph_catalog_router
 from app.api.knowledge_graph_routes import tenant_router as knowledge_graph_tenant_router
@@ -109,6 +113,10 @@ app.add_middleware(
 app.add_middleware(RequestContextMiddleware)
 app.include_router(router)
 app.include_router(membership_router)
+app.include_router(access_organization_router)
+app.include_router(me_router)
+app.include_router(invitation_router)
+app.include_router(invitation_accept_router)
 app.include_router(source_system_router)
 app.include_router(ingestion_router)
 app.include_router(raw_lineage_router)
