@@ -12,6 +12,7 @@ from app.models.entities import (
     utc_now,
 )
 from app.schemas.memberships import MembershipCreate
+from app.services.invitation_service import record_access_audit_event
 
 
 class MembershipNotFoundError(ValueError):
@@ -111,6 +112,7 @@ class OrganizationMembershipService:
         organization_id: UUID,
         membership_id: UUID,
         role: MembershipRole,
+        actor_user_id: UUID | None = None,
     ) -> OrganizationMembership:
         self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
@@ -119,7 +121,17 @@ class OrganizationMembershipService:
             and role is not MembershipRole.ORGANIZATION_ADMIN
         ):
             self._protect_last_active_admin(db, membership)
+        prior_role = membership.role
         membership.role = role.value
+        record_access_audit_event(
+            db,
+            organization_id,
+            "membership_role_changed",
+            "organization_membership",
+            membership.id,
+            actor_user_id,
+            f"Role changed from {prior_role} to {role.value}",
+        )
         self._commit(db, membership)
         return membership
 
@@ -134,22 +146,48 @@ class OrganizationMembershipService:
         return membership
 
     def suspend(
-        self, db: Session, organization_id: UUID, membership_id: UUID
+        self,
+        db: Session,
+        organization_id: UUID,
+        membership_id: UUID,
+        actor_user_id: UUID | None = None,
     ) -> OrganizationMembership:
         self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
         self._protect_last_active_admin(db, membership)
         membership.status = MembershipStatus.SUSPENDED.value
+        record_access_audit_event(
+            db,
+            organization_id,
+            "membership_suspended",
+            "organization_membership",
+            membership.id,
+            actor_user_id,
+            "Membership suspended",
+        )
         self._commit(db, membership)
         return membership
 
     def revoke(
-        self, db: Session, organization_id: UUID, membership_id: UUID
+        self,
+        db: Session,
+        organization_id: UUID,
+        membership_id: UUID,
+        actor_user_id: UUID | None = None,
     ) -> OrganizationMembership:
         self._lock_organization(db, organization_id)
         membership = self.get(db, organization_id, membership_id, for_update=True)
         self._protect_last_active_admin(db, membership)
         membership.status = MembershipStatus.REVOKED.value
+        record_access_audit_event(
+            db,
+            organization_id,
+            "membership_revoked",
+            "organization_membership",
+            membership.id,
+            actor_user_id,
+            "Membership revoked",
+        )
         self._commit(db, membership)
         return membership
 
