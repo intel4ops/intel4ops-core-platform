@@ -116,6 +116,11 @@ class OrganizationMembership(Base):
             "user_id",
             name="uq_organization_members_organization_user",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "id",
+            name="uq_organization_members_org_id",
+        ),
         CheckConstraint(
             "role IN ('platform_admin', 'organization_admin', 'analyst', 'operator', "
             "'recovery_manager', 'viewer')",
