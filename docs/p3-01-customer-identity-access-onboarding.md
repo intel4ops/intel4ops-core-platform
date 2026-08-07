@@ -29,18 +29,63 @@ tenant-FK convention onto `organization_members`
 because `organization_invitations.resulting_membership_id` takes a composite
 foreign key into it.
 
-## Authentication boundary (explicitly out of scope)
+## Authentication boundary
 
-`app/auth/identity.py`'s `get_current_user()` remains a deliberate,
-fail-closed stub that unconditionally raises 401. `pyproject.toml` and a
-direct import check confirmed no JWT/OIDC dependency
-(`PyJWT`/`python-jose`/`Authlib`/`jwcrypto`) is installed, so real token
-verification is out of scope for this package by design rather than
-oversight. Every new route depends on `get_current_user`/
-`require_organization_roles` exactly like existing routes; nothing here
-weakens or bypasses that boundary. First-party passwords, password hashes,
-MFA storage, refresh-token issuance, and any first-party identity-provider
-functionality are explicitly not built.
+`app/auth/identity.py`'s `get_current_user()` now performs production bearer-
+token verification: Intel4Ops acts as a provider-neutral OIDC/JWT **resource
+server**, not an identity provider. It accepts, verifies, and maps tokens
+issued by whichever standards-compliant OIDC provider a deployment
+configures — it never issues, stores, or handles credentials itself, and
+contains no vendor-specific code (no Supabase, Auth0, Entra ID, or Okta
+integration).
+
+Every request's `Authorization: Bearer <token>` is verified end-to-end via
+`PyJWT`/`PyJWKClient`: signature, an explicit algorithm allowlist (`RS256`
+only by default — `alg: none` and unlisted algorithms are always rejected),
+issuer, audience, expiry, and not-before. The JWKS endpoint is fetched only
+from trusted, static application configuration (`OIDC_JWKS_URL`), never from
+request data, through one reusable, key-caching `PyJWKClient` instance per
+configured URL that transparently refetches on an unrecognized `kid`
+(standard key-rotation handling — no custom caching or key storage was
+built).
+
+`user_id` is deterministic: `uuid5(GOVERNED_INTEL4OPS_IDENTITY_NAMESPACE,
+f"{len(issuer)}:{issuer}:{subject}")`, computed only from the verified
+`iss`/`sub` claims after signature validation, never from an email or any
+other unverified claim. The issuer is length-prefixed in the join so the
+derivation stays unambiguous even though both an OIDC issuer (typically a
+URL containing `:`) and a provider-defined subject may themselves contain
+`:`. This algorithm is fixed and documented precisely because changing it
+would re-derive a different `user_id` for every existing identity and break
+membership continuity platform-wide. No local `User` table exists, and none
+was added by this remediation — the derivation requires no schema change and
+none was made.
+
+`is_platform_admin` is unconditionally `False` for every OIDC customer
+identity in this package. No claim is read for it, and no claim-mapping
+configuration exists yet; a token carrying an `is_platform_admin`,
+`platform_admin`, or `role: platform_admin`-shaped claim is verified
+normally but that claim is never consulted. Platform-admin authentication
+remains deferred to a future, explicitly-governed package. First-party
+passwords, password hashes, MFA storage, refresh-token issuance, and any
+first-party identity-provider functionality are still explicitly not built
+— Intel4Ops remains a protected resource server only, never an OAuth
+client, authorization server, or login UI.
+
+**Provider migration changes the derived `user_id`.** Because the
+namespace/issuer/subject derivation has no lookup table backing it, moving a
+customer to a different OIDC issuer (even for the same real person) produces
+a different `user_id` and orphans their existing memberships. This is an
+accepted, disclosed limitation for the current single-issuer-per-deployment
+scope; resolving it for provider migration or multi-provider support would
+require a future identity-continuity package (an external-identity mapping
+table), which was deliberately not built here.
+
+**Deployment requires configuration.** `OIDC_ISSUER`, `OIDC_AUDIENCE`, and
+`OIDC_JWKS_URL` must all be set for authentication to function; if any is
+missing, `get_current_user()` fails closed with `authentication_unavailable`
+(503) rather than skipping verification. `OIDC_ALLOWED_ALGORITHMS` defaults
+to `RS256` and should not be widened without a specific reason.
 
 ## Self-service organization creation and the pre-existing admin route
 
@@ -146,10 +191,14 @@ modified.
 
 ## Known limitations
 
-- No real authentication: every endpoint depends on the existing fail-closed
-  `get_current_user()` stub. This package is not independently usable in
-  production until a JWT/OIDC dependency and verifier are added in a
-  dedicated follow-up.
+- Provider migration changes the derived `user_id` (see above) — no
+  cross-provider identity continuity exists yet.
+- Platform-admin authentication is not wired to any OIDC claim; platform
+  admins continue to be provisioned out-of-band, exactly as before this
+  remediation.
+- Deployment requires operator-supplied `OIDC_ISSUER`/`OIDC_AUDIENCE`/
+  `OIDC_JWKS_URL` configuration for whichever standards-compliant provider is
+  chosen; none is bundled or defaulted.
 - `app/api/routes.py`'s platform-admin `POST /api/v1/organizations` and this
   package's self-service `POST /api/v1/me/organizations` are two distinct,
   intentionally separate creation paths; no attempt was made to unify or
