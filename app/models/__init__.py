@@ -218,6 +218,7 @@ from app.models.trust import (
     TrustEvidence,
     TrustRuleResult,
 )
+from app.models.value_scan import DirectionalValueScan
 from app.models.workspace import (
     OrganizationChallenge,
     OrganizationObjective,
@@ -356,6 +357,7 @@ __all__ = [
     "TrustAssessment",
     "TrustEvidence",
     "TrustRuleResult",
+    "DirectionalValueScan",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",
     "IntelligenceEngineRegistration",
