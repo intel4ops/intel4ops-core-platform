@@ -4,6 +4,19 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.entities import OrganizationStatus
+from app.schemas.workspace import ANNUAL_REVENUE_RANGES, EMPLOYEE_COUNT_RANGES
+
+
+def _validate_employee_count_range(value: str | None) -> str | None:
+    if value is not None and value not in EMPLOYEE_COUNT_RANGES:
+        raise ValueError("employee_count_range must be a governed range code")
+    return value
+
+
+def _validate_annual_revenue_range(value: str | None) -> str | None:
+    if value is not None and value not in ANNUAL_REVENUE_RANGES:
+        raise ValueError("annual_revenue_range must be a governed range code")
+    return value
 
 
 class OrganizationBase(BaseModel):
@@ -11,11 +24,15 @@ class OrganizationBase(BaseModel):
     slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     legal_name: str | None = Field(default=None, max_length=250)
     industry: str | None = Field(default=None, max_length=100)
+    sub_industry: str | None = Field(default=None, max_length=100)
     country_code: str = Field(min_length=2, max_length=2)
     default_currency: str = Field(min_length=3, max_length=3)
     timezone: str = Field(default="UTC", min_length=1, max_length=100)
     description: str | None = None
     is_demo: bool = False
+    employee_count_range: str | None = Field(default=None, max_length=20)
+    annual_revenue_range: str | None = Field(default=None, max_length=20)
+    operating_site_count: int | None = Field(default=None, ge=0)
 
     @field_validator("country_code", "default_currency")
     @classmethod
@@ -24,6 +41,16 @@ class OrganizationBase(BaseModel):
         if not normalized.isascii() or not normalized.isalpha():
             raise ValueError("must contain only ASCII letters")
         return normalized
+
+    @field_validator("employee_count_range")
+    @classmethod
+    def validate_employee_count_range(cls, value: str | None) -> str | None:
+        return _validate_employee_count_range(value)
+
+    @field_validator("annual_revenue_range")
+    @classmethod
+    def validate_annual_revenue_range(cls, value: str | None) -> str | None:
+        return _validate_annual_revenue_range(value)
 
 
 class OrganizationCreate(OrganizationBase):
@@ -37,11 +64,15 @@ class OrganizationUpdate(BaseModel):
     )
     legal_name: str | None = Field(default=None, max_length=250)
     industry: str | None = Field(default=None, max_length=100)
+    sub_industry: str | None = Field(default=None, max_length=100)
     country_code: str | None = Field(default=None, min_length=2, max_length=2)
     default_currency: str | None = Field(default=None, min_length=3, max_length=3)
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = None
     is_demo: bool | None = None
+    employee_count_range: str | None = Field(default=None, max_length=20)
+    annual_revenue_range: str | None = Field(default=None, max_length=20)
+    operating_site_count: int | None = Field(default=None, ge=0)
 
     @field_validator("country_code", "default_currency")
     @classmethod
@@ -52,6 +83,16 @@ class OrganizationUpdate(BaseModel):
         if not normalized.isascii() or not normalized.isalpha():
             raise ValueError("must contain only ASCII letters")
         return normalized
+
+    @field_validator("employee_count_range")
+    @classmethod
+    def validate_employee_count_range(cls, value: str | None) -> str | None:
+        return _validate_employee_count_range(value)
+
+    @field_validator("annual_revenue_range")
+    @classmethod
+    def validate_annual_revenue_range(cls, value: str | None) -> str | None:
+        return _validate_annual_revenue_range(value)
 
     @model_validator(mode="after")
     def reject_null_for_required_fields(self) -> "OrganizationUpdate":

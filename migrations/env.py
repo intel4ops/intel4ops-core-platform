@@ -22,6 +22,7 @@ from app.models import (
     source_system,  # noqa: F401
     statistics,  # noqa: F401
     trust,  # noqa: F401
+    workspace,  # noqa: F401
 )
 
 config = context.config

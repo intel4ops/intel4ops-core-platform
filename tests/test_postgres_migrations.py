@@ -122,6 +122,7 @@ from app.models.trust import (
     TrustAssessment,
     TrustRuleResult,
 )
+from app.models.workspace import OrganizationObjective
 from app.schemas.access import InvitationCreate
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
@@ -188,6 +189,7 @@ from app.services.statistical_service import (
     statistical_execution_service,
 )
 from app.services.trust_service import TrustAssessmentService
+from app.services.workspace_service import list_objectives, replace_objectives
 
 WP_301_MAPPING_TABLES = {
     "canonical_entity_types",
@@ -700,12 +702,16 @@ def assert_schema_at_head(engine: Engine) -> None:
         "slug",
         "legal_name",
         "industry",
+        "sub_industry",
         "country_code",
         "default_currency",
         "timezone",
         "status",
         "description",
         "is_demo",
+        "employee_count_range",
+        "annual_revenue_range",
+        "operating_site_count",
         "created_at",
         "updated_at",
     }
@@ -717,6 +723,12 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert organization_indexes["ix_organizations_slug"]["unique"] is True
     assert organization_indexes["ix_organizations_slug"]["column_names"] == ["slug"]
+    assert {
+        constraint["name"] for constraint in inspector.get_check_constraints("organizations")
+    } >= {
+        "ck_organizations_status",
+        "ck_organizations_operating_site_count_non_negative",
+    }
 
     membership_columns = {
         column["name"]: column for column in inspector.get_columns("organization_members")
@@ -1190,6 +1202,50 @@ def assert_schema_at_head(engine: Engine) -> None:
         "graph_version_id",
         "to_node_id",
     ]
+
+
+@pytest.mark.postgres
+def test_operating_site_count_database_constraint(postgres_engine: Engine) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    organization_table = cast(Table, Organization.__table__)
+    valid_ids = [uuid4(), uuid4()]
+    with postgres_engine.begin() as connection:
+        for organization_id, site_count in zip(valid_ids, (0, 3), strict=True):
+            connection.execute(
+                insert(organization_table).values(
+                    id=organization_id,
+                    name=f"Site count {site_count}",
+                    slug=f"site-count-{organization_id}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                    operating_site_count=site_count,
+                )
+            )
+
+    with pytest.raises(IntegrityError):
+        with postgres_engine.begin() as connection:
+            invalid_id = uuid4()
+            connection.execute(
+                insert(organization_table).values(
+                    id=invalid_id,
+                    name="Invalid site count",
+                    slug=f"site-count-{invalid_id}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                    operating_site_count=-1,
+                )
+            )
+
+    with postgres_engine.begin() as connection:
+        persisted_counts = connection.execute(
+            select(Organization.operating_site_count).where(Organization.id.in_(valid_ids))
+        ).scalars()
+        assert set(persisted_counts) == {0, 3}
+        connection.execute(organization_table.delete().where(Organization.id.in_(valid_ids)))
 
 
 @pytest.mark.postgres
@@ -4885,3 +4941,53 @@ def test_concurrent_invitation_creation_for_same_email_yields_one_pending(
             )
         )
         assert pending_count == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_objective_replace_serializes_and_leaves_one_consistent_set(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Race Objectives",
+                slug=f"race-objectives-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        organization_id = organization.id
+    actor = uuid4()
+
+    barrier = Barrier(2)
+
+    def replace(codes: list[str]) -> None:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            replace_objectives(session, organization_id, codes, actor)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(replace, ["increase_revenue"])
+        second_future = executor.submit(replace, ["reduce_downtime"])
+        first_future.result()
+        second_future.result()
+
+    with Session(postgres_engine) as session:
+        final = list_objectives(session, organization_id)
+        # The row lock in _lock_organization serializes the two
+        # read-existing/diff/write sequences: whichever call commits last
+        # sees the other's committed row as "existing" and replaces it.
+        # Without that lock both requests could read an empty "existing"
+        # set concurrently and leave both codes selected instead of one.
+        assert len(final) == 1
+        assert final[0].objective_code in ("increase_revenue", "reduce_downtime")
+
+        row_count = session.scalar(
+            select(func.count())
+            .select_from(OrganizationObjective)
+            .where(OrganizationObjective.organization_id == organization_id)
+        )
+        assert row_count == 1

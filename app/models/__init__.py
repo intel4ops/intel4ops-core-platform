@@ -218,6 +218,11 @@ from app.models.trust import (
     TrustEvidence,
     TrustRuleResult,
 )
+from app.models.workspace import (
+    OrganizationChallenge,
+    OrganizationObjective,
+    OrganizationSystem,
+)
 
 __all__ = [
     "AccessAuditEvent",
@@ -423,6 +428,9 @@ __all__ = [
     "KnowledgeGraphRelationshipType",
     "KnowledgeGraphRelationshipTypeVersion",
     "KnowledgeGraphVersion",
+    "OrganizationChallenge",
+    "OrganizationObjective",
+    "OrganizationSystem",
 ]
 from app.models.actions import (
     ActionDependency,
