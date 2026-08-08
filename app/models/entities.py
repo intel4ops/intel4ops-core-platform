@@ -83,6 +83,10 @@ class Organization(Base):
             "status IN ('active', 'inactive')",
             name="ck_organizations_status",
         ),
+        CheckConstraint(
+            "operating_site_count IS NULL OR operating_site_count >= 0",
+            name="ck_organizations_operating_site_count_non_negative",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

@@ -723,6 +723,12 @@ def assert_schema_at_head(engine: Engine) -> None:
     }
     assert organization_indexes["ix_organizations_slug"]["unique"] is True
     assert organization_indexes["ix_organizations_slug"]["column_names"] == ["slug"]
+    assert {
+        constraint["name"] for constraint in inspector.get_check_constraints("organizations")
+    } >= {
+        "ck_organizations_status",
+        "ck_organizations_operating_site_count_non_negative",
+    }
 
     membership_columns = {
         column["name"]: column for column in inspector.get_columns("organization_members")
@@ -1196,6 +1202,50 @@ def assert_schema_at_head(engine: Engine) -> None:
         "graph_version_id",
         "to_node_id",
     ]
+
+
+@pytest.mark.postgres
+def test_operating_site_count_database_constraint(postgres_engine: Engine) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    organization_table = cast(Table, Organization.__table__)
+    valid_ids = [uuid4(), uuid4()]
+    with postgres_engine.begin() as connection:
+        for organization_id, site_count in zip(valid_ids, (0, 3), strict=True):
+            connection.execute(
+                insert(organization_table).values(
+                    id=organization_id,
+                    name=f"Site count {site_count}",
+                    slug=f"site-count-{organization_id}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                    operating_site_count=site_count,
+                )
+            )
+
+    with pytest.raises(IntegrityError):
+        with postgres_engine.begin() as connection:
+            invalid_id = uuid4()
+            connection.execute(
+                insert(organization_table).values(
+                    id=invalid_id,
+                    name="Invalid site count",
+                    slug=f"site-count-{invalid_id}",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                    operating_site_count=-1,
+                )
+            )
+
+    with postgres_engine.begin() as connection:
+        persisted_counts = connection.execute(
+            select(Organization.operating_site_count).where(Organization.id.in_(valid_ids))
+        ).scalars()
+        assert set(persisted_counts) == {0, 3}
+        connection.execute(organization_table.delete().where(Organization.id.in_(valid_ids)))
 
 
 @pytest.mark.postgres
