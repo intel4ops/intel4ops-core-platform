@@ -96,6 +96,10 @@ class Organization(Base):
     status: Mapped[str] = mapped_column(String(20), default=OrganizationStatus.ACTIVE.value)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    sub_industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    employee_count_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    annual_revenue_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    operating_site_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
