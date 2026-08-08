@@ -41,6 +41,7 @@ from app.api.signature_routes import tenant_router as signature_tenant_router
 from app.api.source_system_routes import router as source_system_router
 from app.api.statistical_routes import router as statistical_router
 from app.api.trust_routes import router as trust_router
+from app.api.value_scan_routes import router as value_scan_router
 from app.api.workspace_routes import catalog_router as workspace_catalog_router
 from app.api.workspace_routes import tenant_router as workspace_tenant_router
 from app.auth.request_context import RequestContextMiddleware
@@ -151,5 +152,6 @@ app.include_router(causal_intelligence_catalog_router)
 app.include_router(causal_intelligence_tenant_router)
 app.include_router(decision_catalog_router)
 app.include_router(decision_tenant_router)
+app.include_router(value_scan_router)
 app.include_router(workspace_catalog_router)
 app.include_router(workspace_tenant_router)
