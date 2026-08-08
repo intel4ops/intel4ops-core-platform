@@ -158,9 +158,7 @@ def get_access_context(
             return AccessContextRead(state="multiple_organizations", user_id=user.user_id)
         membership = active_memberships[0]
     else:
-        membership = next(
-            (m for m in memberships if m.organization_id == organization_id), None
-        )
+        membership = next((m for m in memberships if m.organization_id == organization_id), None)
         if membership is None:
             return AccessContextRead(state="no_membership", user_id=user.user_id)
         if membership.status == MembershipStatus.REVOKED.value:

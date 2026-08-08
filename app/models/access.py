@@ -71,9 +71,7 @@ class OrganizationInvitation(Base):
             sqlite_where=text("status = 'pending'"),
         ),
         Index("ix_organization_invitations_org_status", "organization_id", "status"),
-        UniqueConstraint(
-            "token_hash", name="uq_organization_invitations_token_hash"
-        ),
+        UniqueConstraint("token_hash", name="uq_organization_invitations_token_hash"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

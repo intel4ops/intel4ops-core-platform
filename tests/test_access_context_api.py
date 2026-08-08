@@ -249,9 +249,7 @@ def test_access_context_states(client: TestClient, identity: IdentityState, db: 
     assert scoped.json()["state"] == "active"
 
     organization_service.deactivate(db, UUID(organization_id))
-    suspended_org = client.get(
-        "/api/v1/me/context", params={"organization_id": organization_id}
-    )
+    suspended_org = client.get("/api/v1/me/context", params={"organization_id": organization_id})
     assert suspended_org.status_code == 200
     assert suspended_org.json()["state"] == "suspended_organization"
 

@@ -119,12 +119,8 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "organization_id", "id", name="uq_organization_invitations_org_id"
-        ),
-        sa.UniqueConstraint(
-            "token_hash", name="uq_organization_invitations_token_hash"
-        ),
+        sa.UniqueConstraint("organization_id", "id", name="uq_organization_invitations_org_id"),
+        sa.UniqueConstraint("token_hash", name="uq_organization_invitations_token_hash"),
     )
     op.create_index(
         "ix_organization_invitations_org_status",
@@ -147,9 +143,7 @@ def downgrade() -> None:
         "ux_organization_invitations_org_email_pending",
         table_name="organization_invitations",
     )
-    op.drop_index(
-        "ix_organization_invitations_org_status", table_name="organization_invitations"
-    )
+    op.drop_index("ix_organization_invitations_org_status", table_name="organization_invitations")
     op.drop_table("organization_invitations")
 
     op.drop_index("ix_access_audit_org_entity", table_name="access_audit_events")

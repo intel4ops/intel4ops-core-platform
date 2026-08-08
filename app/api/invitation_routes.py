@@ -63,9 +63,7 @@ def revoke_invitation(
     access: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
 ) -> object:
     try:
-        return invitation_service.revoke(
-            db, organization_id, invitation_id, access.user.user_id
-        )
+        return invitation_service.revoke(db, organization_id, invitation_id, access.user.user_id)
     except InvitationServiceError as exc:
         _raise(exc)
 
