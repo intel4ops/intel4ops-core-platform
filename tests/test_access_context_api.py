@@ -171,7 +171,7 @@ def test_invitation_creation_requires_organization_admin_role(
 ) -> None:
     identity.is_platform_admin = False
     organization = create_organization_self_service(client, "invitation-role-gate")
-    organization_id = organization["id"]
+    organization_id = str(organization["id"])
 
     viewer_id = uuid4()
     create_member(client, organization_id, viewer_id, MembershipRole.VIEWER)
@@ -197,7 +197,7 @@ def test_invitation_accept_ignores_role_supplied_by_caller(
 ) -> None:
     identity.is_platform_admin = False
     organization = create_organization_self_service(client, "invitation-no-self-escalation")
-    organization_id = organization["id"]
+    organization_id = str(organization["id"])
 
     created = client.post(
         f"/api/v1/organizations/{organization_id}/invitations",
@@ -222,7 +222,7 @@ def test_access_context_states(client: TestClient, identity: IdentityState, db: 
     assert no_membership.json()["state"] == "no_membership"
 
     organization = create_organization_self_service(client, "access-context-states")
-    organization_id = organization["id"]
+    organization_id = str(organization["id"])
 
     active = client.get("/api/v1/me/context")
     assert active.status_code == 200
@@ -232,7 +232,7 @@ def test_access_context_states(client: TestClient, identity: IdentityState, db: 
     assert "invite_members" in active_body["permitted_actions"]
 
     second_organization = create_organization_self_service(client, "access-context-second")
-    second_organization_id = UUID(second_organization["id"])
+    second_organization_id = UUID(str(second_organization["id"]))
     membership_service = OrganizationMembershipService()
     organization_service = OrganizationService()
     membership_service.activate(
@@ -262,7 +262,7 @@ def test_access_context_states(client: TestClient, identity: IdentityState, db: 
     assert unknown.json()["state"] == "no_membership"
 
     pending_org = create_organization_self_service(client, "access-context-pending")
-    pending_org_id = UUID(pending_org["id"])
+    pending_org_id = UUID(str(pending_org["id"]))
     invited_id = uuid4()
     membership_service.create(
         db,
