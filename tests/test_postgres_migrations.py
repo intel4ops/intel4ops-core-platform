@@ -79,6 +79,7 @@ from test_ti_c2_referential_integrity import _action as ti_c2_action
 from test_ti_c2_referential_integrity import _organization as ti_c2_organization
 from test_trust_service import trust_foundation
 
+from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
@@ -86,6 +87,7 @@ from app.models.entities import (
     Finding,
     MembershipRole,
     MembershipStatus,
+    Organization,
     OrganizationMembership,
 )
 from app.models.forecasting import (
@@ -120,6 +122,7 @@ from app.models.trust import (
     TrustAssessment,
     TrustRuleResult,
 )
+from app.schemas.access import InvitationCreate
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.decision_intelligence import DecisionApprovalCreate
@@ -138,6 +141,10 @@ from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.reliability import CensoringStatus, ReliabilityExecutionCreate
 from app.schemas.source_systems import SourceSystemCreate
 from app.schemas.trust import TrustAssessmentCreate
+from app.services.access_context_service import (
+    OrganizationProvisioningError,
+    create_organization_with_owner,
+)
 from app.services.causal_intelligence_service import (
     CausalIntelligenceServiceError,
     causal_review_service,
@@ -158,6 +165,7 @@ from app.services.ingestion_service import (
     IngestionBatchService,
 )
 from app.services.intelligence_service import IntelligenceExecutionService
+from app.services.invitation_service import InvitationServiceError, invitation_service
 from app.services.membership_service import (
     DuplicateMembershipError,
     LastActiveOrganizationAdminError,
@@ -4729,3 +4737,151 @@ def test_decision_concurrent_duplicate_conversions_create_exactly_one_action(
             .where(DecisionApproval.recommendation_id == recommendation_id)
         )
         assert approval_count == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_self_service_organization_creation_duplicate_slug(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    slug = f"race-org-{uuid4().hex[:10]}"
+    payload = OrganizationCreate(
+        name="Race Org",
+        slug=slug,
+        country_code="US",
+        default_currency="USD",
+        timezone="UTC",
+    )
+
+    barrier = Barrier(2)
+
+    def provision() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                create_organization_with_owner(session, payload, uuid4())
+            except OrganizationProvisioningError:
+                return "conflict"
+            return "created"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _: provision(), range(2)))
+    assert sorted(outcomes) == ["conflict", "created"]
+
+    with Session(postgres_engine) as session:
+        organization = session.scalar(select(Organization).where(Organization.slug == slug))
+        assert organization is not None
+        active_admins = session.scalar(
+            select(func.count())
+            .select_from(OrganizationMembership)
+            .where(
+                OrganizationMembership.organization_id == organization.id,
+                OrganizationMembership.role == MembershipRole.ORGANIZATION_ADMIN.value,
+                OrganizationMembership.status == MembershipStatus.ACTIVE.value,
+            )
+        )
+        assert active_admins == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_invitation_acceptance_by_same_user_is_idempotent(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Race Invitation Accept",
+                slug=f"race-invite-accept-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        organization_id = organization.id
+        _invitation, token = invitation_service.create(
+            session,
+            organization_id,
+            InvitationCreate(email="race-accept@example.com", role=MembershipRole.ANALYST),
+            invited_by_user_id=uuid4(),
+        )
+
+    accepting_user = uuid4()
+    barrier = Barrier(2)
+
+    def accept() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            membership = invitation_service.accept(session, token, accepting_user)
+            return cast(UUID, membership.id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(accept)
+        second_future = executor.submit(accept)
+        first_membership_id = first_future.result()
+        second_membership_id = second_future.result()
+
+    assert first_membership_id == second_membership_id
+
+    with Session(postgres_engine) as session:
+        membership_count = session.scalar(
+            select(func.count())
+            .select_from(OrganizationMembership)
+            .where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.user_id == accepting_user,
+            )
+        )
+        assert membership_count == 1
+
+
+@pytest.mark.postgres
+def test_concurrent_invitation_creation_for_same_email_yields_one_pending(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization = OrganizationService().create(
+            session,
+            OrganizationCreate(
+                name="Race Invitation Create",
+                slug=f"race-invite-create-{uuid4().hex[:10]}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        organization_id = organization.id
+
+    barrier = Barrier(2)
+
+    def invite() -> str:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                invitation_service.create(
+                    session,
+                    organization_id,
+                    InvitationCreate(email="race-create@example.com", role=MembershipRole.VIEWER),
+                    invited_by_user_id=uuid4(),
+                )
+            except InvitationServiceError:
+                return "conflict"
+            return "created"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _: invite(), range(2)))
+    assert sorted(outcomes) == ["conflict", "created"]
+
+    with Session(postgres_engine) as session:
+        pending_count = session.scalar(
+            select(func.count())
+            .select_from(OrganizationInvitation)
+            .where(
+                OrganizationInvitation.organization_id == organization_id,
+                OrganizationInvitation.email == "race-create@example.com",
+                OrganizationInvitation.status == InvitationStatus.PENDING.value,
+            )
+        )
+        assert pending_count == 1

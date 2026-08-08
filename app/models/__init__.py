@@ -1,3 +1,7 @@
+from app.models.access import (
+    AccessAuditEvent,
+    OrganizationInvitation,
+)
 from app.models.canonical_mapping import (
     CanonicalEntity,
     CanonicalEntityType,
@@ -216,6 +220,8 @@ from app.models.trust import (
 )
 
 __all__ = [
+    "AccessAuditEvent",
+    "OrganizationInvitation",
     "DecisionAlternative",
     "DecisionApproval",
     "DecisionAuditEvent",
