@@ -544,6 +544,31 @@ class DirectionalValueScanService:
             ),
             "Intelligence execution",
         )
+        provenance_by_execution: dict[UUID, tuple[bool, str | None]] = {}
+        provenance_by_identity: dict[tuple[UUID, UUID], tuple[bool, str | None]] = {}
+        for execution in executions.values():
+            if execution.dataset_version_id is None:
+                provenance_by_execution[execution.id] = (
+                    False,
+                    "The source execution lacks an exact governed dataset version.",
+                )
+                continue
+            identity = execution.dataset_id, execution.dataset_version_id
+            result = provenance_by_identity.get(identity)
+            if result is None:
+                try:
+                    governed_dataset_provenance_service.resolve(
+                        db,
+                        organization_id,
+                        execution.dataset_id,
+                        execution.dataset_version_id,
+                    )
+                except GovernedProvenanceError as exc:
+                    result = False, str(exc)
+                else:
+                    result = True, None
+                provenance_by_identity[identity] = result
+            provenance_by_execution[execution.id] = result
         all_bundles = list(
             db.scalars(
                 select(FindingEvidenceBundle)
@@ -622,6 +647,7 @@ class DirectionalValueScanService:
             "trusts": trusts,
             "readiness": readiness,
             "executions": executions,
+            "provenance": provenance_by_execution,
             "bundles": bundles,
             "items_by_bundle": items_by_bundle,
             "links": links,
@@ -696,6 +722,7 @@ class DirectionalValueScanService:
         trusts: dict[UUID, TrustAssessment] = related["trusts"]  # type: ignore[assignment]
         readiness_rows: dict[UUID, AnalyticalReadinessDecision] = related["readiness"]  # type: ignore[assignment]
         executions: dict[UUID, IntelligenceExecution] = related["executions"]  # type: ignore[assignment]
+        provenance_statuses: dict[UUID, tuple[bool, str | None]] = related["provenance"]  # type: ignore[assignment]
         bundles: dict[UUID, FindingEvidenceBundle] = related["bundles"]  # type: ignore[assignment]
         items_by_bundle: dict[UUID, list[FindingEvidenceItem]] = related["items_by_bundle"]  # type: ignore[assignment]
         rules: dict[UUID, list[TrustRuleResult]] = related["rules"]  # type: ignore[assignment]
@@ -778,17 +805,14 @@ class DirectionalValueScanService:
             gap_code = "GOVERNED_PROVENANCE_UNAVAILABLE"
             gap_reason = "The source execution lacks an exact governed dataset version."
         else:
-            try:
-                governed_dataset_provenance_service.resolve(
-                    db,
-                    organization_id,
-                    execution.dataset_id,
-                    execution.dataset_version_id,
-                )
-            except GovernedProvenanceError as exc:
+            provenance_valid, provenance_error = provenance_statuses.get(
+                execution.id,
+                (False, "Governed dataset provenance is unavailable."),
+            )
+            if not provenance_valid:
                 support_state = "STALE"
                 gap_code = "GOVERNED_PROVENANCE_STALE"
-                gap_reason = str(exc)
+                gap_reason = provenance_error
 
         if finding.content_fingerprint is None:
             support_state = "UNSUPPORTED"

@@ -122,6 +122,7 @@ from app.models.trust import (
     TrustAssessment,
     TrustRuleResult,
 )
+from app.models.value_scan import DirectionalValueScan
 from app.models.workspace import OrganizationObjective
 from app.schemas.access import InvitationCreate
 from app.schemas.causal_intelligence import CausalReviewCreate
@@ -189,6 +190,7 @@ from app.services.statistical_service import (
     statistical_execution_service,
 )
 from app.services.trust_service import TrustAssessmentService
+from app.services.value_scan_service import directional_value_scan_service
 from app.services.workspace_service import list_objectives, replace_objectives
 
 WP_301_MAPPING_TABLES = {
@@ -216,6 +218,8 @@ WP_301_MAPPING_TABLES = {
     "entity_match_candidates",
     "mapping_audit_events",
 }
+
+P3_03A_TABLES = {"directional_value_scans"}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -398,6 +402,7 @@ MANAGED_TABLES = {
     "knowledge_graph_projection_checkpoints",
 } | WP_301_MAPPING_TABLES
 MANAGED_TABLES |= WP_214B_DECISION_TABLES
+MANAGED_TABLES |= P3_03A_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1255,6 +1260,84 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    value_scan_inspector = inspect(postgres_engine)
+    assert P3_03A_TABLES <= set(value_scan_inspector.get_table_names())
+    value_scan_columns = {
+        column["name"]: column
+        for column in value_scan_inspector.get_columns("directional_value_scans")
+    }
+    assert set(value_scan_columns) == {
+        "id",
+        "organization_id",
+        "requested_by_user_id",
+        "idempotency_key",
+        "request_fingerprint",
+        "input_fingerprint",
+        "ranking_policy_code",
+        "ranking_policy_version",
+        "status",
+        "generated_at",
+        "candidate_finding_count",
+        "opportunity_count",
+        "data_gap_count",
+        "data_coverage_snapshot",
+        "trust_readiness_snapshot",
+        "customer_context_snapshot",
+        "opportunity_snapshot",
+        "data_gap_snapshot",
+        "next_investigation_snapshot",
+        "provenance_snapshot",
+        "limitations",
+        "result_content_hash",
+        "created_at",
+    }
+    assert str(value_scan_columns["id"]["type"]) == "UUID"
+    for json_column in (
+        "data_coverage_snapshot",
+        "trust_readiness_snapshot",
+        "customer_context_snapshot",
+        "opportunity_snapshot",
+        "data_gap_snapshot",
+        "next_investigation_snapshot",
+        "provenance_snapshot",
+        "limitations",
+    ):
+        assert str(value_scan_columns[json_column]["type"]) == "JSONB"
+    assert {
+        item["name"]
+        for item in value_scan_inspector.get_unique_constraints("directional_value_scans")
+    } == {
+        "uq_directional_value_scans_org_id",
+        "uq_directional_value_scans_org_idempotency",
+        "uq_directional_value_scans_org_input_fingerprint",
+    }
+    assert {
+        item["name"]
+        for item in value_scan_inspector.get_check_constraints("directional_value_scans")
+    } == {
+        "ck_directional_value_scans_status",
+        "ck_directional_value_scans_candidate_count_non_negative",
+        "ck_directional_value_scans_opportunity_count_non_negative",
+        "ck_directional_value_scans_data_gap_count_non_negative",
+        "ck_directional_value_scans_opportunity_within_candidates",
+    }
+    assert {
+        item["name"]
+        for item in value_scan_inspector.get_indexes("directional_value_scans")
+        if item.get("duplicates_constraint") is None
+    } == {
+        "ix_directional_value_scans_org_generated_at",
+        "ix_directional_value_scans_org_status",
+    }
+    value_scan_foreign_keys = value_scan_inspector.get_foreign_keys("directional_value_scans")
+    assert len(value_scan_foreign_keys) == 1
+    assert value_scan_foreign_keys[0]["referred_table"] == "organizations"
+    assert value_scan_foreign_keys[0]["constrained_columns"] == ["organization_id"]
+    command.downgrade(config, "20260809_0035")
+    assert not (P3_03A_TABLES & set(inspect(postgres_engine).get_table_names()))
+    command.upgrade(config, "head")
+    assert P3_03A_TABLES <= set(inspect(postgres_engine).get_table_names())
+
     wp_214b_tables = WP_214B_DECISION_TABLES
     decision_inspector = inspect(postgres_engine)
     assert wp_214b_tables <= set(decision_inspector.get_table_names())
@@ -1802,6 +1885,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_301_tables
         - WP_301_MAPPING_TABLES
         - wp_214b_tables
+        - P3_03A_TABLES
         <= wp_203_tables
     )
 
@@ -1813,6 +1897,136 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
+
+
+@pytest.mark.postgres
+def test_directional_value_scan_constraints_and_concurrency_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    def organization(session: Session, label: str) -> Organization:
+        row = Organization(
+            name=label,
+            slug=f"{label}-{uuid4().hex[:8]}",
+            country_code="US",
+            default_currency="USD",
+            timezone="UTC",
+        )
+        session.add(row)
+        session.commit()
+        return row
+
+    def scan(
+        organization_id: UUID,
+        *,
+        idempotency_key: str | None = None,
+        input_fingerprint: str | None = None,
+        candidate_count: int = 0,
+        opportunity_count: int = 0,
+        gap_count: int = 0,
+    ) -> DirectionalValueScan:
+        return DirectionalValueScan(
+            organization_id=organization_id,
+            requested_by_user_id=uuid4(),
+            idempotency_key=idempotency_key or f"postgres:{uuid4()}",
+            request_fingerprint=uuid4().hex + uuid4().hex,
+            input_fingerprint=input_fingerprint or uuid4().hex + uuid4().hex,
+            ranking_policy_code="P3.03A.DETERMINISTIC",
+            ranking_policy_version="1.0",
+            status="completed",
+            candidate_finding_count=candidate_count,
+            opportunity_count=opportunity_count,
+            data_gap_count=gap_count,
+            data_coverage_snapshot={},
+            trust_readiness_snapshot={},
+            customer_context_snapshot={},
+            opportunity_snapshot=[],
+            data_gap_snapshot=[],
+            next_investigation_snapshot=None,
+            provenance_snapshot={},
+            limitations=[],
+            result_content_hash=uuid4().hex + uuid4().hex,
+        )
+
+    with Session(postgres_engine) as session:
+        org = organization(session, "p303a-constraint")
+        for counts in ((-1, 0, 0), (0, -1, 0), (0, 0, -1), (1, 2, 0)):
+            session.add(
+                scan(
+                    org.id,
+                    candidate_count=counts[0],
+                    opportunity_count=counts[1],
+                    gap_count=counts[2],
+                )
+            )
+            with pytest.raises(IntegrityError):
+                session.commit()
+            session.rollback()
+
+        stable_input = uuid4().hex + uuid4().hex
+        session.add(
+            scan(
+                org.id,
+                idempotency_key="postgres:unique",
+                input_fingerprint=stable_input,
+            )
+        )
+        session.commit()
+        session.add(
+            scan(
+                org.id,
+                idempotency_key="postgres:unique",
+                input_fingerprint=uuid4().hex + uuid4().hex,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+        session.add(
+            scan(
+                org.id,
+                idempotency_key="postgres:different-key",
+                input_fingerprint=stable_input,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+    for repeat in range(5):
+        with Session(postgres_engine) as session:
+            org = organization(session, f"p303a-concurrency-{repeat}")
+            organization_id = org.id
+        actor_id = uuid4()
+        key = f"postgres:concurrent:{repeat}"
+        barrier = Barrier(2)
+
+        def create_scan() -> UUID:
+            with Session(postgres_engine) as worker_session:
+                barrier.wait()
+                row, _ = directional_value_scan_service.create(
+                    worker_session,
+                    organization_id,
+                    actor_id,
+                    key,
+                )
+                return row.id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            identifiers = list(executor.map(lambda _: create_scan(), range(2)))
+        assert identifiers[0] == identifiers[1]
+        with Session(postgres_engine) as session:
+            assert (
+                session.scalar(
+                    select(func.count(DirectionalValueScan.id)).where(
+                        DirectionalValueScan.organization_id == organization_id,
+                        DirectionalValueScan.idempotency_key == key,
+                    )
+                )
+                == 1
+            )
 
 
 @pytest.mark.postgres
