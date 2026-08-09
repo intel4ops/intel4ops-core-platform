@@ -15,7 +15,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from governed_provenance_helpers import add_eligible_dataset_version
-from sqlalchemy import Table, create_engine, func, insert, inspect, select, text
+from sqlalchemy import Table, create_engine, delete, func, insert, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +26,9 @@ from test_causal_intelligence_foundation import confirm_hypothesis as confirm_ca
 from test_causal_intelligence_foundation import make_org as make_causal_org
 from test_decision_intelligence_foundation import add_graph as add_decision_graph
 from test_decision_intelligence_foundation import make_org as make_decision_org
+from test_executive_narrative_service import FakeNarrativeProvider
+from test_executive_narrative_service import organization as narrative_organization
+from test_executive_narrative_service import scan as narrative_scan
 from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
@@ -93,6 +96,7 @@ from app.models.entities import (
     Organization,
     OrganizationMembership,
 )
+from app.models.executive_narrative import GroundedExecutiveNarrative
 from app.models.forecasting import (
     ForecastBacktest,
     ForecastCandidate,
@@ -131,6 +135,7 @@ from app.schemas.access import InvitationCreate
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.decision_intelligence import DecisionApprovalCreate
+from app.schemas.executive_narrative import ExecutiveNarrativeCreate
 from app.schemas.findings import CandidateFindingCreate
 from app.schemas.forecasting import ForecastExecutionCreate
 from app.schemas.ingestion import (
@@ -159,6 +164,7 @@ from app.services.decision_intelligence_service import (
     DecisionIntelligenceServiceError,
     decision_approval_service,
 )
+from app.services.executive_narrative_service import ExecutiveNarrativeService
 from app.services.finding_platform_service import (
     FindingPublicationService,
     FindingQueryService,
@@ -225,6 +231,7 @@ WP_301_MAPPING_TABLES = {
 
 P3_03A_TABLES = {"directional_value_scans"}
 P3_03B_TABLES = {"ai_operational_profiles", "ai_profile_inferences"}
+P3_03C_TABLES = {"grounded_executive_narratives"}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -409,6 +416,7 @@ MANAGED_TABLES = {
 MANAGED_TABLES |= WP_214B_DECISION_TABLES
 MANAGED_TABLES |= P3_03A_TABLES
 MANAGED_TABLES |= P3_03B_TABLES
+MANAGED_TABLES |= P3_03C_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -698,6 +706,70 @@ def test_postgres_tenant_integrity_objects_appear_only_at_owning_revisions(
     config = alembic_config(require_disposable_postgres_url())
     command.downgrade(config, "base")
     _assert_tenant_integrity_revision_boundaries(postgres_engine, config)
+
+
+@pytest.mark.postgres
+def test_grounded_narrative_concurrent_duplicate_generation_has_one_winner(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    with Session(postgres_engine) as setup:
+        organization = narrative_organization(setup, "narrative-concurrency")
+        source = narrative_scan(setup, organization.id, "concurrent")
+        organization_id = organization.id
+        scan_id = source.id
+
+    barrier = Barrier(2)
+
+    class ConcurrentProvider(FakeNarrativeProvider):
+        def generate_narrative(self, request: Any) -> Any:
+            barrier.wait(timeout=30)
+            return super().generate_narrative(request)
+
+    provider = ConcurrentProvider()
+    settings = Settings(ai_enabled=True, ai_api_key="fake", ai_model="fake-model")
+
+    def generate() -> UUID:
+        service = ExecutiveNarrativeService(settings)
+        service.set_provider_for_testing(provider)
+        with Session(postgres_engine) as session:
+            row = service.create(
+                session,
+                organization_id,
+                uuid4(),
+                ExecutiveNarrativeCreate(
+                    scan_id=scan_id,
+                    idempotency_key="concurrent-duplicate",
+                ),
+            )
+            return row.id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        identifiers = list(pool.map(lambda _: generate(), range(2)))
+
+    assert len(set(identifiers)) == 1
+    with Session(postgres_engine) as verification:
+        assert (
+            verification.scalar(
+                select(func.count())
+                .select_from(GroundedExecutiveNarrative)
+                .where(GroundedExecutiveNarrative.organization_id == organization_id)
+            )
+            == 1
+        )
+        verification.execute(
+            delete(GroundedExecutiveNarrative).where(
+                GroundedExecutiveNarrative.organization_id == organization_id
+            )
+        )
+        verification.execute(
+            delete(DirectionalValueScan).where(
+                DirectionalValueScan.organization_id == organization_id
+            )
+        )
+        verification.execute(delete(Organization).where(Organization.id == organization_id))
+        verification.commit()
 
 
 def assert_schema_at_head(engine: Engine) -> None:
@@ -1265,6 +1337,79 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
 
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
+
+    narrative_inspector = inspect(postgres_engine)
+    assert P3_03C_TABLES <= set(narrative_inspector.get_table_names())
+    narrative_columns = {
+        column["name"]: column
+        for column in narrative_inspector.get_columns("grounded_executive_narratives")
+    }
+    assert set(narrative_columns) == {
+        "id",
+        "organization_id",
+        "scan_id",
+        "profile_id",
+        "requested_by_user_id",
+        "idempotency_key",
+        "audience",
+        "status",
+        "provider_code",
+        "model_code",
+        "model_version",
+        "template_code",
+        "template_version",
+        "schema_version",
+        "request_hash",
+        "input_fingerprint",
+        "execution_fingerprint",
+        "source_scan_content_hash",
+        "source_profile_fingerprint",
+        "structured_source_snapshot",
+        "structured_narrative_snapshot",
+        "limitations",
+        "observability_snapshot",
+        "provider_failure_code",
+        "content_hash",
+        "generated_at",
+        "created_at",
+    }
+    assert {
+        name for name, column in narrative_columns.items() if str(column["type"]) == "JSONB"
+    } == {
+        "structured_source_snapshot",
+        "structured_narrative_snapshot",
+        "limitations",
+        "observability_snapshot",
+    }
+    assert {
+        item["name"]
+        for item in narrative_inspector.get_unique_constraints("grounded_executive_narratives")
+    } == {
+        "uq_grounded_narratives_org_id",
+        "uq_grounded_narratives_org_idempotency",
+        "uq_grounded_narratives_org_execution_fingerprint",
+    }
+    assert {
+        item["name"]
+        for item in narrative_inspector.get_check_constraints("grounded_executive_narratives")
+    } == {"ck_grounded_narratives_audience", "ck_grounded_narratives_status"}
+    assert {
+        (
+            tuple(item["constrained_columns"]),
+            item["referred_table"],
+            item["options"].get("ondelete"),
+        )
+        for item in narrative_inspector.get_foreign_keys("grounded_executive_narratives")
+    } == {
+        (("organization_id",), "organizations", "RESTRICT"),
+        (("organization_id", "scan_id"), "directional_value_scans", "RESTRICT"),
+        (("organization_id", "profile_id"), "ai_operational_profiles", "RESTRICT"),
+    }
+    command.downgrade(config, "20260811_0037")
+    assert not (P3_03C_TABLES & set(inspect(postgres_engine).get_table_names()))
+    assert P3_03B_TABLES <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert P3_03C_TABLES <= set(inspect(postgres_engine).get_table_names())
 
     ai_inspector = inspect(postgres_engine)
     assert P3_03B_TABLES <= set(ai_inspector.get_table_names())
@@ -1947,6 +2092,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - wp_214b_tables
         - P3_03A_TABLES
         - P3_03B_TABLES
+        - P3_03C_TABLES
         <= wp_203_tables
     )
 

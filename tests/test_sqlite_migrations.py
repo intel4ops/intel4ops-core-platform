@@ -7,10 +7,10 @@ from sqlalchemy import create_engine, inspect, text
 
 def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
     migration_source = Path(
-        "migrations/versions/20260811_0037_ai_operational_profiler.py"
+        "migrations/versions/20260812_0038_grounded_executive_narratives.py"
     ).read_text(encoding="utf-8")
     assert "Base.metadata" not in migration_source
-    assert migration_source.count("op.create_table(") == 2
+    assert migration_source.count("op.create_table(") == 1
     database_path = Path(__file__).parent / ".wp206_migration.sqlite"
     database_path.unlink(missing_ok=True)
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
@@ -182,6 +182,7 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             "knowledge_graph_projection_checkpoints",
         }
         p3_03b_tables = {"ai_operational_profiles", "ai_profile_inferences"}
+        p3_03c_tables = {"grounded_executive_narratives"}
         assert (
             wp_210_tables
             | wp_211_tables
@@ -195,8 +196,22 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_221_tables
             | wp_301_tables
             | p3_03b_tables
+            | p3_03c_tables
             <= set(inspect(engine).get_table_names())
         )
+        narrative_fks = inspect(engine).get_foreign_keys("grounded_executive_narratives")
+        assert {
+            (tuple(item["constrained_columns"]), item["referred_table"]) for item in narrative_fks
+        } == {
+            (("organization_id",), "organizations"),
+            (("organization_id", "scan_id"), "directional_value_scans"),
+            (("organization_id", "profile_id"), "ai_operational_profiles"),
+        }
+        command.downgrade(config, "20260811_0037")
+        assert not (p3_03c_tables & set(inspect(engine).get_table_names()))
+        assert p3_03b_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert p3_03c_tables <= set(inspect(engine).get_table_names())
         ai_inference_fks = inspect(engine).get_foreign_keys("ai_profile_inferences")
         assert {
             (tuple(item["constrained_columns"]), item["referred_table"])
