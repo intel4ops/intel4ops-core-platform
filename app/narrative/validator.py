@@ -36,6 +36,8 @@ def validate_narrative_draft(
 ) -> None:
     if draft.organization_id != organization_id or draft.scan_id != scan_id:
         raise NarrativeValidationError("provider output crossed the governed tenant boundary")
+    if len(draft.headline.wording) > 120:
+        raise NarrativeValidationError("headline exceeds the character limit")
     if draft.headline.claim_type is ClaimType.UNKNOWN:
         raise NarrativeValidationError("unknown claims cannot be rendered")
     word_count = sum(len(item.wording.split()) for item in draft.executive_summary)
@@ -92,9 +94,16 @@ def validate_narrative_draft(
             raise NarrativeValidationError("provider returned an unknown evidence reference")
         if set(claim.value_reference_ids) - allowed_value_references:
             raise NarrativeValidationError("provider returned an unknown value reference")
+        if claim.claim_type is ClaimType.POTENTIAL_EXPOSURE and not claim.value_reference_ids:
+            raise NarrativeValidationError("potential exposure requires a governed value")
         if claim.value_reference_ids and claim.claim_type is not ClaimType.POTENTIAL_EXPOSURE:
             raise NarrativeValidationError("governed values require a potential-exposure claim")
 
     opportunity_refs = set(allowed_claim_types)
     if any(item.opportunity_reference_id not in opportunity_refs for item in draft.opportunities):
         raise NarrativeValidationError("provider returned an unknown opportunity reference")
+    if any(
+        item.opportunity_reference_id not in item.narrative.source_reference_ids
+        for item in draft.opportunities
+    ):
+        raise NarrativeValidationError("opportunity narrative references a different opportunity")

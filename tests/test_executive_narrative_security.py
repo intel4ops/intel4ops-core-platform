@@ -36,6 +36,7 @@ def _draft(
         "Exposure is 5000000.",
         "Performance improved 10%.",
         "Exposure is USD five million.",
+        "Combined USD and EUR exposure is material.",
         "Exposure is five million.",
         "These are verified savings.",
         "The root cause is identified.",
@@ -101,4 +102,17 @@ def test_provider_cannot_replace_next_investigation() -> None:
             allowed,
             set(),
             next_ref,
+        )
+
+
+def test_headline_and_structured_item_bounds_are_hard_gates() -> None:
+    draft, allowed = _draft("x" * 121)
+    with pytest.raises(NarrativeValidationError):
+        validate_narrative_draft(draft, draft.organization_id, draft.scan_id, allowed, set(), None)
+
+    with pytest.raises(ValueError):
+        NarrativeClaimDraft(
+            claim_type=ClaimType.GOVERNED_SCAN_FACT,
+            wording="x" * 501,
+            source_reference_ids=["scan:bounded"],
         )

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.narrative.claim_policy import ClaimConfidence, ClaimType
+
+BoundedText = Annotated[str, Field(min_length=1, max_length=500)]
+ReferenceId = Annotated[str, Field(min_length=1, max_length=255)]
 
 
 class NarrativeClaimDraft(BaseModel):
@@ -14,17 +17,17 @@ class NarrativeClaimDraft(BaseModel):
 
     claim_type: ClaimType
     wording: str = Field(min_length=1, max_length=500)
-    source_reference_ids: list[str] = Field(min_length=1, max_length=10)
-    evidence_reference_ids: list[str] = Field(default_factory=list, max_length=10)
+    source_reference_ids: list[ReferenceId] = Field(min_length=1, max_length=10)
+    evidence_reference_ids: list[ReferenceId] = Field(default_factory=list, max_length=10)
     confidence: ClaimConfidence = ClaimConfidence.NOT_ASSESSED
-    limitations: list[str] = Field(default_factory=list, max_length=3)
-    value_reference_ids: list[str] = Field(default_factory=list, max_length=5)
+    limitations: list[BoundedText] = Field(default_factory=list, max_length=3)
+    value_reference_ids: list[ReferenceId] = Field(default_factory=list, max_length=5)
 
 
 class NarrativeOpportunityDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    opportunity_reference_id: str
+    opportunity_reference_id: ReferenceId
     narrative: NarrativeClaimDraft
 
 
@@ -42,7 +45,7 @@ class StructuredNarrativeDraft(BaseModel):
     limitations: list[NarrativeClaimDraft] = Field(default_factory=list, max_length=5)
     data_gaps: list[NarrativeClaimDraft] = Field(default_factory=list, max_length=5)
     recommended_next_step: NarrativeClaimDraft | None = None
-    provider_limitations: list[str] = Field(default_factory=list, max_length=5)
+    provider_limitations: list[BoundedText] = Field(default_factory=list, max_length=5)
 
 
 class NarrativeValue(BaseModel):

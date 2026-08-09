@@ -27,7 +27,11 @@ from app.models.value_scan import DirectionalValueScan
 from app.narrative.claim_policy import ClaimType
 from app.narrative.renderer import deterministic_fallback, render_narrative
 from app.narrative.validator import NarrativeValidationError, validate_narrative_draft
-from app.schemas.executive_narrative import ExecutiveNarrativeCreate, StructuredNarrative
+from app.schemas.executive_narrative import (
+    ExecutiveNarrativeCreate,
+    StructuredNarrative,
+    StructuredNarrativeDraft,
+)
 
 TEMPLATE_CODE = "GROUNDED_EXECUTIVE_NARRATIVE_V1"
 TEMPLATE_VERSION = "1.0"
@@ -219,8 +223,11 @@ class ExecutiveNarrativeService:
                         "Narrative provider input exceeds the governed limit"
                     )
                 result = self._provider().generate_narrative(request)
+                validated_response = StructuredNarrativeDraft.model_validate(
+                    result.response.model_dump(mode="json")
+                )
                 validate_narrative_draft(
-                    result.response,
+                    validated_response,
                     organization_id,
                     scan.id,
                     allowed_claim_types,
@@ -231,7 +238,7 @@ class ExecutiveNarrativeService:
                         else None
                     ),
                 )
-                narrative = render_narrative(result.response, values)
+                narrative = render_narrative(validated_response, values)
                 status = "completed"
                 provider_code = result.provider_code
                 model_code = result.model_code

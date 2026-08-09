@@ -304,6 +304,26 @@ def test_provider_failure_persists_complete_deterministic_fallback(
     assert "incomplete" in str(created.structured_narrative_snapshot).lower()
 
 
+def test_service_revalidates_preconstructed_oversized_provider_output(db: Session) -> None:
+    org = organization(db, "fallback-oversized")
+    source = scan(db, org.id, "oversized", status="partial")
+
+    def oversized(request: StructuredNarrativeRequest) -> StructuredNarrativeDraft:
+        response = valid_draft(request)
+        response.headline.wording = "x" * 501
+        return response
+
+    created = service(FakeNarrativeProvider(oversized)).create(
+        db,
+        org.id,
+        uuid4(),
+        ExecutiveNarrativeCreate(scan_id=source.id, idempotency_key="oversized"),
+    )
+    assert created.status == "fallback"
+    assert created.provider_failure_code == "INVALID_PROVIDER_RESPONSE"
+    assert "x" * 121 not in str(created.structured_narrative_snapshot)
+
+
 def test_cross_tenant_scan_rejected_before_provider(db: Session) -> None:
     owner = organization(db, "narrative-owner")
     other = organization(db, "narrative-other")
