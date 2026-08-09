@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from app.api.access_routes import me_router
 from app.api.access_routes import organization_router as access_organization_router
 from app.api.action_routes import router as action_router
+from app.api.ai_profile_routes import router as ai_profile_router
 from app.api.canonical_mapping_routes import catalog_router as canonical_mapping_catalog_router
 from app.api.canonical_mapping_routes import tenant_router as canonical_mapping_tenant_router
 from app.api.causal_intelligence_routes import catalog_router as causal_intelligence_catalog_router
@@ -133,6 +134,7 @@ app.include_router(statistical_router)
 app.include_router(forecasting_router)
 app.include_router(reliability_router)
 app.include_router(action_router)
+app.include_router(ai_profile_router)
 app.include_router(canonical_mapping_catalog_router)
 app.include_router(canonical_mapping_tenant_router)
 app.include_router(economics_router)
