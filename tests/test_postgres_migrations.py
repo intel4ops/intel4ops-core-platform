@@ -20,6 +20,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from test_ai_operational_profile_service import FakeProvider
+from test_ai_operational_profile_service import item as ai_profile_item
 from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
 from test_causal_intelligence_foundation import make_org as make_causal_org
 from test_decision_intelligence_foundation import add_graph as add_decision_graph
@@ -79,6 +81,7 @@ from test_ti_c2_referential_integrity import _action as ti_c2_action
 from test_ti_c2_referential_integrity import _organization as ti_c2_organization
 from test_trust_service import trust_foundation
 
+from app.core.config import Settings
 from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
@@ -147,6 +150,7 @@ from app.services.access_context_service import (
     OrganizationProvisioningError,
     create_organization_with_owner,
 )
+from app.services.ai_operational_profile_service import AIOperationalProfileService
 from app.services.causal_intelligence_service import (
     CausalIntelligenceServiceError,
     causal_review_service,
@@ -220,6 +224,7 @@ WP_301_MAPPING_TABLES = {
 }
 
 P3_03A_TABLES = {"directional_value_scans"}
+P3_03B_TABLES = {"ai_operational_profiles", "ai_profile_inferences"}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -403,6 +408,7 @@ MANAGED_TABLES = {
 } | WP_301_MAPPING_TABLES
 MANAGED_TABLES |= WP_214B_DECISION_TABLES
 MANAGED_TABLES |= P3_03A_TABLES
+MANAGED_TABLES |= P3_03B_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1260,6 +1266,60 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    ai_inspector = inspect(postgres_engine)
+    assert P3_03B_TABLES <= set(ai_inspector.get_table_names())
+    profile_columns = {
+        column["name"]: column for column in ai_inspector.get_columns("ai_operational_profiles")
+    }
+    inference_columns = {
+        column["name"]: column for column in ai_inspector.get_columns("ai_profile_inferences")
+    }
+    assert {
+        "profile_summary_snapshot",
+        "input_provenance_snapshot",
+        "observability_snapshot",
+        "limitations",
+    } <= {name for name, column in profile_columns.items() if str(column["type"]) == "JSONB"}
+    assert {
+        "evidence_references",
+        "alternative_candidates",
+        "provider_metadata",
+    } <= {name for name, column in inference_columns.items() if str(column["type"]) == "JSONB"}
+    assert {
+        item["name"] for item in ai_inspector.get_unique_constraints("ai_operational_profiles")
+    } == {
+        "uq_ai_operational_profiles_org_id",
+        "uq_ai_operational_profiles_org_idempotency",
+        "uq_ai_operational_profiles_org_execution_fingerprint",
+    }
+    assert {
+        item["name"] for item in ai_inspector.get_check_constraints("ai_profile_inferences")
+    } == {
+        "ck_ai_profile_inferences_confidence",
+        "ck_ai_profile_inferences_status",
+        "ck_ai_profile_inferences_sequence",
+    }
+    assert {
+        (
+            tuple(item["constrained_columns"]),
+            item["referred_table"],
+            item["options"].get("ondelete"),
+        )
+        for item in ai_inspector.get_foreign_keys("ai_profile_inferences")
+    } == {
+        (("organization_id",), "organizations", "RESTRICT"),
+        (
+            ("organization_id", "profile_id"),
+            "ai_operational_profiles",
+            "CASCADE",
+        ),
+    }
+    command.downgrade(config, "20260810_0036")
+    assert not (P3_03B_TABLES & set(inspect(postgres_engine).get_table_names()))
+    assert P3_03A_TABLES <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert P3_03B_TABLES <= set(inspect(postgres_engine).get_table_names())
+
     value_scan_inspector = inspect(postgres_engine)
     assert P3_03A_TABLES <= set(value_scan_inspector.get_table_names())
     value_scan_columns = {
@@ -1886,6 +1946,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - WP_301_MAPPING_TABLES
         - wp_214b_tables
         - P3_03A_TABLES
+        - P3_03B_TABLES
         <= wp_203_tables
     )
 
@@ -5205,3 +5266,54 @@ def test_concurrent_objective_replace_serializes_and_leaves_one_consistent_set(
             .where(OrganizationObjective.organization_id == organization_id)
         )
         assert row_count == 1
+
+
+@pytest.mark.postgres
+def test_ai_profile_concurrent_idempotent_creation_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    with Session(postgres_engine) as session:
+        organization = Organization(
+            name="AI profile concurrency",
+            slug=f"ai-profile-concurrency-{uuid4().hex[:12]}",
+            country_code="US",
+            default_currency="USD",
+            timezone="UTC",
+        )
+        session.add(organization)
+        session.commit()
+        organization_id = organization.id
+
+    provider = FakeProvider(
+        [
+            ai_profile_item(
+                "INDUSTRY",
+                "manufacturing",
+                f"organization:{organization_id}",
+            )
+        ]
+    )
+    service = AIOperationalProfileService(
+        Settings(ai_enabled=True, ai_api_key="obviously-fake-test-key")
+    )
+    service.set_provider_for_testing(provider)
+    actor_id = uuid4()
+    barrier = Barrier(2)
+
+    def create_profile() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            return service.create(
+                session,
+                organization_id,
+                actor_id,
+                "postgres:ai-profile:concurrent",
+            ).id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(create_profile)
+        second = executor.submit(create_profile)
+        assert first.result(timeout=20) == second.result(timeout=20)
+    assert len(provider.calls) == 1

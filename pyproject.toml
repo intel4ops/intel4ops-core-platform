@@ -21,6 +21,7 @@ dependencies = [
   "psycopg[binary]>=3.2,<4.0",
   "scipy>=1.12,<2.0",
   "PyJWT[crypto]>=2.9,<3.0",
+  "openai>=2.0,<3.0",
 ]
 
 [tool.setuptools.packages.find]

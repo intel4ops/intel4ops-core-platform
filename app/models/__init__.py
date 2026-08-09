@@ -2,6 +2,7 @@ from app.models.access import (
     AccessAuditEvent,
     OrganizationInvitation,
 )
+from app.models.ai_profile import AIOperationalProfile, AIProfileInference
 from app.models.canonical_mapping import (
     CanonicalEntity,
     CanonicalEntityType,
@@ -227,6 +228,8 @@ from app.models.workspace import (
 
 __all__ = [
     "AccessAuditEvent",
+    "AIOperationalProfile",
+    "AIProfileInference",
     "OrganizationInvitation",
     "DecisionAlternative",
     "DecisionApproval",
