@@ -159,6 +159,11 @@ from app.models.oikb import (
     OIKBValidationCase,
     OIKBValidationResult,
 )
+from app.models.operational_memory import (
+    OperationalMemoryItem,
+    OperationalMemoryReuseEvent,
+    OperationalMemoryVersion,
+)
 from app.models.orchestration import (
     IntelligenceEngineRegistration,
     IntelligenceOrchestrationDecision,
@@ -403,6 +408,9 @@ __all__ = [
     "OIKBSource",
     "OIKBValidationCase",
     "OIKBValidationResult",
+    "OperationalMemoryItem",
+    "OperationalMemoryReuseEvent",
+    "OperationalMemoryVersion",
     "AnomalyReviewFeedback",
     "AnomalySuppressionRecord",
     "StatisticalBaseline",
