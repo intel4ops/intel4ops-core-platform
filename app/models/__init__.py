@@ -93,6 +93,7 @@ from app.models.decision_intelligence import (
     DecisionSolution,
     DecisionVariableDefinition,
 )
+from app.models.executive_narrative import GroundedExecutiveNarrative
 from app.models.findings import (
     FindingCalculationTrace,
     FindingEvidenceBundle,
@@ -361,6 +362,7 @@ __all__ = [
     "TrustEvidence",
     "TrustRuleResult",
     "DirectionalValueScan",
+    "GroundedExecutiveNarrative",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",
     "IntelligenceEngineRegistration",
