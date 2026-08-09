@@ -249,6 +249,11 @@ WP_301_MAPPING_TABLES = {
 P3_03A_TABLES = {"directional_value_scans"}
 P3_03B_TABLES = {"ai_operational_profiles", "ai_profile_inferences"}
 P3_03C_TABLES = {"grounded_executive_narratives"}
+P3_03DA_TABLES = {
+    "operational_memory_items",
+    "operational_memory_versions",
+    "operational_memory_reuse_events",
+}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -434,6 +439,7 @@ MANAGED_TABLES |= WP_214B_DECISION_TABLES
 MANAGED_TABLES |= P3_03A_TABLES
 MANAGED_TABLES |= P3_03B_TABLES
 MANAGED_TABLES |= P3_03C_TABLES
+MANAGED_TABLES |= P3_03DA_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1355,6 +1361,117 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    memory_inspector = inspect(postgres_engine)
+    assert P3_03DA_TABLES <= set(memory_inspector.get_table_names())
+    assert {
+        column["name"] for column in memory_inspector.get_columns("operational_memory_items")
+    } == {
+        "id",
+        "organization_id",
+        "category",
+        "subject_kind",
+        "normalized_subject",
+        "source_system_family",
+        "canonical_domain",
+        "context_signature",
+        "memory_fingerprint",
+        "normalization_policy_code",
+        "identity_policy_code",
+        "current_version_number",
+        "current_status",
+        "support_count",
+        "contradiction_count",
+        "confirmation_count",
+        "rejection_count",
+        "is_stale",
+        "stale_reason_code",
+        "stale_detected_at",
+        "last_confirmed_at",
+        "last_validated_at",
+        "valid_from",
+        "valid_to",
+        "security_classification",
+        "retention_until",
+        "created_at",
+        "updated_at",
+    }
+    assert {
+        name
+        for table in P3_03DA_TABLES
+        for name, column in {
+            column["name"]: column for column in memory_inspector.get_columns(table)
+        }.items()
+        if str(column["type"]) == "JSONB"
+    } == {"value_payload", "provenance_snapshot", "match_reasons"}
+    assert {
+        item["name"] for item in memory_inspector.get_unique_constraints("operational_memory_items")
+    } == {
+        "uq_operational_memory_items_org_id",
+        "uq_operational_memory_items_org_fingerprint",
+    }
+    assert {
+        item["name"] for item in memory_inspector.get_check_constraints("operational_memory_items")
+    } == {
+        "ck_operational_memory_items_category",
+        "ck_operational_memory_items_subject_kind",
+        "ck_operational_memory_items_category_subject",
+        "ck_operational_memory_items_status",
+        "ck_operational_memory_items_version",
+        "ck_operational_memory_items_counts",
+        "ck_operational_memory_items_validity",
+        "ck_operational_memory_items_security",
+        "ck_operational_memory_items_stale_projection",
+        "ck_operational_memory_items_hashes",
+    }
+    assert {
+        item["name"]
+        for table in P3_03DA_TABLES
+        for item in memory_inspector.get_indexes(table)
+        if not item.get("duplicates_constraint")
+    } >= {
+        "ix_operational_memory_items_org_status_category",
+        "ix_operational_memory_items_org_category_source_domain",
+        "ix_operational_memory_items_org_category_subject",
+        "ix_operational_memory_items_org_category_context",
+        "ix_operational_memory_items_org_stale",
+        "ix_operational_memory_items_org_retention",
+        "ix_operational_memory_versions_org_source_schema",
+        "ix_operational_memory_versions_org_mapping_result",
+        "ix_operational_memory_versions_org_supersedes",
+        "ix_operational_memory_reuse_org_consumer_time",
+        "ix_operational_memory_reuse_org_memory_time",
+    }
+    assert {
+        (
+            item["name"],
+            tuple(item["constrained_columns"]),
+            item["referred_table"],
+        )
+        for table in P3_03DA_TABLES
+        for item in memory_inspector.get_foreign_keys(table)
+    } >= {
+        (
+            "fk_operational_memory_versions_org_memory",
+            ("organization_id", "memory_id"),
+            "operational_memory_items",
+        ),
+        (
+            "fk_operational_memory_versions_org_supersedes",
+            ("organization_id", "memory_id", "supersedes_version_id"),
+            "operational_memory_versions",
+        ),
+        (
+            "fk_operational_memory_reuse_org_version",
+            ("organization_id", "memory_id", "memory_version_id"),
+            "operational_memory_versions",
+        ),
+    }
+    command.downgrade(config, "20260812_0038")
+    assert not (P3_03DA_TABLES & set(inspect(postgres_engine).get_table_names()))
+    assert P3_03C_TABLES <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert P3_03DA_TABLES <= set(inspect(postgres_engine).get_table_names())
+
     narrative_inspector = inspect(postgres_engine)
     assert P3_03C_TABLES <= set(narrative_inspector.get_table_names())
     narrative_columns = {
@@ -2110,6 +2227,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - P3_03A_TABLES
         - P3_03B_TABLES
         - P3_03C_TABLES
+        - P3_03DA_TABLES
         <= wp_203_tables
     )
 

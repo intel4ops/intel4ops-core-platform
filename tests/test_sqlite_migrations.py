@@ -7,10 +7,10 @@ from sqlalchemy import create_engine, inspect, text
 
 def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
     migration_source = Path(
-        "migrations/versions/20260812_0038_grounded_executive_narratives.py"
+        "migrations/versions/20260813_0039_operational_memory_foundation.py"
     ).read_text(encoding="utf-8")
     assert "Base.metadata" not in migration_source
-    assert migration_source.count("op.create_table(") == 1
+    assert migration_source.count("op.create_table(") == 3
     database_path = Path(__file__).parent / ".wp206_migration.sqlite"
     database_path.unlink(missing_ok=True)
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
@@ -183,6 +183,11 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
         }
         p3_03b_tables = {"ai_operational_profiles", "ai_profile_inferences"}
         p3_03c_tables = {"grounded_executive_narratives"}
+        p3_03da_tables = {
+            "operational_memory_items",
+            "operational_memory_versions",
+            "operational_memory_reuse_events",
+        }
         assert (
             wp_210_tables
             | wp_211_tables
@@ -197,8 +202,27 @@ def test_sqlite_migration_upgrade_downgrade_reupgrade() -> None:
             | wp_301_tables
             | p3_03b_tables
             | p3_03c_tables
+            | p3_03da_tables
             <= set(inspect(engine).get_table_names())
         )
+        memory_fks = {
+            (tuple(item["constrained_columns"]), item["referred_table"])
+            for item in inspect(engine).get_foreign_keys("operational_memory_versions")
+        }
+        assert {
+            (("organization_id", "memory_id"), "operational_memory_items"),
+            (
+                ("organization_id", "memory_id", "supersedes_version_id"),
+                "operational_memory_versions",
+            ),
+            (("organization_id", "source_schema_id"), "source_schemas"),
+            (("organization_id", "mapping_record_result_id"), "mapping_record_results"),
+        } <= memory_fks
+        command.downgrade(config, "20260812_0038")
+        assert not (p3_03da_tables & set(inspect(engine).get_table_names()))
+        assert p3_03c_tables <= set(inspect(engine).get_table_names())
+        command.upgrade(config, "head")
+        assert p3_03da_tables <= set(inspect(engine).get_table_names())
         narrative_fks = inspect(engine).get_foreign_keys("grounded_executive_narratives")
         assert {
             (tuple(item["constrained_columns"]), item["referred_table"]) for item in narrative_fks
