@@ -14,6 +14,7 @@ from app.models.ingestion import Dataset, IngestionBatch
 from app.models.trust import AnalyticalReadinessDecision, ReadinessStatus
 from app.models.workspace import OrganizationChallenge, OrganizationObjective, OrganizationSystem
 from app.registries.challenge_registry import is_valid_challenge_code
+from app.registries.industry_registry import is_valid_industry_code
 from app.registries.objective_registry import is_valid_objective_code
 from app.registries.system_registry import get_system, is_valid_system_code
 from app.schemas.workspace import (
@@ -416,3 +417,107 @@ def get_workspace_summary(
         handoff_state=handoff_state,
         next_step=next_step,
     )
+
+
+def reconcile_ai_profile_context(
+    db: Session,
+    organization_id: UUID,
+    inference_type: str,
+    code: str | None,
+    value: str | None,
+    actor_user_id: UUID,
+) -> None:
+    """Apply one explicitly confirmed AI context item inside the caller's transaction.
+
+    This is intentionally part of the P3.02 service boundary so the AI domain cannot
+    write around governed registries or replace existing customer selections.
+    """
+    organization = _lock_organization(db, organization_id)
+    if inference_type == "INDUSTRY":
+        if code is None or not is_valid_industry_code(code):
+            raise WorkspaceServiceError(
+                "Industry confirmation requires a governed industry code",
+                code="invalid_registry_code",
+            )
+        organization.industry = code
+    elif inference_type == "SUB_INDUSTRY":
+        normalized = (value or code or "").strip()
+        if not normalized or len(normalized) > 100:
+            raise WorkspaceServiceError(
+                "Sub-industry confirmation is invalid",
+                code="invalid_profile_context",
+            )
+        organization.sub_industry = normalized
+    elif inference_type == "BUSINESS_OBJECTIVE":
+        if code is None or not is_valid_objective_code(code):
+            raise WorkspaceServiceError(
+                "Objective confirmation requires a governed objective code",
+                code="invalid_registry_code",
+            )
+        exists = db.scalar(
+            select(OrganizationObjective.id).where(
+                OrganizationObjective.organization_id == organization_id,
+                OrganizationObjective.objective_code == code,
+            )
+        )
+        if exists is None:
+            db.add(
+                OrganizationObjective(
+                    organization_id=organization_id,
+                    objective_code=code,
+                    selected_by_user_id=actor_user_id,
+                )
+            )
+    elif inference_type == "OPERATIONAL_CHALLENGE":
+        if code is None or not is_valid_challenge_code(code):
+            raise WorkspaceServiceError(
+                "Challenge confirmation requires a governed challenge code",
+                code="invalid_registry_code",
+            )
+        exists = db.scalar(
+            select(OrganizationChallenge.id).where(
+                OrganizationChallenge.organization_id == organization_id,
+                OrganizationChallenge.challenge_code == code,
+            )
+        )
+        if exists is None:
+            db.add(
+                OrganizationChallenge(
+                    organization_id=organization_id,
+                    challenge_code=code,
+                    selected_by_user_id=actor_user_id,
+                )
+            )
+    elif inference_type == "SYSTEM_IN_USE":
+        if code is None or not is_valid_system_code(code):
+            raise WorkspaceServiceError(
+                "System confirmation requires a governed system code",
+                code="invalid_registry_code",
+            )
+        definition = get_system(code)
+        assert definition is not None
+        label = (value or "").strip() or None
+        if definition.allows_custom_label and label is None:
+            raise WorkspaceServiceError(
+                "A custom label is required for this system",
+                code="invalid_system_selection",
+            )
+        if not definition.allows_custom_label:
+            label = None
+        exists = db.scalar(
+            select(OrganizationSystem.id).where(
+                OrganizationSystem.organization_id == organization_id,
+                OrganizationSystem.system_code == code,
+                OrganizationSystem.custom_label == label,
+            )
+        )
+        if exists is None:
+            db.add(
+                OrganizationSystem(
+                    organization_id=organization_id,
+                    system_code=code,
+                    custom_label=label,
+                    selected_by_user_id=actor_user_id,
+                )
+            )
+    db.flush()
