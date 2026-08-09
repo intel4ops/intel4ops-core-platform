@@ -17,6 +17,7 @@ from app.api.commercial_routes import tenant_router as commercial_tenant_router
 from app.api.decision_intelligence_routes import catalog_router as decision_catalog_router
 from app.api.decision_intelligence_routes import tenant_router as decision_tenant_router
 from app.api.economics_routes import router as economics_router
+from app.api.executive_narrative_routes import router as executive_narrative_router
 from app.api.finding_routes import router as finding_router
 from app.api.forecasting_routes import router as forecasting_router
 from app.api.gateway_routes import router as gateway_router
@@ -155,5 +156,6 @@ app.include_router(causal_intelligence_tenant_router)
 app.include_router(decision_catalog_router)
 app.include_router(decision_tenant_router)
 app.include_router(value_scan_router)
+app.include_router(executive_narrative_router)
 app.include_router(workspace_catalog_router)
 app.include_router(workspace_tenant_router)
