@@ -86,6 +86,12 @@ _PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "TERMINOLOGY": TerminologyPayload,
 }
 _REUSABLE = {"CONFIRMED", "CORRECTED"}
+_CANDIDATE_CONFLICT_CONSTRAINTS = {
+    "uq_operational_memory_items_org_fingerprint",
+    "uq_operational_memory_versions_org_idempotency",
+    "uq_operational_memory_versions_org_memory_version",
+}
+_REUSE_IDEMPOTENCY_CONSTRAINT = "uq_operational_memory_reuse_idempotency_sequence"
 
 
 class OperationalMemoryServiceError(ValueError):
@@ -261,87 +267,90 @@ class OperationalMemoryService:
         if existing_version is not None:
             return self._item(db, organization_id, existing_version.memory_id), existing_version
 
-        item = db.scalar(
-            select(OperationalMemoryItem)
-            .where(
-                OperationalMemoryItem.organization_id == organization_id,
-                OperationalMemoryItem.category == payload.category,
-                OperationalMemoryItem.memory_fingerprint == fingerprint,
-            )
-            .with_for_update()
-        )
-        now = utc_now()
-        if item is None:
-            item = OperationalMemoryItem(
-                organization_id=organization_id,
-                category=payload.category,
-                subject_kind=payload.subject_kind,
-                normalized_subject=normalized,
-                source_system_family=payload.source_system_family,
-                canonical_domain=payload.canonical_domain,
-                context_signature=signature,
-                memory_fingerprint=fingerprint,
-                current_version_number=1,
-                current_status="OBSERVED",
-                support_count=1,
-                valid_from=now,
-                valid_to=payload.valid_to,
-                security_classification=payload.security_classification,
-                retention_until=now + timedelta(days=180),
-                created_at=now,
-                updated_at=now,
-            )
-            db.add(item)
-            db.flush()
-            prior = None
-            version_number = 1
-            status = "OBSERVED"
-        else:
-            prior = self._current_version(db, item)
-            version_number = item.current_version_number + 1
-            same_value = _canonical_json(prior.value_payload) == _canonical_json(value_payload)
-            if same_value:
-                status = (
-                    "OBSERVED"
-                    if item.current_status in {"REJECTED", "DEPRECATED"}
-                    else item.current_status
-                )
-                item.support_count += 1
-                if status == "OBSERVED":
-                    self._clear_stale(item)
-            else:
-                status = "AMBIGUOUS"
-                item.contradiction_count += 1
-                item.is_stale = True
-                item.stale_reason_code = "CONTRADICTORY_EVIDENCE"
-                item.stale_detected_at = now
-                provenance["conflicting_version_ids"] = [str(prior.id)]
-
-        version = self._new_version(
-            item=item,
-            version_number=version_number,
-            prior=prior,
-            status=status,
-            value_payload=value_payload,
-            provenance=provenance,
-            source_schema_id=payload.provenance.source_schema_id,
-            mapping_record_result_id=payload.provenance.mapping_record_result_id,
-            source_fingerprint=payload.source_fingerprint.casefold(),
-            request_fingerprint=request_fingerprint,
-            idempotency_key=payload.idempotency_key,
-            actor_user_id=actor_user_id,
-            actor_role=actor_role,
-            effective_from=now,
-        )
-        db.add(version)
-        item.current_version_number = version_number
-        item.current_status = status
-        item.last_validated_at = now
-        item.updated_at = now
         try:
+            item = db.scalar(
+                select(OperationalMemoryItem)
+                .where(
+                    OperationalMemoryItem.organization_id == organization_id,
+                    OperationalMemoryItem.category == payload.category,
+                    OperationalMemoryItem.memory_fingerprint == fingerprint,
+                )
+                .with_for_update()
+            )
+            now = utc_now()
+            if item is None:
+                item = OperationalMemoryItem(
+                    organization_id=organization_id,
+                    category=payload.category,
+                    subject_kind=payload.subject_kind,
+                    normalized_subject=normalized,
+                    source_system_family=payload.source_system_family,
+                    canonical_domain=payload.canonical_domain,
+                    context_signature=signature,
+                    memory_fingerprint=fingerprint,
+                    current_version_number=1,
+                    current_status="OBSERVED",
+                    support_count=1,
+                    valid_from=now,
+                    valid_to=payload.valid_to,
+                    security_classification=payload.security_classification,
+                    retention_until=now + timedelta(days=180),
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(item)
+                db.flush()
+                prior = None
+                version_number = 1
+                status = "OBSERVED"
+            else:
+                prior = self._current_version(db, item)
+                version_number = item.current_version_number + 1
+                same_value = _canonical_json(prior.value_payload) == _canonical_json(value_payload)
+                if same_value:
+                    status = (
+                        "OBSERVED"
+                        if item.current_status in {"REJECTED", "DEPRECATED"}
+                        else item.current_status
+                    )
+                    item.support_count += 1
+                    if status == "OBSERVED":
+                        self._clear_stale(item)
+                else:
+                    status = "AMBIGUOUS"
+                    item.contradiction_count += 1
+                    item.is_stale = True
+                    item.stale_reason_code = "CONTRADICTORY_EVIDENCE"
+                    item.stale_detected_at = now
+                    provenance["conflicting_version_ids"] = [str(prior.id)]
+
+            version = self._new_version(
+                item=item,
+                version_number=version_number,
+                prior=prior,
+                status=status,
+                value_payload=value_payload,
+                provenance=provenance,
+                source_schema_id=payload.provenance.source_schema_id,
+                mapping_record_result_id=payload.provenance.mapping_record_result_id,
+                source_fingerprint=payload.source_fingerprint.casefold(),
+                request_fingerprint=request_fingerprint,
+                idempotency_key=payload.idempotency_key,
+                actor_user_id=actor_user_id,
+                actor_role=actor_role,
+                effective_from=now,
+            )
+            db.add(version)
+            item.current_version_number = version_number
+            item.current_status = status
+            item.last_validated_at = now
+            item.updated_at = now
             db.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             db.rollback()
+            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if constraint not in _CANDIDATE_CONFLICT_CONSTRAINTS:
+                raise
             concurrent = self._idempotent_version(
                 db, organization_id, payload.idempotency_key, request_fingerprint
             )
@@ -622,7 +631,29 @@ class OperationalMemoryService:
                     occurred_at=now,
                 )
             )
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if constraint != _REUSE_IDEMPOTENCY_CONSTRAINT:
+                raise
+            winning_events = list(
+                db.scalars(
+                    select(OperationalMemoryReuseEvent)
+                    .where(
+                        OperationalMemoryReuseEvent.organization_id == organization_id,
+                        OperationalMemoryReuseEvent.consumer_code == RETRIEVAL_CONSUMER,
+                        OperationalMemoryReuseEvent.idempotency_key == payload.idempotency_key,
+                    )
+                    .order_by(OperationalMemoryReuseEvent.event_sequence)
+                )
+            )
+            if not winning_events:
+                raise
+            if any(event.request_fingerprint != request_fingerprint for event in winning_events):
+                _fail("IDEMPOTENCY_CONFLICT", "Idempotency key was reused", 409)
+            return self._replay_retrieval(db, request_fingerprint, winning_events)
         return MemoryRetrieveRead(
             request_fingerprint=request_fingerprint,
             evaluated_count=len(candidates),
