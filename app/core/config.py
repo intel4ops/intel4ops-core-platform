@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     ai_max_input_chars: int = Field(default=24_000, ge=1_000, le=100_000)
     ai_max_excerpt_chars: int = Field(default=0, ge=0, le=2_000)
     ai_max_output_tokens: int = Field(default=4_000, ge=100, le=16_000)
+    ai_narrative_max_input_chars: int = Field(default=16_000, ge=1_000, le=16_000)
+    ai_narrative_max_output_tokens: int = Field(default=1_800, ge=100, le=1_800)
     ai_max_inference_items: int = Field(default=25, ge=1, le=25)
     ai_max_clarification_questions: int = Field(default=10, ge=0, le=10)
     ai_retry_ceiling: int = Field(default=1, ge=0, le=2)
