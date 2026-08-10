@@ -51,6 +51,7 @@ from app.models.canonical_mapping import (
 )
 from app.models.entities import utc_now
 from app.models.ingestion import Dataset, DatasetVersion, SchemaStatus
+from app.models.operational_memory import OperationalMemoryItem, OperationalMemoryVersion
 from app.models.raw_lineage import (
     LineageEdge,
     LineageNode,
@@ -59,11 +60,14 @@ from app.models.raw_lineage import (
     LineageRelationshipType,
     RawRecordReference,
 )
+from app.models.source_system import SourceSystem
 from app.schemas.canonical_mapping import (
     CanonicalFieldCreate,
     CanonicalTypeCreate,
     EntityMatchDecision,
     FieldMappingCreate,
+    FieldMappingSuggestion,
+    FieldMappingSuggestionListRead,
     MappingInputRecord,
     MappingReviewCreate,
     MappingRunCreate,
@@ -79,8 +83,12 @@ from app.schemas.operational_memory import (
     MemoryCandidateCreate,
     MemoryContext,
     MemoryProvenance,
+    MemoryRetrieveRequest,
 )
-from app.services.operational_memory_service import operational_memory_service
+from app.services.operational_memory_service import (
+    OperationalMemoryServiceError,
+    operational_memory_service,
+)
 
 _MAPPING_RUN_IDEMPOTENCY_CONSTRAINT = "uq_mapping_run_idempotency_key"
 
@@ -459,11 +467,59 @@ class MappingTemplateService:
                 "Canonical field does not belong to the mapping template target type",
                 422,
             )
+        if payload.origin_memory_version_id is not None:
+            self._validate_origin_memory_lineage(
+                db, template, organization_id, payload.origin_memory_version_id
+            )
         field = FieldMapping(template_version_id=version.id, **payload.model_dump())
         db.add(field)
         db.commit()
         db.refresh(field)
         return field
+
+    @staticmethod
+    def _validate_origin_memory_lineage(
+        db: Session,
+        template: MappingTemplate,
+        organization_id: UUID | None,
+        origin_memory_version_id: UUID,
+    ) -> None:
+        if organization_id is None:
+            _fail(
+                "ORIGIN_LINEAGE_ORGANIZATION_REQUIRED",
+                "Memory-origin lineage requires a tenant-authorized request",
+                422,
+            )
+        if (
+            template.scope_type != "organization"
+            or template.owner_organization_id != organization_id
+        ):
+            _fail(
+                "ORIGIN_LINEAGE_TEMPLATE_SCOPE_INVALID",
+                "Memory-origin lineage may only be recorded on organization-scoped templates",
+                403,
+            )
+        version = db.get(OperationalMemoryVersion, origin_memory_version_id)
+        if version is None or version.organization_id != organization_id:
+            _fail("ORIGIN_MEMORY_VERSION_NOT_FOUND", "Memory version was not found", 404)
+        item = db.get(OperationalMemoryItem, version.memory_id)
+        if (
+            item is None
+            or item.organization_id != organization_id
+            or item.category != "FIELD_MAPPING"
+        ):
+            _fail("ORIGIN_MEMORY_VERSION_NOT_FOUND", "Memory version was not found", 404)
+        now = utc_now()
+        if (
+            item.current_status not in {"CONFIRMED", "CORRECTED"}
+            or item.is_stale
+            or (item.valid_to is not None and item.valid_to <= now)
+        ):
+            _fail(
+                "ORIGIN_MEMORY_NOT_REUSABLE",
+                "Memory version is not currently governed and reusable",
+                409,
+            )
 
     def add_transformation(
         self,
@@ -681,6 +737,127 @@ class ValueCrosswalkService:
     @staticmethod
     def normalize(value: str) -> str:
         return " ".join(value.strip().casefold().split())
+
+
+class FieldMappingSuggestionService:
+    _MAX_CANDIDATES = 5
+
+    def suggest(
+        self,
+        db: Session,
+        organization_id: UUID,
+        source_schema_id: UUID,
+    ) -> FieldMappingSuggestionListRead:
+        schema = db.scalar(
+            select(SourceSchema).where(
+                SourceSchema.id == source_schema_id,
+                SourceSchema.organization_id == organization_id,
+            )
+        )
+        if schema is None:
+            _fail("SOURCE_SCHEMA_NOT_FOUND", "Source schema is outside tenant scope", 404)
+        source_system_family, canonical_domain = self._resolve_context(db, organization_id, schema)
+        fields = list(
+            db.scalars(
+                select(SourceField)
+                .where(
+                    SourceField.organization_id == organization_id,
+                    SourceField.source_schema_id == schema.id,
+                )
+                .order_by(SourceField.field_path)
+            )
+        )
+        suggestions = [
+            self._suggest_field(
+                db, organization_id, schema, field, source_system_family, canonical_domain
+            )
+            for field in fields
+        ]
+        return FieldMappingSuggestionListRead(source_schema_id=schema.id, suggestions=suggestions)
+
+    @staticmethod
+    def _resolve_context(
+        db: Session, organization_id: UUID, schema: SourceSchema
+    ) -> tuple[str | None, str | None]:
+        dataset = db.scalar(
+            select(Dataset).where(
+                Dataset.id == schema.dataset_id,
+                Dataset.organization_id == organization_id,
+            )
+        )
+        if dataset is None:
+            return None, None
+        source_system = db.scalar(
+            select(SourceSystem).where(
+                SourceSystem.id == dataset.source_system_id,
+                SourceSystem.organization_id == organization_id,
+            )
+        )
+        source_system_family = source_system.system_type if source_system is not None else None
+        return source_system_family, dataset.domain
+
+    def _suggest_field(
+        self,
+        db: Session,
+        organization_id: UUID,
+        schema: SourceSchema,
+        field: SourceField,
+        source_system_family: str | None,
+        canonical_domain: str | None,
+    ) -> FieldMappingSuggestion:
+        # Retrieval is advisory-only and must never make mapping authoring
+        # unusable; any Operational Memory error degrades to "not evaluated"
+        # rather than propagating or fabricating a suggestion.
+        idempotency_key = _fingerprint(
+            {
+                "purpose": "field_mapping_suggestion",
+                "organization_id": str(organization_id),
+                "source_schema_id": str(schema.id),
+                "source_field_id": str(field.id),
+                "source_system_family": source_system_family,
+                "canonical_domain": canonical_domain,
+            }
+        )
+        request = MemoryRetrieveRequest(
+            idempotency_key=idempotency_key,
+            category="FIELD_MAPPING",
+            subject_kind="SOURCE_FIELD",
+            subject=field.field_path,
+            source_system_family=source_system_family,
+            canonical_domain=canonical_domain,
+            context=MemoryContext(schema_fingerprint=schema.schema_fingerprint),
+            max_suggestions=self._MAX_CANDIDATES,
+        )
+        try:
+            result = operational_memory_service.retrieve(db, organization_id, request)
+        except OperationalMemoryServiceError:
+            return FieldMappingSuggestion(source_field_path=field.field_path, evaluated=False)
+        for candidate in result.suggestions:
+            # Hard, release-blocking rule: D-A's ranking is a soft tie-break,
+            # not a context filter. A candidate lacking exact_context_signature
+            # must never be surfaced as a mapping suggestion (see docs).
+            if "exact_context_signature" not in candidate.match_reasons:
+                continue
+            payload = candidate.interpreted_payload
+            raw_field_id = payload.get("canonical_field_definition_id")
+            raw_field_code = payload.get("canonical_field_code")
+            confidence_status = (
+                candidate.status if candidate.status in {"CONFIRMED", "CORRECTED"} else None
+            )
+            return FieldMappingSuggestion(
+                source_field_path=field.field_path,
+                suggested_canonical_field_definition_id=(
+                    UUID(str(raw_field_id)) if raw_field_id else None
+                ),
+                suggested_canonical_field_code=(str(raw_field_code) if raw_field_code else None),
+                confidence_status=confidence_status,
+                last_confirmed_at=candidate.last_confirmed_at,
+                matched_context_dimensions=list(candidate.matched_context_dimensions),
+                memory_id=candidate.memory_id,
+                memory_version_id=candidate.version_id,
+                evaluated=True,
+            )
+        return FieldMappingSuggestion(source_field_path=field.field_path, evaluated=True)
 
 
 class MappingExecutionService:
@@ -2070,6 +2247,7 @@ class MappingTrustSignalService:
 canonical_registry_service = CanonicalRegistryService()
 schema_discovery_service = SchemaDiscoveryService()
 mapping_template_service = MappingTemplateService()
+field_mapping_suggestion_service = FieldMappingSuggestionService()
 value_crosswalk_service = ValueCrosswalkService()
 mapping_execution_service = MappingExecutionService()
 mapping_review_service = MappingReviewService()

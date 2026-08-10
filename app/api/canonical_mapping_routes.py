@@ -28,6 +28,8 @@ from app.schemas.canonical_mapping import (
     CanonicalTypeRead,
     EntityMatchDecision,
     FieldMappingCreate,
+    FieldMappingRead,
+    FieldMappingSuggestionListRead,
     LineagePathRead,
     MappingExceptionRead,
     MappingReviewCreate,
@@ -48,6 +50,7 @@ from app.services.canonical_mapping_service import (
     canonical_record_service,
     canonical_registry_service,
     entity_resolution_service,
+    field_mapping_suggestion_service,
     mapping_execution_service,
     mapping_review_service,
     mapping_template_service,
@@ -173,6 +176,22 @@ def schemas_for_version(
     return schema_discovery_service.for_dataset_version(db, organization_id, dataset_version_id)
 
 
+@tenant_router.get(
+    "/source-schemas/{source_schema_id}/field-mapping-suggestions",
+    response_model=FieldMappingSuggestionListRead,
+)
+def field_mapping_suggestions(
+    organization_id: UUID,
+    source_schema_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+) -> object:
+    try:
+        return field_mapping_suggestion_service.suggest(db, organization_id, source_schema_id)
+    except CanonicalMappingServiceError as exc:
+        _raise(exc)
+
+
 @tenant_router.post(
     "/mapping-templates",
     response_model=MappingTemplateRead,
@@ -221,6 +240,7 @@ def create_template_version(
 
 @tenant_router.post(
     "/mapping-template-versions/{version_id}/field-mappings",
+    response_model=FieldMappingRead,
     status_code=201,
 )
 def add_field_mapping(
