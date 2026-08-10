@@ -6766,6 +6766,7 @@ def test_dbfeedback_concurrent_identical_execution_registers_evidence_exactly_on
                 assert version_count == round_index + 1
 
 
+@pytest.mark.postgres
 def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_schema(
     postgres_engine: Engine,
 ) -> None:
