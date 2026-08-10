@@ -11,6 +11,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.canonical_mapping import (
@@ -73,6 +74,8 @@ from app.schemas.canonical_mapping import (
     ValueCrosswalkCreate,
     ValueCrosswalkEntryCreate,
 )
+
+_MAPPING_RUN_IDEMPOTENCY_CONSTRAINT = "uq_mapping_run_idempotency_key"
 
 
 class CanonicalMappingServiceError(RuntimeError):
@@ -749,7 +752,28 @@ class MappingExecutionService:
             created_by_user_id=actor_user_id,
         )
         db.add(run)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if constraint != _MAPPING_RUN_IDEMPOTENCY_CONSTRAINT:
+                raise
+            concurrent = db.scalar(
+                select(MappingRun).where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.idempotency_key == payload.idempotency_key,
+                )
+            )
+            if concurrent is None:
+                raise
+            if concurrent.request_fingerprint != request_fingerprint:
+                _fail(
+                    "IDEMPOTENCY_CONFLICT",
+                    "Idempotency key was reused with a different mapping request",
+                    409,
+                )
+            return concurrent
         template = db.get(MappingTemplate, version.template_id)
         assert template is not None
         for record in payload.records:
