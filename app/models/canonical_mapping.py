@@ -632,6 +632,12 @@ class MappingRun(TimestampMixin, Base):
             name="fk_mapping_runs_org_dataset_version",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "source_schema_id"],
+            ["source_schemas.organization_id", "source_schemas.id"],
+            name="fk_mapping_runs_org_source_schema",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("organization_id", "id", name="uq_mapping_runs_org_id"),
         UniqueConstraint(
             "organization_id",
@@ -654,6 +660,11 @@ class MappingRun(TimestampMixin, Base):
         ),
         Index("ix_mapping_run_template_version", "template_version_id"),
         Index("ix_mapping_run_org_created", "organization_id", "created_at"),
+        Index(
+            "ix_mapping_runs_org_source_schema",
+            "organization_id",
+            "source_schema_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -664,6 +675,8 @@ class MappingRun(TimestampMixin, Base):
     template_version_id: Mapped[UUID] = mapped_column(
         ForeignKey("mapping_template_versions.id", ondelete="RESTRICT")
     )
+    source_schema_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    schema_fingerprint_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default=MappingRunStatus.CREATED.value)
     idempotency_key: Mapped[str] = mapped_column(String(255))
     request_fingerprint: Mapped[str] = mapped_column(String(64))

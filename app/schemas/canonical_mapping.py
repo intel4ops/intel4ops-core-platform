@@ -183,6 +183,7 @@ class MappingInputRecord(BaseModel):
 class MappingRunCreate(BaseModel):
     dataset_version_id: UUID
     template_version_id: UUID
+    source_schema_id: UUID
     idempotency_key: str = Field(min_length=1, max_length=255)
     correlation_id: str | None = Field(default=None, max_length=100)
     records: list[MappingInputRecord] = Field(default_factory=list)
@@ -195,6 +196,8 @@ class MappingRunRead(BaseModel):
     organization_id: UUID
     dataset_version_id: UUID
     template_version_id: UUID
+    source_schema_id: UUID | None
+    schema_fingerprint_snapshot: str | None
     status: str
     idempotency_key: str
     request_fingerprint: str
