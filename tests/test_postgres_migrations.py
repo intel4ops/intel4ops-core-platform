@@ -95,7 +95,7 @@ from test_trust_service import trust_foundation
 from app.core.config import Settings
 from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
-from app.models.canonical_mapping import MappingRun
+from app.models.canonical_mapping import MappingRecordResult, MappingRun
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
@@ -6467,3 +6467,209 @@ def test_cm01_wrong_dataset_pairing_rejected_by_service_on_postgres(
             "SOURCE_SCHEMA_DATASET_VERSION_MISMATCH",
             409,
         )
+
+
+@pytest.mark.postgres
+def test_cm02_concurrent_identical_execution_stress_probe(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"cm02-pg-stress-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "cm02-pg-stress"
+        )
+        template_version_id = template_version.id
+        schema_id = schema.id
+        schema_fingerprint = schema.schema_fingerprint
+
+    rounds = 10
+    concurrency = 5
+    for round_index in range(rounds):
+        idempotency_key = f"cm02-pg-stress-round-{round_index}"
+        request = MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version_id,
+            source_schema_id=schema_id,
+            idempotency_key=idempotency_key,
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": f"C-{round_index}", "customer_name": "Acme"},
+                )
+            ],
+        )
+        barrier = Barrier(concurrency)
+
+        def execute_run() -> UUID:
+            with Session(postgres_engine) as worker_session:
+                barrier.wait()
+                return mapping_execution_service.execute(
+                    worker_session, organization_id, request, actor
+                ).id
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = [executor.submit(execute_run) for _ in range(concurrency)]
+            results = [future.result(timeout=30) for future in futures]
+
+        assert len(set(results)) == 1
+
+        with Session(postgres_engine) as verify_session:
+            runs = list(
+                verify_session.scalars(
+                    select(MappingRun).where(
+                        MappingRun.organization_id == organization_id,
+                        MappingRun.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            assert len(runs) == 1
+            run = runs[0]
+            assert run.source_schema_id == schema_id
+            assert run.schema_fingerprint_snapshot == schema_fingerprint
+            record_results = verify_session.scalar(
+                select(func.count())
+                .select_from(MappingRecordResult)
+                .where(MappingRecordResult.mapping_run_id == run.id)
+            )
+            assert record_results == run.input_count
+
+
+@pytest.mark.postgres
+def test_cm02_concurrent_different_fingerprint_yields_controlled_conflict(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"cm02-pg-conflict-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "cm02-pg-conflict"
+        )
+        template_version_id = template_version.id
+        schema_id = schema.id
+
+    idempotency_key = "cm02-pg-conflict-key"
+    request_a = MappingRunCreate(
+        dataset_version_id=version_id,
+        template_version_id=template_version_id,
+        source_schema_id=schema_id,
+        idempotency_key=idempotency_key,
+        correlation_id="variant-a",
+        records=[
+            MappingInputRecord(
+                raw_record_reference_id=raw_reference_id,
+                values={"customer_id": "C-A", "customer_name": "Acme"},
+            )
+        ],
+    )
+    request_b = request_a.model_copy(update={"correlation_id": "variant-b"})
+    barrier = Barrier(2)
+    outcomes: list[tuple[str, object]] = []
+
+    def execute_run(request: MappingRunCreate) -> None:
+        with Session(postgres_engine) as worker_session:
+            barrier.wait()
+            try:
+                run = mapping_execution_service.execute(
+                    worker_session, organization_id, request, actor
+                )
+                outcomes.append(("ok", run.id))
+            except CanonicalMappingServiceError as exc:
+                outcomes.append((exc.code, exc.status))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(execute_run, request_a)
+        second = executor.submit(execute_run, request_b)
+        first.result(timeout=20)
+        second.result(timeout=20)
+
+    winners = [outcome for outcome in outcomes if outcome[0] == "ok"]
+    conflicts = [outcome for outcome in outcomes if outcome[0] == "IDEMPOTENCY_CONFLICT"]
+    assert len(winners) == 1
+    assert len(conflicts) == 1
+    assert conflicts[0][1] == 409
+
+    with Session(postgres_engine) as verify_session:
+        run_count = verify_session.scalar(
+            select(func.count())
+            .select_from(MappingRun)
+            .where(
+                MappingRun.organization_id == organization_id,
+                MappingRun.idempotency_key == idempotency_key,
+            )
+        )
+        assert run_count == 1
+
+
+@pytest.mark.postgres
+def test_cm02_concurrent_cross_tenant_same_key_remains_isolated(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        org_a, actor_a, dataset_a, version_a, _, raw_a = canonical_mapping_foundation(
+            session, f"cm02-pg-tenant-a-{uuid4().hex[:8]}"
+        )
+        org_b, actor_b, dataset_b, version_b, _, raw_b = canonical_mapping_foundation(
+            session, f"cm02-pg-tenant-b-{uuid4().hex[:8]}"
+        )
+        _, template_a = cm01_published_entity_mapping(session, org_a, actor_a)
+        _, template_b = cm01_published_entity_mapping(session, org_b, actor_b)
+        schema_a = cm01_discovered_schema(session, org_a, dataset_a, version_a, "cm02-pg-tenant-a")
+        schema_b = cm01_discovered_schema(session, org_b, dataset_b, version_b, "cm02-pg-tenant-b")
+        template_a_id = template_a.id
+        template_b_id = template_b.id
+        schema_a_id = schema_a.id
+        schema_b_id = schema_b.id
+
+    shared_key = "cm02-pg-shared-cross-tenant-key"
+    request_a = MappingRunCreate(
+        dataset_version_id=version_a,
+        template_version_id=template_a_id,
+        source_schema_id=schema_a_id,
+        idempotency_key=shared_key,
+        records=[
+            MappingInputRecord(
+                raw_record_reference_id=raw_a,
+                values={"customer_id": "C-A", "customer_name": "Acme"},
+            )
+        ],
+    )
+    request_b = MappingRunCreate(
+        dataset_version_id=version_b,
+        template_version_id=template_b_id,
+        source_schema_id=schema_b_id,
+        idempotency_key=shared_key,
+        records=[
+            MappingInputRecord(
+                raw_record_reference_id=raw_b,
+                values={"customer_id": "C-B", "customer_name": "Acme"},
+            )
+        ],
+    )
+    barrier = Barrier(2)
+    results: dict[str, UUID] = {}
+
+    def execute_run(
+        label: str, organization_id: UUID, request: MappingRunCreate, actor: UUID
+    ) -> None:
+        with Session(postgres_engine) as worker_session:
+            barrier.wait()
+            run = mapping_execution_service.execute(worker_session, organization_id, request, actor)
+            results[label] = run.id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(execute_run, "a", org_a, request_a, actor_a)
+        second = executor.submit(execute_run, "b", org_b, request_b, actor_b)
+        first.result(timeout=20)
+        second.result(timeout=20)
+
+    assert results["a"] != results["b"]
+    with Session(postgres_engine) as verify_session:
+        run_a = verify_session.get(MappingRun, results["a"])
+        run_b = verify_session.get(MappingRun, results["b"])
+        assert run_a is not None and run_b is not None
+        assert run_a.organization_id == org_a
+        assert run_b.organization_id == org_b
