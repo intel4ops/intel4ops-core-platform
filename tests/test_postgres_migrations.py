@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from governed_provenance_helpers import add_eligible_dataset_version
 from sqlalchemy import Table, create_engine, delete, func, insert, inspect, select, text
 from sqlalchemy.engine import Engine
@@ -22,6 +23,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from test_ai_operational_profile_service import FakeProvider
 from test_ai_operational_profile_service import item as ai_profile_item
+from test_canonical_mapping_foundation import discovered_schema as cm01_discovered_schema
+from test_canonical_mapping_foundation import foundation as canonical_mapping_foundation
+from test_canonical_mapping_foundation import (
+    published_entity_mapping as cm01_published_entity_mapping,
+)
 from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
 from test_causal_intelligence_foundation import make_org as make_causal_org
 from test_decision_intelligence_foundation import add_graph as add_decision_graph
@@ -89,6 +95,7 @@ from test_trust_service import trust_foundation
 from app.core.config import Settings
 from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
+from app.models.canonical_mapping import MappingRun
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
@@ -139,6 +146,7 @@ from app.models.trust import (
 from app.models.value_scan import DirectionalValueScan
 from app.models.workspace import OrganizationObjective
 from app.schemas.access import InvitationCreate
+from app.schemas.canonical_mapping import MappingInputRecord, MappingRunCreate
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.decision_intelligence import DecisionApprovalCreate
@@ -169,6 +177,10 @@ from app.services.access_context_service import (
     create_organization_with_owner,
 )
 from app.services.ai_operational_profile_service import AIOperationalProfileService
+from app.services.canonical_mapping_service import (
+    CanonicalMappingServiceError,
+    mapping_execution_service,
+)
 from app.services.causal_intelligence_service import (
     CausalIntelligenceServiceError,
     causal_review_service,
@@ -6254,3 +6266,204 @@ def test_operational_memory_retrieval_uses_bounded_index_at_ten_thousand_rows(
             )
         )
         session.commit()
+
+
+@pytest.mark.postgres
+def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Engine) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    inspector = inspect(postgres_engine)
+    columns = {column["name"]: column for column in inspector.get_columns("mapping_runs")}
+    assert "source_schema_id" in columns
+    assert columns["source_schema_id"]["nullable"] is True
+    assert "schema_fingerprint_snapshot" in columns
+    assert columns["schema_fingerprint_snapshot"]["nullable"] is True
+
+    foreign_keys = {fk["name"]: fk for fk in inspector.get_foreign_keys("mapping_runs")}
+    fk = foreign_keys["fk_mapping_runs_org_source_schema"]
+    assert set(fk["constrained_columns"]) == {"organization_id", "source_schema_id"}
+    assert fk["referred_table"] == "source_schemas"
+    assert set(fk["referred_columns"]) == {"organization_id", "id"}
+
+    indexes = {index["name"] for index in inspector.get_indexes("mapping_runs")}
+    assert "ix_mapping_runs_org_source_schema" in indexes
+
+    command.downgrade(config, "20260813_0039")
+    downgraded_columns = {
+        column["name"] for column in inspect(postgres_engine).get_columns("mapping_runs")
+    }
+    assert "source_schema_id" not in downgraded_columns
+    assert "schema_fingerprint_snapshot" not in downgraded_columns
+
+    command.upgrade(config, "head")
+    reupgraded_columns = {
+        column["name"] for column in inspect(postgres_engine).get_columns("mapping_runs")
+    }
+    assert "source_schema_id" in reupgraded_columns
+    assert "schema_fingerprint_snapshot" in reupgraded_columns
+
+    heads = ScriptDirectory.from_config(config).get_heads()
+    assert heads == ["20260814_0040"]
+
+
+@pytest.mark.postgres
+def test_cm01_direct_sql_rejects_cross_tenant_source_schema_insert_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, _, version_id, _, _ = canonical_mapping_foundation(
+            session, f"cm01-pg-fk-a-{uuid4().hex[:8]}"
+        )
+        other_id, _, other_dataset_id, other_version_id, _, _ = canonical_mapping_foundation(
+            session, f"cm01-pg-fk-b-{uuid4().hex[:8]}"
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        other_schema = cm01_discovered_schema(
+            session, other_id, other_dataset_id, other_version_id, "cm01-pg-fk-b"
+        )
+        with pytest.raises(IntegrityError):
+            session.execute(
+                text(
+                    """
+                    INSERT INTO mapping_runs (
+                        id, organization_id, dataset_version_id, template_version_id,
+                        source_schema_id, status, idempotency_key, request_fingerprint,
+                        input_count, mapped_count, exception_count, rejected_count,
+                        created_by_user_id, created_at, updated_at
+                    ) VALUES (
+                        :id, :organization_id, :dataset_version_id, :template_version_id,
+                        :source_schema_id, 'created', 'cm01-pg-fk-violation', :fingerprint,
+                        0, 0, 0, 0, :actor, now(), now()
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid4()),
+                    "organization_id": str(organization_id),
+                    "dataset_version_id": str(version_id),
+                    "template_version_id": str(template_version.id),
+                    "source_schema_id": str(other_schema.id),
+                    "fingerprint": "2" * 64,
+                    "actor": str(actor),
+                },
+            )
+            session.commit()
+        session.rollback()
+
+
+@pytest.mark.postgres
+def test_cm01_valid_execution_persists_snapshot_and_shares_schema_across_runs(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"cm01-pg-valid-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "cm01-pg-valid"
+        )
+        request_one = MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            source_schema_id=schema.id,
+            idempotency_key="cm01-pg-valid-run-1",
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": "C-001", "customer_name": "Acme"},
+                )
+            ],
+        )
+        request_two = request_one.model_copy(update={"idempotency_key": "cm01-pg-valid-run-2"})
+        run_one = mapping_execution_service.execute(session, organization_id, request_one, actor)
+        run_two = mapping_execution_service.execute(session, organization_id, request_two, actor)
+        assert run_one.id != run_two.id
+        assert run_one.source_schema_id == schema.id
+        assert run_two.source_schema_id == schema.id
+        assert run_one.schema_fingerprint_snapshot == schema.schema_fingerprint
+        assert run_two.schema_fingerprint_snapshot == schema.schema_fingerprint
+
+        historical = MappingRun(
+            organization_id=organization_id,
+            dataset_version_id=version_id,
+            template_version_id=template_version.id,
+            source_schema_id=None,
+            schema_fingerprint_snapshot=None,
+            status="completed",
+            idempotency_key="cm01-pg-historical",
+            request_fingerprint="3" * 64,
+            input_count=0,
+            mapped_count=0,
+            exception_count=0,
+            rejected_count=0,
+            created_by_user_id=actor,
+        )
+        session.add(historical)
+        session.commit()
+        session.refresh(historical)
+        assert historical.source_schema_id is None
+        assert historical.schema_fingerprint_snapshot is None
+
+
+@pytest.mark.postgres
+def test_cm01_wrong_dataset_pairing_rejected_by_service_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"cm01-pg-wrong-version-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "cm01-pg-wrong-version"
+        )
+        dataset = session.get(Dataset, dataset_id)
+        assert dataset is not None
+        other_batch = IngestionBatchService().create(
+            session,
+            organization_id,
+            IngestionBatchCreate(
+                source_system_id=dataset.source_system_id,
+                batch_number="cm01-pg-wrong-version-batch-2",
+                ingestion_method="file_upload",
+                trigger_type="manual",
+            ),
+            actor,
+        )
+        other_version = DatasetVersionService().create(
+            session,
+            organization_id,
+            dataset_id,
+            DatasetVersionCreate(
+                ingestion_batch_id=other_batch.id,
+                source_file_name="cm01-pg-wrong-version-2.csv",
+                source_file_extension="csv",
+            ),
+        )
+        with pytest.raises(CanonicalMappingServiceError) as exc:
+            mapping_execution_service.execute(
+                session,
+                organization_id,
+                MappingRunCreate(
+                    dataset_version_id=other_version.id,
+                    template_version_id=template_version.id,
+                    source_schema_id=schema.id,
+                    idempotency_key="cm01-pg-wrong-version-run",
+                    records=[
+                        MappingInputRecord(
+                            raw_record_reference_id=raw_reference_id,
+                            values={"customer_id": "C-001", "customer_name": "Acme"},
+                        )
+                    ],
+                ),
+                actor,
+            )
+        assert (exc.value.code, exc.value.status) == (
+            "SOURCE_SCHEMA_DATASET_VERSION_MISMATCH",
+            409,
+        )
