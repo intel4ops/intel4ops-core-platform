@@ -146,7 +146,12 @@ from app.models.trust import (
 from app.models.value_scan import DirectionalValueScan
 from app.models.workspace import OrganizationObjective
 from app.schemas.access import InvitationCreate
-from app.schemas.canonical_mapping import MappingInputRecord, MappingRunCreate
+from app.schemas.canonical_mapping import (
+    MappingInputRecord,
+    MappingRunCreate,
+    SourceFieldCreate,
+    SourceSchemaDiscover,
+)
 from app.schemas.causal_intelligence import CausalReviewCreate
 from app.schemas.contracts import FindingCreate, OrganizationCreate
 from app.schemas.decision_intelligence import DecisionApprovalCreate
@@ -180,6 +185,7 @@ from app.services.ai_operational_profile_service import AIOperationalProfileServ
 from app.services.canonical_mapping_service import (
     CanonicalMappingServiceError,
     mapping_execution_service,
+    schema_discovery_service,
 )
 from app.services.causal_intelligence_service import (
     CausalIntelligenceServiceError,
@@ -6673,3 +6679,87 @@ def test_cm02_concurrent_cross_tenant_same_key_remains_isolated(postgres_engine:
         assert run_a is not None and run_b is not None
         assert run_a.organization_id == org_a
         assert run_b.organization_id == org_b
+
+
+@pytest.mark.postgres
+def test_dbfeedback_concurrent_identical_execution_registers_evidence_exactly_once(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"dbfeedback-pg-stress-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = schema_discovery_service.discover(
+            session,
+            organization_id,
+            SourceSchemaDiscover(
+                dataset_id=dataset_id,
+                dataset_version_id=version_id,
+                schema_fingerprint="dbfeedback-pg-stress-fingerprint".ljust(32, "0"),
+                fields=[
+                    SourceFieldCreate(field_path="customer_name", inferred_data_type="string"),
+                    SourceFieldCreate(field_path="customer_id", inferred_data_type="string"),
+                ],
+            ),
+        )
+        template_version_id = template_version.id
+        schema_id = schema.id
+
+    rounds = 5
+    concurrency = 5
+    for round_index in range(rounds):
+        idempotency_key = f"dbfeedback-pg-stress-round-{round_index}"
+        request = MappingRunCreate(
+            dataset_version_id=version_id,
+            template_version_id=template_version_id,
+            source_schema_id=schema_id,
+            idempotency_key=idempotency_key,
+            records=[
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": f"C-{round_index}", "customer_name": "Acme"},
+                )
+            ],
+        )
+        barrier = Barrier(concurrency)
+
+        def execute_run() -> UUID:
+            with Session(postgres_engine) as worker_session:
+                barrier.wait()
+                return mapping_execution_service.execute(
+                    worker_session, organization_id, request, actor
+                ).id
+
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = [executor.submit(execute_run) for _ in range(concurrency)]
+            results = [future.result(timeout=30) for future in futures]
+
+        assert len(set(results)) == 1
+
+        with Session(postgres_engine) as verify_session:
+            items = list(
+                verify_session.scalars(
+                    select(OperationalMemoryItem).where(
+                        OperationalMemoryItem.organization_id == organization_id,
+                        OperationalMemoryItem.category == "FIELD_MAPPING",
+                    )
+                )
+            )
+            assert {item.normalized_subject for item in items} == {
+                "customer name",
+                "customer id",
+            }
+            for item in items:
+                # exactly one of the five concurrent callers per round may reach
+                # the registration path (CM-02's replay/recovery paths return
+                # before it); support_count must advance by exactly one per round.
+                assert item.support_count == round_index + 1
+                assert item.current_version_number == round_index + 1
+                version_count = verify_session.scalar(
+                    select(func.count())
+                    .select_from(OperationalMemoryVersion)
+                    .where(OperationalMemoryVersion.memory_id == item.id)
+                )
+                assert version_count == round_index + 1
