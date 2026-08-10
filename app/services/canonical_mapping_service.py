@@ -74,6 +74,13 @@ from app.schemas.canonical_mapping import (
     ValueCrosswalkCreate,
     ValueCrosswalkEntryCreate,
 )
+from app.schemas.operational_memory import (
+    FieldMappingPayload,
+    MemoryCandidateCreate,
+    MemoryContext,
+    MemoryProvenance,
+)
+from app.services.operational_memory_service import operational_memory_service
 
 _MAPPING_RUN_IDEMPOTENCY_CONSTRAINT = "uq_mapping_run_idempotency_key"
 
@@ -799,7 +806,129 @@ class MappingExecutionService:
         )
         db.commit()
         db.refresh(run)
+        if run.status == MappingRunStatus.COMPLETED.value and run.source_schema_id is not None:
+            self._register_field_mapping_evidence(
+                db,
+                organization_id,
+                run.id,
+                run.source_schema_id,
+                run.template_version_id,
+                run.schema_fingerprint_snapshot,
+            )
         return run
+
+    def _register_field_mapping_evidence(
+        self,
+        db: Session,
+        organization_id: UUID,
+        run_id: UUID,
+        source_schema_id: UUID,
+        template_version_id: UUID,
+        schema_fingerprint_snapshot: str | None,
+    ) -> None:
+        # Runs after the authoritative MappingRun commit above. A failure here must
+        # never roll back or otherwise affect the already-persisted MappingRun.
+        if schema_fingerprint_snapshot is None:
+            return
+        field_mappings = list(
+            db.scalars(
+                select(FieldMapping)
+                .where(FieldMapping.template_version_id == template_version_id)
+                .order_by(FieldMapping.sequence)
+            )
+        )
+        for field_mapping in field_mappings:
+            try:
+                self._register_single_field_mapping_evidence(
+                    db,
+                    organization_id,
+                    run_id,
+                    source_schema_id,
+                    template_version_id,
+                    schema_fingerprint_snapshot,
+                    field_mapping,
+                )
+            except Exception:  # noqa: BLE001
+                # Evidence registration is best-effort and runs strictly after the
+                # authoritative MappingRun commit; no failure here may propagate
+                # and no failure here may affect the already-persisted MappingRun.
+                db.rollback()
+                continue
+
+    def _register_single_field_mapping_evidence(
+        self,
+        db: Session,
+        organization_id: UUID,
+        run_id: UUID,
+        source_schema_id: UUID,
+        template_version_id: UUID,
+        schema_fingerprint_snapshot: str,
+        field_mapping: FieldMapping,
+    ) -> None:
+        source_field = db.scalar(
+            select(SourceField).where(
+                SourceField.organization_id == organization_id,
+                SourceField.source_schema_id == source_schema_id,
+                SourceField.field_path == field_mapping.source_field_path,
+            )
+        )
+        if source_field is None:
+            return
+        canonical_field = db.get(
+            CanonicalFieldDefinition, field_mapping.canonical_field_definition_id
+        )
+        if canonical_field is None:
+            return
+        transformation = db.scalar(
+            select(MappingTransformation)
+            .where(MappingTransformation.field_mapping_id == field_mapping.id)
+            .order_by(MappingTransformation.sequence)
+            .limit(1)
+        )
+        evidence_payload = FieldMappingPayload(
+            source_field_path=field_mapping.source_field_path,
+            source_field_type=source_field.inferred_data_type,
+            canonical_type_kind=canonical_field.canonical_type_kind,
+            canonical_type_id=canonical_field.canonical_type_id,
+            canonical_field_definition_id=canonical_field.id,
+            canonical_field_code=canonical_field.field_code,
+            schema_fingerprint=schema_fingerprint_snapshot,
+            mapping_transform_code=(
+                transformation.transformation_type if transformation is not None else None
+            ),
+            unit_context=None,
+        )
+        source_fingerprint = _fingerprint(
+            {
+                "run_id": str(run_id),
+                "field_mapping_id": str(field_mapping.id),
+                "source_field_path": field_mapping.source_field_path,
+                "source_field_type": source_field.inferred_data_type,
+                "canonical_field_definition_id": str(canonical_field.id),
+                "schema_fingerprint": schema_fingerprint_snapshot,
+            }
+        )
+        candidate = MemoryCandidateCreate(
+            idempotency_key=f"mapping-run:{run_id}:field-mapping:{field_mapping.id}",
+            category="FIELD_MAPPING",
+            subject_kind="SOURCE_FIELD",
+            subject=field_mapping.source_field_path,
+            context=MemoryContext(schema_fingerprint=schema_fingerprint_snapshot),
+            value_payload=evidence_payload.model_dump(mode="json"),
+            provenance=MemoryProvenance(
+                source_schema_id=source_schema_id,
+                mapping_template_version_id=template_version_id,
+                canonical_field_definition_ids=[canonical_field.id],
+            ),
+            source_fingerprint=source_fingerprint,
+        )
+        operational_memory_service.record_candidate(
+            db,
+            organization_id,
+            candidate,
+            actor_user_id=None,
+            actor_role="system",
+        )
 
     def _map_record(
         self,
