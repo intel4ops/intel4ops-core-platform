@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from typing import Any, cast
 from unittest.mock import patch
 from urllib.parse import urlparse
@@ -33,6 +33,8 @@ from test_forecasting_service import foundation as forecasting_foundation
 from test_forecasting_service import payload as forecasting_payload
 from test_ingestion_service import batch_payload as ingestion_batch_payload
 from test_ingestion_service import foundation as ingestion_foundation
+from test_operational_memory_service import field_candidate as memory_field_candidate
+from test_operational_memory_service import memory_foundation
 from test_progressive_orchestrator import foundation as orchestration_foundation
 from test_progressive_orchestrator import request as orchestration_payload
 from test_reliability_service import (
@@ -107,6 +109,11 @@ from app.models.forecasting import (
 )
 from app.models.ingestion import Dataset, DatasetVersion, IngestionBatch
 from app.models.oikb import OIKBDefinition, OIKBDefinitionVersion
+from app.models.operational_memory import (
+    OperationalMemoryItem,
+    OperationalMemoryReuseEvent,
+    OperationalMemoryVersion,
+)
 from app.models.orchestration import (
     IntelligenceOrchestrationDecision,
     IntelligenceOrchestrationRequest,
@@ -146,6 +153,12 @@ from app.schemas.ingestion import (
 )
 from app.schemas.intelligence import IntelligenceExecutionCreate
 from app.schemas.memberships import MembershipCreate
+from app.schemas.operational_memory import (
+    MemoryCandidateCreate,
+    MemoryContext,
+    MemoryDecisionRequest,
+    MemoryRetrieveRequest,
+)
 from app.schemas.orchestration import OrchestrationCreate
 from app.schemas.raw_lineage import RawStorageObjectCreate
 from app.schemas.reliability import CensoringStatus, ReliabilityExecutionCreate
@@ -182,6 +195,10 @@ from app.services.membership_service import (
     DuplicateMembershipError,
     LastActiveOrganizationAdminError,
     OrganizationMembershipService,
+)
+from app.services.operational_memory_service import (
+    OperationalMemoryServiceError,
+    operational_memory_service,
 )
 from app.services.orchestration_service import OrchestrationService
 from app.services.organization_service import OrganizationService
@@ -232,6 +249,11 @@ WP_301_MAPPING_TABLES = {
 P3_03A_TABLES = {"directional_value_scans"}
 P3_03B_TABLES = {"ai_operational_profiles", "ai_profile_inferences"}
 P3_03C_TABLES = {"grounded_executive_narratives"}
+P3_03DA_TABLES = {
+    "operational_memory_items",
+    "operational_memory_versions",
+    "operational_memory_reuse_events",
+}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -417,6 +439,7 @@ MANAGED_TABLES |= WP_214B_DECISION_TABLES
 MANAGED_TABLES |= P3_03A_TABLES
 MANAGED_TABLES |= P3_03B_TABLES
 MANAGED_TABLES |= P3_03C_TABLES
+MANAGED_TABLES |= P3_03DA_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -1338,6 +1361,117 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
     command.upgrade(config, "head")
     assert_schema_at_head(postgres_engine)
 
+    memory_inspector = inspect(postgres_engine)
+    assert P3_03DA_TABLES <= set(memory_inspector.get_table_names())
+    assert {
+        column["name"] for column in memory_inspector.get_columns("operational_memory_items")
+    } == {
+        "id",
+        "organization_id",
+        "category",
+        "subject_kind",
+        "normalized_subject",
+        "source_system_family",
+        "canonical_domain",
+        "context_signature",
+        "memory_fingerprint",
+        "normalization_policy_code",
+        "identity_policy_code",
+        "current_version_number",
+        "current_status",
+        "support_count",
+        "contradiction_count",
+        "confirmation_count",
+        "rejection_count",
+        "is_stale",
+        "stale_reason_code",
+        "stale_detected_at",
+        "last_confirmed_at",
+        "last_validated_at",
+        "valid_from",
+        "valid_to",
+        "security_classification",
+        "retention_until",
+        "created_at",
+        "updated_at",
+    }
+    assert {
+        name
+        for table in P3_03DA_TABLES
+        for name, column in {
+            column["name"]: column for column in memory_inspector.get_columns(table)
+        }.items()
+        if str(column["type"]) == "JSONB"
+    } == {"value_payload", "provenance_snapshot", "match_reasons"}
+    assert {
+        item["name"] for item in memory_inspector.get_unique_constraints("operational_memory_items")
+    } == {
+        "uq_operational_memory_items_org_id",
+        "uq_operational_memory_items_org_fingerprint",
+    }
+    assert {
+        item["name"] for item in memory_inspector.get_check_constraints("operational_memory_items")
+    } == {
+        "ck_operational_memory_items_category",
+        "ck_operational_memory_items_subject_kind",
+        "ck_operational_memory_items_category_subject",
+        "ck_operational_memory_items_status",
+        "ck_operational_memory_items_version",
+        "ck_operational_memory_items_counts",
+        "ck_operational_memory_items_validity",
+        "ck_operational_memory_items_security",
+        "ck_operational_memory_items_stale_projection",
+        "ck_operational_memory_items_hashes",
+    }
+    assert {
+        item["name"]
+        for table in P3_03DA_TABLES
+        for item in memory_inspector.get_indexes(table)
+        if not item.get("duplicates_constraint")
+    } >= {
+        "ix_operational_memory_items_org_status_category",
+        "ix_operational_memory_items_org_category_source_domain",
+        "ix_operational_memory_items_org_category_subject",
+        "ix_operational_memory_items_org_category_context",
+        "ix_operational_memory_items_org_stale",
+        "ix_operational_memory_items_org_retention",
+        "ix_operational_memory_versions_org_source_schema",
+        "ix_operational_memory_versions_org_mapping_result",
+        "ix_operational_memory_versions_org_supersedes",
+        "ix_operational_memory_reuse_org_consumer_time",
+        "ix_operational_memory_reuse_org_memory_time",
+    }
+    assert {
+        (
+            item["name"],
+            tuple(item["constrained_columns"]),
+            item["referred_table"],
+        )
+        for table in P3_03DA_TABLES
+        for item in memory_inspector.get_foreign_keys(table)
+    } >= {
+        (
+            "fk_operational_memory_versions_org_memory",
+            ("organization_id", "memory_id"),
+            "operational_memory_items",
+        ),
+        (
+            "fk_operational_memory_versions_org_supersedes",
+            ("organization_id", "memory_id", "supersedes_version_id"),
+            "operational_memory_versions",
+        ),
+        (
+            "fk_operational_memory_reuse_org_version",
+            ("organization_id", "memory_id", "memory_version_id"),
+            "operational_memory_versions",
+        ),
+    }
+    command.downgrade(config, "20260812_0038")
+    assert not (P3_03DA_TABLES & set(inspect(postgres_engine).get_table_names()))
+    assert P3_03C_TABLES <= set(inspect(postgres_engine).get_table_names())
+    command.upgrade(config, "head")
+    assert P3_03DA_TABLES <= set(inspect(postgres_engine).get_table_names())
+
     narrative_inspector = inspect(postgres_engine)
     assert P3_03C_TABLES <= set(narrative_inspector.get_table_names())
     narrative_columns = {
@@ -2093,6 +2227,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - P3_03A_TABLES
         - P3_03B_TABLES
         - P3_03C_TABLES
+        - P3_03DA_TABLES
         <= wp_203_tables
     )
 
@@ -5463,3 +5598,659 @@ def test_ai_profile_concurrent_idempotent_creation_on_postgres(
         second = executor.submit(create_profile)
         assert first.result(timeout=20) == second.result(timeout=20)
     assert len(provider.calls) == 1
+
+
+@pytest.mark.postgres
+def test_operational_memory_serializes_concurrent_candidate_creation(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor_id, source_schema, field_id = memory_foundation(
+            session, f"memory-race-{uuid4().hex[:10]}"
+        )
+        candidates: list[tuple[MemoryCandidateCreate, str | None]] = [
+            (
+                memory_field_candidate(
+                    source_schema,
+                    field_id,
+                    f"postgres:memory:candidate-same-{attempt}",
+                    subject=f"Same Key Equipment {attempt}",
+                ),
+                None,
+            )
+            for attempt in range(10)
+        ]
+        candidates.extend(
+            (
+                memory_field_candidate(
+                    source_schema,
+                    field_id,
+                    f"postgres:memory:candidate-a-{attempt}",
+                    subject=f"Duplicate Identity Equipment {attempt}",
+                ),
+                f"postgres:memory:candidate-b-{attempt}",
+            )
+            for attempt in range(10)
+        )
+
+    for candidate, second_key in candidates:
+        barrier = Barrier(2)
+
+        def record(key: str) -> tuple[UUID, UUID]:
+            request = candidate.model_copy(update={"idempotency_key": key})
+            with Session(postgres_engine) as session:
+                barrier.wait()
+                item, version = operational_memory_service.record_candidate(
+                    session,
+                    organization_id,
+                    request,
+                    actor_id,
+                    "organization_admin",
+                )
+                return item.id, version.id
+
+        keys = [candidate.idempotency_key, second_key or candidate.idempotency_key]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(record, keys))
+        assert results[0][0] == results[1][0]
+        if second_key is None:
+            assert results[0] == results[1]
+        with Session(postgres_engine) as session:
+            item_id = results[0][0]
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(OperationalMemoryItem)
+                    .where(
+                        OperationalMemoryItem.organization_id == organization_id,
+                        OperationalMemoryItem.id == item_id,
+                    )
+                )
+                == 1
+            )
+            assert session.scalar(
+                select(func.count())
+                .select_from(OperationalMemoryVersion)
+                .where(
+                    OperationalMemoryVersion.organization_id == organization_id,
+                    OperationalMemoryVersion.memory_id == item_id,
+                )
+            ) == (1 if second_key is None else 2)
+
+
+@pytest.mark.postgres
+def test_operational_memory_serializes_competing_decisions(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor_id, source_schema, field_id = memory_foundation(
+            session, f"memory-decisions-{uuid4().hex[:10]}"
+        )
+        confirm_candidates = [
+            memory_field_candidate(
+                source_schema,
+                field_id,
+                f"postgres:memory:confirm-seed-{attempt}",
+                subject=f"Concurrent Confirm {attempt}",
+            )
+            for attempt in range(3)
+        ]
+        mixed_candidates = [
+            memory_field_candidate(
+                source_schema,
+                field_id,
+                f"postgres:memory:mixed-seed-{attempt}",
+                subject=f"Confirm Reject {attempt}",
+            )
+            for attempt in range(3)
+        ]
+        correction_candidates = [
+            memory_field_candidate(
+                source_schema,
+                field_id,
+                f"postgres:memory:correct-seed-{attempt}",
+                subject=f"Concurrent Correction {attempt}",
+            )
+            for attempt in range(3)
+        ]
+
+    def seed(
+        candidate: MemoryCandidateCreate, *, confirm: bool = False
+    ) -> tuple[UUID, int, dict[str, object]]:
+        with Session(postgres_engine) as session:
+            item, _ = operational_memory_service.record_candidate(
+                session,
+                organization_id,
+                candidate,
+                actor_id,
+                "organization_admin",
+            )
+            if confirm:
+                item, _ = operational_memory_service.decide(
+                    session,
+                    organization_id,
+                    item.id,
+                    MemoryDecisionRequest(
+                        idempotency_key=f"{candidate.idempotency_key}:confirm",
+                        expected_current_version=1,
+                        action="CONFIRM",
+                        decision_reason_code="HUMAN_REVIEWED",
+                    ),
+                    actor_id,
+                    "organization_admin",
+                )
+            return item.id, item.current_version_number, dict(candidate.value_payload)
+
+    def race(
+        item_id: UUID,
+        expected_version: int,
+        requests: list[MemoryDecisionRequest],
+    ) -> list[str]:
+        barrier = Barrier(2)
+
+        def decide(request: MemoryDecisionRequest) -> str:
+            with Session(postgres_engine) as session:
+                barrier.wait()
+                try:
+                    operational_memory_service.decide(
+                        session,
+                        organization_id,
+                        item_id,
+                        request,
+                        actor_id,
+                        "organization_admin",
+                    )
+                except OperationalMemoryServiceError as exc:
+                    assert exc.code == "MEMORY_VERSION_CONFLICT"
+                    return "conflict"
+                return request.action
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(decide, requests))
+        assert outcomes.count("conflict") == 1
+        with Session(postgres_engine) as session:
+            item = session.scalar(
+                select(OperationalMemoryItem).where(
+                    OperationalMemoryItem.organization_id == organization_id,
+                    OperationalMemoryItem.id == item_id,
+                )
+            )
+            assert item is not None and item.current_version_number == expected_version + 1
+            current = session.scalar(
+                select(OperationalMemoryVersion).where(
+                    OperationalMemoryVersion.organization_id == organization_id,
+                    OperationalMemoryVersion.memory_id == item_id,
+                    OperationalMemoryVersion.version_number == item.current_version_number,
+                )
+            )
+            assert current is not None and current.status == item.current_status
+        return outcomes
+
+    for attempt in range(3):
+        item_id, version, _ = seed(confirm_candidates[attempt])
+        requests = [
+            MemoryDecisionRequest(
+                idempotency_key=f"postgres:memory:confirm-{attempt}-{side}",
+                expected_current_version=version,
+                action="CONFIRM",
+                decision_reason_code="HUMAN_REVIEWED",
+            )
+            for side in ("a", "b")
+        ]
+        assert sorted(race(item_id, version, requests)) == ["CONFIRM", "conflict"]
+
+        mixed_item, mixed_version, _ = seed(mixed_candidates[attempt])
+        mixed = [
+            MemoryDecisionRequest(
+                idempotency_key=f"postgres:memory:mixed-{attempt}-confirm",
+                expected_current_version=mixed_version,
+                action="CONFIRM",
+                decision_reason_code="HUMAN_REVIEWED",
+            ),
+            MemoryDecisionRequest(
+                idempotency_key=f"postgres:memory:mixed-{attempt}-reject",
+                expected_current_version=mixed_version,
+                action="REJECT",
+                decision_reason_code="HUMAN_REVIEWED",
+            ),
+        ]
+        assert sorted(race(mixed_item, mixed_version, mixed)) in (
+            ["CONFIRM", "conflict"],
+            ["REJECT", "conflict"],
+        )
+
+    for attempt in range(3):
+        item_id, version, value = seed(correction_candidates[attempt], confirm=True)
+        corrections = []
+        for side in ("a", "b"):
+            corrected = dict(value)
+            corrected["canonical_field_code"] = f"equipment_identifier_{side}"
+            corrections.append(
+                MemoryDecisionRequest(
+                    idempotency_key=f"postgres:memory:correct-{attempt}-{side}",
+                    expected_current_version=version,
+                    action="CORRECT",
+                    corrected_payload=corrected,
+                    decision_reason_code="HUMAN_REVIEWED",
+                )
+            )
+        assert sorted(race(item_id, version, corrections)) == ["CORRECT", "conflict"]
+
+
+@pytest.mark.postgres
+def test_operational_memory_retrieval_is_atomic_during_correction_and_idempotent(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor_id, source_schema, field_id = memory_foundation(
+            session, f"memory-retrieval-race-{uuid4().hex[:10]}"
+        )
+        candidate = memory_field_candidate(
+            source_schema,
+            field_id,
+            "postgres:memory:retrieval-race-seed",
+            subject="Retrieval Race Equipment",
+        )
+        item, _ = operational_memory_service.record_candidate(
+            session,
+            organization_id,
+            candidate,
+            actor_id,
+            "organization_admin",
+        )
+        item, confirmed = operational_memory_service.decide(
+            session,
+            organization_id,
+            item.id,
+            MemoryDecisionRequest(
+                idempotency_key="postgres:memory:retrieval-race-confirm",
+                expected_current_version=1,
+                action="CONFIRM",
+                decision_reason_code="HUMAN_REVIEWED",
+            ),
+            actor_id,
+            "organization_admin",
+        )
+        item_id = item.id
+        confirmed_version_id = confirmed.id
+        schema_fingerprint = source_schema.schema_fingerprint
+        other_organization_id, other_actor_id, other_schema, other_field_id = memory_foundation(
+            session, f"memory-retrieval-other-{uuid4().hex[:10]}"
+        )
+        other_candidate = memory_field_candidate(
+            other_schema,
+            other_field_id,
+            "postgres:memory:retrieval-other-seed",
+            subject="Retrieval Race Equipment",
+        )
+        other_item, _ = operational_memory_service.record_candidate(
+            session,
+            other_organization_id,
+            other_candidate,
+            other_actor_id,
+            "organization_admin",
+        )
+        _, other_confirmed = operational_memory_service.decide(
+            session,
+            other_organization_id,
+            other_item.id,
+            MemoryDecisionRequest(
+                idempotency_key="postgres:memory:retrieval-other-confirm",
+                expected_current_version=1,
+                action="CONFIRM",
+                decision_reason_code="HUMAN_REVIEWED",
+            ),
+            other_actor_id,
+            "organization_admin",
+        )
+        other_version_id = other_confirmed.id
+        other_schema_fingerprint = other_schema.schema_fingerprint
+
+    request = MemoryRetrieveRequest(
+        idempotency_key="postgres:memory:retrieval-during-correction",
+        category="FIELD_MAPPING",
+        subject_kind="SOURCE_FIELD",
+        subject="Retrieval Race Equipment",
+        source_system_family="ERP",
+        canonical_domain="maintenance",
+        context=MemoryContext(
+            schema_fingerprint=schema_fingerprint,
+            source_table_or_entity_context="equipment_master",
+            neighboring_field_signatures=["description:string", "status:string"],
+        ),
+    )
+    current_version_id = confirmed_version_id
+    current_version_number = 2
+    current_status = "CONFIRMED"
+    for attempt in range(5):
+        corrected_payload = dict(candidate.value_payload)
+        corrected_payload["canonical_field_code"] = f"corrected_equipment_id_{attempt}"
+        commit_entered = Event()
+        allow_commit = Event()
+        reader_started = Event()
+
+        def correct() -> UUID:
+            with Session(postgres_engine) as session:
+                original_commit = session.commit
+
+                def delayed_commit() -> None:
+                    commit_entered.set()
+                    assert allow_commit.wait(timeout=20)
+                    original_commit()
+
+                with patch.object(session, "commit", side_effect=delayed_commit):
+                    _, version = operational_memory_service.decide(
+                        session,
+                        organization_id,
+                        item_id,
+                        MemoryDecisionRequest(
+                            idempotency_key=f"postgres:memory:retrieval-race-correct-{attempt}",
+                            expected_current_version=current_version_number,
+                            action="CORRECT",
+                            corrected_payload=corrected_payload,
+                            decision_reason_code="HUMAN_REVIEWED",
+                        ),
+                        actor_id,
+                        "organization_admin",
+                    )
+                return version.id
+
+        def retrieve_during_correction() -> Any:
+            reader_started.set()
+            with Session(postgres_engine) as session:
+                return operational_memory_service.retrieve(
+                    session,
+                    organization_id,
+                    request.model_copy(
+                        update={
+                            "idempotency_key": (
+                                f"postgres:memory:retrieval-during-correction-{attempt}"
+                            )
+                        }
+                    ),
+                )
+
+        prior_version_id = current_version_id
+        prior_status = current_status
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            correction = executor.submit(correct)
+            assert commit_entered.wait(timeout=20)
+            reader = executor.submit(retrieve_during_correction)
+            assert reader_started.wait(timeout=20)
+            allow_commit.set()
+            corrected_version_id = correction.result(timeout=30)
+            during = reader.result(timeout=30)
+
+        assert len(during.suggestions) == 1
+        suggestion = during.suggestions[0]
+        assert (suggestion.version_id, suggestion.status) in {
+            (prior_version_id, prior_status),
+            (corrected_version_id, "CORRECTED"),
+        }
+        current_version_id = corrected_version_id
+        current_version_number += 1
+        current_status = "CORRECTED"
+        with Session(postgres_engine) as session:
+            current_item = session.get(OperationalMemoryItem, item_id)
+            assert current_item is not None
+            assert (
+                current_item.current_version_number,
+                current_item.current_status,
+            ) == (current_version_number, current_status)
+            current_version = session.scalar(
+                select(OperationalMemoryVersion).where(
+                    OperationalMemoryVersion.organization_id == organization_id,
+                    OperationalMemoryVersion.memory_id == item_id,
+                    OperationalMemoryVersion.version_number == current_version_number,
+                )
+            )
+            assert current_version is not None and current_version.id == current_version_id
+
+    for attempt in range(10):
+        concurrent_request = request.model_copy(
+            update={"idempotency_key": f"postgres:memory:retrieval-idempotency-race-{attempt}"}
+        )
+        barrier = Barrier(2)
+
+        def retrieve() -> UUID:
+            with Session(postgres_engine) as session:
+                barrier.wait()
+                result = operational_memory_service.retrieve(
+                    session, organization_id, concurrent_request
+                )
+                assert len(result.suggestions) == 1
+                return result.suggestions[0].version_id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: retrieve(), range(2)))
+        assert results == [current_version_id, current_version_id]
+        with Session(postgres_engine) as session:
+            events = list(
+                session.scalars(
+                    select(OperationalMemoryReuseEvent).where(
+                        OperationalMemoryReuseEvent.organization_id == organization_id,
+                        OperationalMemoryReuseEvent.consumer_code == "operational_memory_api",
+                        OperationalMemoryReuseEvent.idempotency_key
+                        == concurrent_request.idempotency_key,
+                    )
+                )
+            )
+            assert len(events) == 1 and events[0].event_sequence == 1
+
+    history_key = "postgres:memory:retrieval-idempotency-race-0"
+    with Session(postgres_engine) as session:
+        historical_event = session.scalar(
+            select(OperationalMemoryReuseEvent).where(
+                OperationalMemoryReuseEvent.organization_id == organization_id,
+                OperationalMemoryReuseEvent.consumer_code == "operational_memory_api",
+                OperationalMemoryReuseEvent.idempotency_key == history_key,
+            )
+        )
+        assert historical_event is not None
+        historical_snapshot = (
+            historical_event.id,
+            historical_event.memory_version_id,
+            historical_event.request_fingerprint,
+            historical_event.event_sequence,
+            historical_event.occurred_at,
+        )
+    with Session(postgres_engine) as session:
+        replayed = operational_memory_service.retrieve(
+            session,
+            organization_id,
+            request.model_copy(update={"idempotency_key": history_key}),
+        )
+        assert replayed.suggestions[0].version_id == current_version_id
+    with Session(postgres_engine) as session:
+        historical_event = session.scalar(
+            select(OperationalMemoryReuseEvent).where(
+                OperationalMemoryReuseEvent.organization_id == organization_id,
+                OperationalMemoryReuseEvent.consumer_code == "operational_memory_api",
+                OperationalMemoryReuseEvent.idempotency_key == history_key,
+            )
+        )
+        assert historical_event is not None
+        assert (
+            historical_event.id,
+            historical_event.memory_version_id,
+            historical_event.request_fingerprint,
+            historical_event.event_sequence,
+            historical_event.occurred_at,
+        ) == historical_snapshot
+
+    for attempt in range(5):
+        idempotency_key = f"postgres:memory:retrieval-mismatch-race-{attempt}"
+        requests = [
+            request.model_copy(
+                update={"idempotency_key": idempotency_key, "correlation_id": correlation}
+            )
+            for correlation in ("correlation-a", "correlation-b")
+        ]
+        barrier = Barrier(2)
+
+        def retrieve_mismatch(payload: MemoryRetrieveRequest) -> str:
+            with Session(postgres_engine) as session:
+                barrier.wait()
+                try:
+                    operational_memory_service.retrieve(session, organization_id, payload)
+                except OperationalMemoryServiceError as exc:
+                    assert exc.code == "IDEMPOTENCY_CONFLICT"
+                    return "conflict"
+                return "retrieved"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(retrieve_mismatch, requests))
+        assert sorted(outcomes) == ["conflict", "retrieved"]
+        with Session(postgres_engine) as session:
+            events = list(
+                session.scalars(
+                    select(OperationalMemoryReuseEvent).where(
+                        OperationalMemoryReuseEvent.organization_id == organization_id,
+                        OperationalMemoryReuseEvent.consumer_code == "operational_memory_api",
+                        OperationalMemoryReuseEvent.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            assert len(events) == 1 and events[0].event_sequence == 1
+
+    cross_tenant_key = f"postgres:memory:retrieval-cross-tenant-{uuid4().hex}"
+    other_request = request.model_copy(
+        update={
+            "idempotency_key": cross_tenant_key,
+            "context": MemoryContext(
+                schema_fingerprint=other_schema_fingerprint,
+                source_table_or_entity_context="equipment_master",
+                neighboring_field_signatures=["description:string", "status:string"],
+            ),
+        }
+    )
+    cross_tenant_barrier = Barrier(2)
+
+    def retrieve_for_tenant(tenant_id: UUID, payload: MemoryRetrieveRequest) -> UUID:
+        with Session(postgres_engine) as session:
+            cross_tenant_barrier.wait()
+            result = operational_memory_service.retrieve(session, tenant_id, payload)
+            assert len(result.suggestions) == 1
+            return result.suggestions[0].version_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            retrieve_for_tenant,
+            organization_id,
+            request.model_copy(update={"idempotency_key": cross_tenant_key}),
+        )
+        second = executor.submit(retrieve_for_tenant, other_organization_id, other_request)
+        assert first.result(timeout=30) == current_version_id
+        assert second.result(timeout=30) == other_version_id
+    with Session(postgres_engine) as session:
+        tenant_events = list(
+            session.scalars(
+                select(OperationalMemoryReuseEvent).where(
+                    OperationalMemoryReuseEvent.organization_id.in_(
+                        (organization_id, other_organization_id)
+                    ),
+                    OperationalMemoryReuseEvent.idempotency_key == cross_tenant_key,
+                )
+            )
+        )
+        assert {event.organization_id for event in tenant_events} == {
+            organization_id,
+            other_organization_id,
+        }
+
+    class UnrelatedDiag:
+        constraint_name = "ck_unrelated_integrity_failure"
+
+    class UnrelatedDatabaseError(Exception):
+        diag = UnrelatedDiag()
+
+    with Session(postgres_engine) as session:
+        with patch.object(
+            session,
+            "commit",
+            side_effect=IntegrityError("unrelated", {}, UnrelatedDatabaseError()),
+        ):
+            with pytest.raises(IntegrityError):
+                operational_memory_service.retrieve(
+                    session,
+                    organization_id,
+                    request.model_copy(
+                        update={"idempotency_key": "postgres:memory:unrelated-integrity"}
+                    ),
+                )
+
+
+@pytest.mark.postgres
+def test_operational_memory_retrieval_uses_bounded_index_at_ten_thousand_rows(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization = Organization(
+            name="Operational memory plan",
+            slug=f"operational-memory-plan-{uuid4().hex[:12]}",
+            country_code="US",
+            default_currency="USD",
+            timezone="UTC",
+        )
+        session.add(organization)
+        session.commit()
+        organization_id = organization.id
+
+        now = datetime.now(UTC)
+        session.execute(
+            insert(OperationalMemoryItem),
+            [
+                {
+                    "id": uuid4(),
+                    "organization_id": organization_id,
+                    "category": "TERMINOLOGY",
+                    "subject_kind": "TERM",
+                    "normalized_subject": f"plan subject {index}",
+                    "source_system_family": "__plan_test__",
+                    "canonical_domain": "certification",
+                    "context_signature": f"{index + 10_000:064x}",
+                    "memory_fingerprint": f"{index + 20_000:064x}",
+                    "normalization_policy_code": "memory_normalization_v1",
+                    "identity_policy_code": "memory_identity_v1",
+                    "current_version_number": 1,
+                    "current_status": "CONFIRMED",
+                    "support_count": 1,
+                    "contradiction_count": 0,
+                    "confirmation_count": 1,
+                    "rejection_count": 0,
+                    "is_stale": False,
+                    "valid_from": now,
+                    "security_classification": "TENANT_INTERNAL",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for index in range(10_000)
+            ],
+        )
+        session.commit()
+        session.execute(text("ANALYZE operational_memory_items"))
+        plan = "\n".join(
+            str(row[0])
+            for row in session.execute(
+                text(
+                    "EXPLAIN SELECT id FROM operational_memory_items "
+                    "WHERE organization_id = :organization_id "
+                    "AND category = 'TERMINOLOGY' "
+                    "AND normalized_subject = 'plan subject 9999' "
+                    "AND current_status IN ('CONFIRMED', 'CORRECTED') LIMIT 20"
+                ),
+                {"organization_id": organization_id},
+            )
+        )
+        assert "ix_operational_memory_items_org_category_subject" in plan
+        session.execute(
+            delete(OperationalMemoryItem).where(
+                OperationalMemoryItem.organization_id == organization_id,
+                OperationalMemoryItem.source_system_family == "__plan_test__",
+            )
+        )
+        session.commit()

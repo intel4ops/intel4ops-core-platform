@@ -32,6 +32,7 @@ from app.api.knowledge_graph_routes import catalog_router as knowledge_graph_cat
 from app.api.knowledge_graph_routes import tenant_router as knowledge_graph_tenant_router
 from app.api.membership_routes import router as membership_router
 from app.api.oikb_routes import router as oikb_router
+from app.api.operational_memory_routes import router as operational_memory_router
 from app.api.orchestration_routes import engine_router
 from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
@@ -131,6 +132,7 @@ app.include_router(finding_router)
 app.include_router(orchestration_router)
 app.include_router(engine_router)
 app.include_router(oikb_router)
+app.include_router(operational_memory_router)
 app.include_router(statistical_router)
 app.include_router(forecasting_router)
 app.include_router(reliability_router)
