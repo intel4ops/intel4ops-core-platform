@@ -95,7 +95,7 @@ from test_trust_service import trust_foundation
 from app.core.config import Settings
 from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
-from app.models.canonical_mapping import MappingRecordResult, MappingRun
+from app.models.canonical_mapping import FieldMapping, MappingRecordResult, MappingRun
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
@@ -170,6 +170,7 @@ from app.schemas.operational_memory import (
     MemoryCandidateCreate,
     MemoryContext,
     MemoryDecisionRequest,
+    MemoryProvenance,
     MemoryRetrieveRequest,
 )
 from app.schemas.orchestration import OrchestrationCreate
@@ -6310,7 +6311,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260814_0040"]
+    assert heads == ["20260815_0041"]
 
 
 @pytest.mark.postgres
@@ -6763,3 +6764,104 @@ def test_dbfeedback_concurrent_identical_execution_registers_evidence_exactly_on
                     .where(OperationalMemoryVersion.memory_id == item.id)
                 )
                 assert version_count == round_index + 1
+
+
+def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_schema(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+
+    inspector = inspect(postgres_engine)
+    columns = {column["name"]: column for column in inspector.get_columns("field_mappings")}
+    assert "origin_memory_version_id" in columns
+    assert columns["origin_memory_version_id"]["nullable"] is True
+    foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("field_mappings")}
+    assert "fk_field_mappings_origin_memory_version" not in foreign_keys
+
+    command.downgrade(config, "20260814_0040")
+    downgraded_columns = {
+        column["name"] for column in inspect(postgres_engine).get_columns("field_mappings")
+    }
+    assert "origin_memory_version_id" not in downgraded_columns
+
+    command.upgrade(config, "head")
+    reupgraded_columns = {
+        column["name"] for column in inspect(postgres_engine).get_columns("field_mappings")
+    }
+    assert "origin_memory_version_id" in reupgraded_columns
+
+    heads = ScriptDirectory.from_config(config).get_heads()
+    assert heads == ["20260815_0041"]
+
+
+@pytest.mark.postgres
+def test_dbfeedback_c_lineage_column_persists_on_postgres(postgres_engine: Engine) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, _ = canonical_mapping_foundation(
+            session, f"dbfeedback-c-pg-{uuid4().hex[:8]}"
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "dbfeedback-c-pg"
+        )
+        existing = session.scalar(
+            select(FieldMapping).where(FieldMapping.template_version_id == template_version.id)
+        )
+        assert existing is not None
+        candidate = MemoryCandidateCreate(
+            idempotency_key="dbfeedback-c-pg-candidate",
+            category="FIELD_MAPPING",
+            subject_kind="SOURCE_FIELD",
+            subject="asset_no",
+            context=MemoryContext(schema_fingerprint=schema.schema_fingerprint),
+            value_payload={
+                "source_field_path": "asset_no",
+                "source_field_type": "string",
+                "canonical_type_kind": "entity",
+                "canonical_type_id": str(existing.canonical_field_definition_id),
+                "canonical_field_definition_id": str(existing.canonical_field_definition_id),
+                "canonical_field_code": "name",
+                "schema_fingerprint": schema.schema_fingerprint,
+            },
+            provenance=MemoryProvenance(
+                source_schema_id=schema.id,
+                canonical_field_definition_ids=[existing.canonical_field_definition_id],
+            ),
+            source_fingerprint="a" * 64,
+        )
+        item, _ = operational_memory_service.record_candidate(
+            session, organization_id, candidate, None, "system"
+        )
+        _, confirmed = operational_memory_service.decide(
+            session,
+            organization_id,
+            item.id,
+            MemoryDecisionRequest(
+                idempotency_key="dbfeedback-c-pg-confirm",
+                expected_current_version=item.current_version_number,
+                action="CONFIRM",
+            ),
+            actor,
+            "organization_admin",
+        )
+        lineage_field = FieldMapping(
+            template_version_id=template_version.id,
+            source_field_path="asset_no",
+            canonical_field_definition_id=existing.canonical_field_definition_id,
+            sequence=existing.sequence + 100,
+            is_required_for_publication=False,
+            default_value=None,
+            origin_memory_version_id=confirmed.id,
+        )
+        session.add(lineage_field)
+        session.commit()
+        session.refresh(lineage_field)
+        field_mapping_id = lineage_field.id
+        confirmed_id = confirmed.id
+
+    with Session(postgres_engine) as verify_session:
+        reread = verify_session.get(FieldMapping, field_mapping_id)
+        assert reread is not None
+        assert reread.origin_memory_version_id == confirmed_id
