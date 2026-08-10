@@ -704,6 +704,26 @@ class MappingExecutionService:
         )
         if dataset_version is None:
             _fail("DATASET_VERSION_NOT_FOUND", "Dataset version is outside tenant scope", 404)
+        source_schema = db.scalar(
+            select(SourceSchema).where(
+                SourceSchema.id == payload.source_schema_id,
+                SourceSchema.organization_id == organization_id,
+            )
+        )
+        if source_schema is None:
+            _fail("SOURCE_SCHEMA_NOT_FOUND", "Source schema is outside tenant scope", 404)
+        if source_schema.dataset_version_id != payload.dataset_version_id:
+            _fail(
+                "SOURCE_SCHEMA_DATASET_VERSION_MISMATCH",
+                "Source schema does not belong to the selected dataset version",
+                409,
+            )
+        if source_schema.status in {SchemaStatus.CHANGED.value, SchemaStatus.INCOMPATIBLE.value}:
+            _fail(
+                "SOURCE_SCHEMA_NOT_USABLE",
+                "Source schema is changed or incompatible and cannot govern execution",
+                409,
+            )
         version = mapping_template_service.require_version(
             db,
             payload.template_version_id,
@@ -715,6 +735,8 @@ class MappingExecutionService:
             organization_id=organization_id,
             dataset_version_id=payload.dataset_version_id,
             template_version_id=payload.template_version_id,
+            source_schema_id=source_schema.id,
+            schema_fingerprint_snapshot=source_schema.schema_fingerprint,
             status=MappingRunStatus.RUNNING.value,
             idempotency_key=payload.idempotency_key,
             request_fingerprint=request_fingerprint,
