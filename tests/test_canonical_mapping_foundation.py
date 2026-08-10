@@ -231,6 +231,25 @@ def foundation(db: Session, slug: str) -> tuple[UUID, UUID, UUID, UUID, UUID, UU
     return organization.id, actor, dataset.id, version.id, raw_object.id, raw_reference.id
 
 
+def discovered_schema(
+    db: Session,
+    organization_id: UUID,
+    dataset_id: UUID,
+    dataset_version_id: UUID,
+    slug: str,
+) -> SourceSchema:
+    return schema_discovery_service.discover(
+        db,
+        organization_id,
+        SourceSchemaDiscover(
+            dataset_id=dataset_id,
+            dataset_version_id=dataset_version_id,
+            schema_fingerprint=f"{slug}-schema-fingerprint".ljust(32, "0"),
+            fields=[],
+        ),
+    )
+
+
 def published_entity_mapping(
     db: Session,
     organization_id: UUID,
@@ -620,14 +639,16 @@ def test_crosswalk_entries_are_governed_versioned_and_tenant_visible(db: Session
 
 
 def test_mapping_execution_replay_confidence_lineage_and_trust_signals(db: Session) -> None:
-    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+    organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db,
         "mapping-execution",
     )
     entity_type, template_version = published_entity_mapping(db, organization_id, actor)
+    schema = discovered_schema(db, organization_id, dataset_id, version_id, "mapping-execution")
     request = MappingRunCreate(
         dataset_version_id=version_id,
         template_version_id=template_version.id,
+        source_schema_id=schema.id,
         idempotency_key="map-customers-001",
         records=[
             MappingInputRecord(
@@ -759,17 +780,19 @@ def test_mapping_execution_replay_confidence_lineage_and_trust_signals(db: Sessi
 
 
 def test_entity_resolution_conflicts_and_fuzzy_matches_require_review(db: Session) -> None:
-    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+    organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db,
         "mapping-resolution",
     )
     entity_type, template_version = published_entity_mapping(db, organization_id, actor)
+    schema = discovered_schema(db, organization_id, dataset_id, version_id, "mapping-resolution")
     first = mapping_execution_service.execute(
         db,
         organization_id,
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="resolution-original",
             records=[
                 MappingInputRecord(
@@ -806,6 +829,7 @@ def test_entity_resolution_conflicts_and_fuzzy_matches_require_review(db: Sessio
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="resolution-conflict",
             records=[
                 MappingInputRecord(
@@ -838,6 +862,7 @@ def test_entity_resolution_conflicts_and_fuzzy_matches_require_review(db: Sessio
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="resolution-ambiguous",
             records=[
                 MappingInputRecord(
@@ -906,17 +931,19 @@ def test_entity_resolution_conflicts_and_fuzzy_matches_require_review(db: Sessio
 
 
 def test_missing_required_fields_are_hard_readiness_blocks(db: Session) -> None:
-    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+    organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db,
         "mapping-blocked",
     )
     _, template_version = published_entity_mapping(db, organization_id, actor)
+    schema = discovered_schema(db, organization_id, dataset_id, version_id, "mapping-blocked")
     run = mapping_execution_service.execute(
         db,
         organization_id,
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="missing-required",
             records=[
                 MappingInputRecord(
@@ -960,7 +987,7 @@ def test_missing_required_fields_are_hard_readiness_blocks(db: Session) -> None:
 
 
 def test_governed_field_validation_failure_is_a_hard_exception(db: Session) -> None:
-    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+    organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db,
         "mapping-validation",
     )
@@ -970,12 +997,14 @@ def test_governed_field_validation_failure_is_a_hard_exception(db: Session) -> N
         actor,
         name_validation_rule={"pattern": r"^[A-Z][A-Za-z ]+$", "max_length": 40},
     )
+    schema = discovered_schema(db, organization_id, dataset_id, version_id, "mapping-validation")
     run = mapping_execution_service.execute(
         db,
         organization_id,
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="invalid-customer-name",
             records=[
                 MappingInputRecord(
@@ -1000,7 +1029,7 @@ def test_governed_field_validation_failure_is_a_hard_exception(db: Session) -> N
 
 
 def test_crosswalk_miss_is_recorded_as_a_specific_hard_exception(db: Session) -> None:
-    organization_id, actor, _, version_id, _, raw_reference_id = foundation(
+    organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db,
         "mapping-crosswalk-miss",
     )
@@ -1094,12 +1123,16 @@ def test_crosswalk_miss_is_recorded_as_a_specific_hard_exception(db: Session) ->
             actor,
             organization_id,
         )
+    schema = discovered_schema(
+        db, organization_id, dataset_id, version_id, "mapping-crosswalk-miss"
+    )
     run = mapping_execution_service.execute(
         db,
         organization_id,
         MappingRunCreate(
             dataset_version_id=version_id,
             template_version_id=template_version.id,
+            source_schema_id=schema.id,
             idempotency_key="crosswalk-miss",
             records=[
                 MappingInputRecord(
