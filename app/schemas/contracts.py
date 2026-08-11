@@ -144,6 +144,7 @@ class FindingRead(FindingCreate):
     id: UUID
     organization_id: UUID
     status: str
+    governance_tier: str
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
