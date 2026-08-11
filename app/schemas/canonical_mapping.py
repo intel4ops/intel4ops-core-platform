@@ -102,6 +102,22 @@ class FieldMappingCreate(BaseModel):
     sequence: int = Field(default=0, ge=0)
     is_required_for_publication: bool = False
     default_value: object | None = None
+    origin_memory_version_id: UUID | None = None
+
+
+class FieldMappingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    template_version_id: UUID
+    source_field_path: str
+    canonical_field_definition_id: UUID
+    sequence: int
+    is_required_for_publication: bool
+    default_value: object | None
+    origin_memory_version_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class TransformationCreate(BaseModel):
@@ -172,6 +188,23 @@ class SourceSchemaRead(BaseModel):
     status: str
     schema_fingerprint: str
     discovered_at: datetime
+
+
+class FieldMappingSuggestion(BaseModel):
+    source_field_path: str
+    suggested_canonical_field_definition_id: UUID | None = None
+    suggested_canonical_field_code: str | None = None
+    confidence_status: Literal["CONFIRMED", "CORRECTED"] | None = None
+    last_confirmed_at: datetime | None = None
+    matched_context_dimensions: list[str] = Field(default_factory=list)
+    memory_id: UUID | None = None
+    memory_version_id: UUID | None = None
+    evaluated: bool
+
+
+class FieldMappingSuggestionListRead(BaseModel):
+    source_schema_id: UUID
+    suggestions: list[FieldMappingSuggestion]
 
 
 class MappingInputRecord(BaseModel):

@@ -387,6 +387,7 @@ class FieldMapping(TimestampMixin, Base):
     sequence: Mapped[int] = mapped_column(Integer, default=0)
     is_required_for_publication: Mapped[bool] = mapped_column(Boolean, default=False)
     default_value: Mapped[object | None] = mapped_column(portable_json, nullable=True)
+    origin_memory_version_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
 
 
 class MappingTransformation(TimestampMixin, Base):
