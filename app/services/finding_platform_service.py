@@ -9,7 +9,13 @@ from uuid import UUID
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.models.entities import Finding, FindingStatus, Organization, OrganizationStatus
+from app.models.entities import (
+    Finding,
+    FindingGovernanceTier,
+    FindingStatus,
+    Organization,
+    OrganizationStatus,
+)
 from app.models.findings import (
     FindingCalculationTrace,
     FindingEvidenceBundle,
@@ -141,6 +147,7 @@ class FindingPublicationService:
         }
         finding = Finding(
             organization_id=organization_id,
+            governance_tier=FindingGovernanceTier.GOVERNED.value,
             rule_id=execution.definition_code,
             finding_code=f"FND-{deduplication_key[:16].upper()}",
             finding_type=payload.finding_type.value,
@@ -602,6 +609,7 @@ class FindingQueryService:
         minimum_exposure: Decimal | None = None,
         currency: str | None = None,
         review_state: str | None = None,
+        governance_tier: str | None = None,
     ) -> tuple[list[Finding], int]:
         filters = [
             Finding.organization_id == organization_id,
@@ -611,6 +619,10 @@ class FindingQueryService:
             filters.append(Finding.status != FindingStatus.ARCHIVED.value)
         else:
             filters.append(Finding.status == status)
+        if governance_tier is None:
+            filters.append(Finding.governance_tier == FindingGovernanceTier.GOVERNED.value)
+        else:
+            filters.append(Finding.governance_tier == governance_tier)
         for value, column in (
             (finding_type, Finding.finding_type),
             (severity, Finding.severity),
