@@ -1032,6 +1032,33 @@ class MappingExecutionService:
                 db.rollback()
                 continue
 
+    @staticmethod
+    def _is_memory_derived_unchanged(
+        db: Session,
+        organization_id: UUID,
+        field_mapping: FieldMapping,
+    ) -> bool:
+        # Memory-derived execution is not automatically independent evidence: if this
+        # FieldMapping was accepted unchanged from an Operational Memory suggestion,
+        # recording its execution as new evidence would inflate the origin memory's
+        # own support_count purely from re-running a suggestion it already produced.
+        # The comparison uses only the origin version's immutable historical payload
+        # (never the memory item's current governance status), so the classification
+        # stays deterministic regardless of later CORRECT/REJECT/DEPRECATE decisions.
+        if field_mapping.origin_memory_version_id is None:
+            return False
+        version = db.get(OperationalMemoryVersion, field_mapping.origin_memory_version_id)
+        if version is None or version.organization_id != organization_id:
+            return False
+        origin_field_id = version.value_payload.get("canonical_field_definition_id")
+        if not origin_field_id:
+            return False
+        try:
+            origin_field_uuid = UUID(str(origin_field_id))
+        except ValueError:
+            return False
+        return origin_field_uuid == field_mapping.canonical_field_definition_id
+
     def _register_single_field_mapping_evidence(
         self,
         db: Session,
@@ -1042,6 +1069,8 @@ class MappingExecutionService:
         schema_fingerprint_snapshot: str,
         field_mapping: FieldMapping,
     ) -> None:
+        if self._is_memory_derived_unchanged(db, organization_id, field_mapping):
+            return
         source_field = db.scalar(
             select(SourceField).where(
                 SourceField.organization_id == organization_id,
