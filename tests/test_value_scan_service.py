@@ -560,6 +560,7 @@ def clone_finding(base: Finding, index: int, status: str) -> Finding:
     detected_at = datetime(2026, 8, 1, tzinfo=UTC)
     return Finding(
         organization_id=base.organization_id,
+        governance_tier=base.governance_tier,
         rule_id=f"scan-clone-{index}-{uuid4()}",
         title=f"Directional opportunity {index}",
         summary="Governed cloned Finding for bounded scan certification.",
