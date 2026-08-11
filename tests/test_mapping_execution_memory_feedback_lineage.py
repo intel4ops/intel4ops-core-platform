@@ -615,9 +615,9 @@ def test_foreign_tenant_origin_fails_safe_to_independent_evidence(db: Session) -
     field_mapping = _publish(db, template_version_a, field_a, actor_a, org_a)
     # Simulate corrupted/direct-database data: the normal API rejects a foreign
     # origin at write time (ORIGIN_MEMORY_VERSION_NOT_FOUND); this bypasses it.
-    field_mapping = db.get(FieldMapping, field_mapping.id)
-    assert field_mapping is not None
-    field_mapping.origin_memory_version_id = origin_version_b.id
+    reloaded_field_mapping = db.get(FieldMapping, field_mapping.id)
+    assert reloaded_field_mapping is not None
+    reloaded_field_mapping.origin_memory_version_id = origin_version_b.id
     db.commit()
 
     run = _run(
@@ -648,9 +648,9 @@ def test_unresolvable_origin_fails_safe_to_independent_evidence(db: Session) -> 
     field, _, template_version = _organization_template(db, org, actor, "lfh-j")
     schema = _schema_with_field(db, org, dataset_id, dataset_version_id, "lfh-j")
     field_mapping = _publish(db, template_version, field, actor, org)
-    field_mapping = db.get(FieldMapping, field_mapping.id)
-    assert field_mapping is not None
-    field_mapping.origin_memory_version_id = uuid4()
+    reloaded_field_mapping = db.get(FieldMapping, field_mapping.id)
+    assert reloaded_field_mapping is not None
+    reloaded_field_mapping.origin_memory_version_id = uuid4()
     db.commit()
 
     run = _run(
