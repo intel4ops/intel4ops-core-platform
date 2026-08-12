@@ -56,11 +56,15 @@ Alembic revision `20260816_0042` (`migrations/versions/20260816_0042_finding_gov
    `(organization_id, governance_tier)`, following the existing
    `ix_findings_organization_<field>` convention.
 
-Downgrade removes the index, constraint, and column in that order. The
-upgrade → downgrade → re-upgrade lifecycle was verified against a full
-migration-chain replay on SQLite (see certification report); PostgreSQL
-certification is the authoritative target and is tracked separately (see
-Known limitations).
+Downgrade removes the index, constraint, and column in that order.
+
+The full upgrade → downgrade → re-upgrade lifecycle, the deterministic
+backfill (governed-shaped, legacy-`FindingService`-shaped, Industry-Pack-shaped,
+and Signature-shaped historical rows), zero-NULL-after-backfill, DB-level
+rejection of an invalid tier, and index/constraint presence were all
+certified against a real disposable PostgreSQL 17 instance
+(`tests/test_postgres_migrations.py::test_p3_03e1_governance_tier_historical_backfill_is_deterministic`
+and `::test_p3_03e1_migration_upgrade_downgrade_reupgrade_lifecycle_on_postgres`), not merely SQLite.
 
 ## API contract
 
@@ -94,6 +98,14 @@ model-level `ck_findings_status` constraint. Governed responses are
 byte-for-byte unaffected: every field a governed publication populates
 still round-trips exactly as before.
 
+Note that `FindingQueryService.get`/`.list` (the service backing this
+endpoint) has always filtered to `finding_code IS NOT NULL` — a pre-existing
+restriction this package did not change. `FindingService.create` rows never
+set `finding_code`, so plain legacy/Job-to-Cash/maintenance-demo Findings
+remain unreachable through this endpoint regardless of `governance_tier`;
+only Industry Pack and Operational Signature `LIGHTWEIGHT` rows (which do
+set `finding_code`) are visible through it today.
+
 ## Legacy route isolation
 
 Three legacy/demo routes in `app/api/routes.py` are hidden from the
@@ -104,30 +116,28 @@ authorization or entitlement behavior:
 - `GET /api/v1/command/findings`
 - `POST /api/v1/recovery/actions`
 
-They remain callable. This is documentation/API-surface isolation only; it
-is not the CM-04 entitlement-hardening work, which is out of scope here.
+They remain callable. `app/api/command_routes.py` was not touched. This is
+documentation/API-surface isolation only; it is not a broader
+entitlement-hardening change, which is out of scope here.
 
-## Known limitations
+## Known limitations / deferred
 
-- **PostgreSQL certification not executed in this session.** No disposable
-  PostgreSQL credentials were available (see the final report). The
-  migration was verified end-to-end — full chain upgrade from base,
-  upgrade → downgrade → re-upgrade, resulting schema (column, `NOT NULL`,
-  check constraint, index) — against SQLite, and the PostgreSQL-specific
-  certification tests (`tests/test_postgres_migrations.py::test_p3_03e1_*`)
-  are authored and collect cleanly but have not been executed against a
-  live PostgreSQL instance. This should be run before independent
-  certification is granted.
 - **Pre-existing, unrelated defect discovered during testing (not fixed):**
-  `IndustryPackService.execute` mutates the `result_json` dict in place
+  `TenantIndustryPackService.execute` mutates the `result_json` dict in place
   after the row has already been flushed once; because the object identity
   does not change, SQLAlchemy's change tracking does not detect the later
-  `finding_id` / `opportunity_id` / `recovery_action_id` additions as
-  dirty, and they are silently absent from the persisted `result_json` for
-  any non-Job-to-Cash pack execution. This predates P3.03E.1, is unrelated
-  to governance tiering, and touching it would exceed the "no change to
-  rules, detection, economics, entitlements, or output" boundary in section
-  10 of the work order. Recorded here as known/deferred, not silently
-  fixed.
-- Legacy route entitlement gap discovered during P3.03E (pre-existing):
-  known/deferred, not fixed here, consistent with the work order.
+  `finding_id` / `opportunity_id` / `recovery_action_id` additions as dirty,
+  and they are silently absent from the persisted `result_json` for any
+  non-Job-to-Cash pack execution. This predates P3.03E.1, is unrelated to
+  governance tiering, and touching it would exceed this package's scope.
+  Recorded here as known/deferred, not silently fixed. (The focused test
+  `test_industry_pack_finding_sets_governance_tier_lightweight` works around
+  it by querying the created `Finding` directly instead of trusting
+  `result_json["finding_id"]`.)
+- **Legacy-route entitlement gap is a known, pre-existing condition**, not
+  addressed here: hiding a route from OpenAPI is a documentation change, not
+  an access-control change. The three legacy routes keep whatever
+  authorization they had before this package.
+- **A future decision to migrate Job-to-Cash, Industry Packs, or Operational
+  Signatures onto the governed publication path**, or to introduce a third
+  tier, is explicitly out of scope for P3.03E.1 and was not attempted.

@@ -6314,7 +6314,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260815_0041"]
+    assert heads == ["20260816_0042"]
 
 
 @pytest.mark.postgres
@@ -6796,7 +6796,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260815_0041"]
+    assert heads == ["20260816_0042"]
 
 
 @pytest.mark.postgres
