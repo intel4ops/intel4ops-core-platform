@@ -16,7 +16,13 @@ from app.models.commercial import (
     IndustryPackDefinition,
     UsageEvent,
 )
-from app.models.entities import Finding, FindingEvidence, Organization, RecoveryAction
+from app.models.entities import (
+    Finding,
+    FindingEvidence,
+    FindingGovernanceTier,
+    Organization,
+    RecoveryAction,
+)
 from app.models.industry_packs import (
     IndustryPackAssignmentState,
     IndustryPackComponent,
@@ -540,6 +546,7 @@ class TenantIndustryPackService:
             exposure = Decimal(str(result["exposure"]))
             finding = Finding(
                 organization_id=org,
+                governance_tier=FindingGovernanceTier.LIGHTWEIGHT.value,
                 rule_id=rule.code,
                 title=f"{rule.code} governed industry-pack finding",
                 summary=f"{rule.code} exceeded its governed threshold.",

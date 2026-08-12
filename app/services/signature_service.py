@@ -15,7 +15,7 @@ from app.models.commercial import (
     IndustryPackDefinition,
     UsageEvent,
 )
-from app.models.entities import Finding, FindingEvidence, Organization
+from app.models.entities import Finding, FindingEvidence, FindingGovernanceTier, Organization
 from app.models.industry_packs import IndustryPackAssignmentState, IndustryPackVersion
 from app.models.raw_lineage import LineageNode
 from app.models.signatures import (
@@ -421,6 +421,7 @@ class TenantSignatureService:
         exposure = Decimal(str(payload.observations.get("billing_variance", 0)))
         finding = Finding(
             organization_id=organization_id,
+            governance_tier=FindingGovernanceTier.LIGHTWEIGHT.value,
             rule_id=signature.code,
             title=signature.name,
             summary=signature.description,

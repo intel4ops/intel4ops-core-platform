@@ -3,7 +3,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.entities import Finding, FindingEvidence, Organization, OrganizationStatus
+from app.models.entities import (
+    Finding,
+    FindingEvidence,
+    FindingGovernanceTier,
+    Organization,
+    OrganizationStatus,
+)
 from app.schemas.contracts import FindingCreate
 
 
@@ -18,7 +24,9 @@ class FindingService:
         if organization is None:
             raise ValueError("Active organization not found")
         finding = Finding(
-            organization_id=organization_id, **payload.model_dump(exclude={"evidence"})
+            organization_id=organization_id,
+            governance_tier=FindingGovernanceTier.LIGHTWEIGHT.value,
+            **payload.model_dump(exclude={"evidence"}),
         )
         for item in payload.evidence:
             finding.evidence.append(

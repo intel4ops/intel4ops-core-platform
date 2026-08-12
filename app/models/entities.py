@@ -70,6 +70,11 @@ class FindingStatus(StrEnum):
     VERIFIED = "verified"
 
 
+class FindingGovernanceTier(StrEnum):
+    GOVERNED = "GOVERNED"
+    LIGHTWEIGHT = "LIGHTWEIGHT"
+
+
 portable_json = JSON().with_variant(
     postgresql.JSONB(astext_type=Text()),
     "postgresql",
@@ -188,7 +193,16 @@ class Finding(Base):
             "'accepted', 'in_recovery', 'verified')",
             name="ck_findings_status",
         ),
+        CheckConstraint(
+            "governance_tier IN ('GOVERNED', 'LIGHTWEIGHT')",
+            name="ck_findings_governance_tier",
+        ),
         Index("ix_findings_organization_status", "organization_id", "status"),
+        Index(
+            "ix_findings_organization_governance_tier",
+            "organization_id",
+            "governance_tier",
+        ),
         Index("ix_findings_organization_type", "organization_id", "finding_type"),
         Index("ix_findings_organization_severity", "organization_id", "severity"),
         Index("ix_findings_organization_detected", "organization_id", "detected_at"),
@@ -228,6 +242,7 @@ class Finding(Base):
     currency: Mapped[str] = mapped_column(String(10), default="USD")
     confidence_score: Mapped[Decimal] = mapped_column(Numeric(6, 4), default=Decimal("0"))
     status: Mapped[str] = mapped_column(String(50), default=FindingStatus.OPEN.value)
+    governance_tier: Mapped[str] = mapped_column(String(20))
     ontology_concept_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     causal_chain_id: Mapped[str | None] = mapped_column(String, nullable=True)
     first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

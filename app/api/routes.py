@@ -125,7 +125,11 @@ async def trust_profile(file: UploadFile = File(...)) -> TrustReport:
     return trust_engine.profile(dataframe, file.filename or "upload")
 
 
-@router.post("/intelligence/maintenance/analyze", response_model=list[FindingRead])
+@router.post(
+    "/intelligence/maintenance/analyze",
+    response_model=list[FindingRead],
+    include_in_schema=False,
+)
 async def analyze_maintenance(
     organization_id: UUID,
     file: UploadFile = File(...),
@@ -143,7 +147,11 @@ async def analyze_maintenance(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/command/findings", response_model=list[FindingRead])
+@router.get(
+    "/command/findings",
+    response_model=list[FindingRead],
+    include_in_schema=False,
+)
 def list_findings(
     organization_id: UUID,
     db: Session = Depends(get_db),
@@ -152,7 +160,11 @@ def list_findings(
     return finding_service.list(db, organization_id)
 
 
-@router.post("/recovery/actions", response_model=RecoveryActionRead)
+@router.post(
+    "/recovery/actions",
+    response_model=RecoveryActionRead,
+    include_in_schema=False,
+)
 def create_recovery_action(
     organization_id: UUID,
     payload: RecoveryActionCreate,

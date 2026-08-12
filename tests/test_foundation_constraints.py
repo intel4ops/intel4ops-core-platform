@@ -27,6 +27,7 @@ def organization(db: Session, slug: str) -> Organization:
 def finding(db: Session, org: Organization) -> Finding:
     row = Finding(
         organization_id=org.id,
+        governance_tier="LIGHTWEIGHT",
         rule_id="constraint-test",
         title="Constraint test",
         summary="Database enforcement",
@@ -45,13 +46,14 @@ def finding(db: Session, org: Organization) -> Finding:
         (Organization, "status", "unknown"),
         (Finding, "severity", "urgent"),
         (Finding, "status", "unknown"),
+        (Finding, "governance_tier", "UNKNOWN"),
         (RecoveryAction, "status", "unknown"),
     ],
 )
 def test_foundation_state_checks_reject_invalid_values(
     db: Session, model: type[object], field: str, invalid: str
 ) -> None:
-    org = organization(db, f"check-{model.__name__.lower()}-{field}")
+    org = organization(db, f"check-{model.__name__.lower()}-{field}".replace("_", "-"))
     if model is Organization:
         row_id = org.id
     else:

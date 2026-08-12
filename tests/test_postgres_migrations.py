@@ -3,6 +3,7 @@ import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
 from threading import Barrier, Event
@@ -100,6 +101,7 @@ from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
     Finding,
+    FindingGovernanceTier,
     MembershipRole,
     MembershipStatus,
     Organization,
@@ -2787,6 +2789,7 @@ def test_uuid_foreign_keys_and_finding_tenant_scope(postgres_engine: Engine) -> 
         session.add(
             Finding(
                 organization_id=uuid4(),
+                governance_tier="LIGHTWEIGHT",
                 rule_id="INVALID-FK",
                 title="Invalid organization",
                 summary="Must fail",
@@ -6311,7 +6314,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260815_0041"]
+    assert heads == ["20260816_0042"]
 
 
 @pytest.mark.postgres
@@ -6793,7 +6796,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260815_0041"]
+    assert heads == ["20260816_0042"]
 
 
 @pytest.mark.postgres
@@ -6866,3 +6869,267 @@ def test_dbfeedback_c_lineage_column_persists_on_postgres(postgres_engine: Engin
         reread = verify_session.get(FieldMapping, field_mapping_id)
         assert reread is not None
         assert reread.origin_memory_version_id == confirmed_id
+
+
+@pytest.mark.postgres
+def test_p3_03e1_governance_tier_historical_backfill_is_deterministic(
+    postgres_engine: Engine,
+) -> None:
+    """P3.03E.1 hard tests L, M, N, O, P, Q, R, S, T.
+
+    Seeds Finding rows shaped like each historical producer at the current
+    head schema, strips the governance_tier column back to 20260815_0041,
+    then re-applies 20260816_0042 and asserts the deterministic backfill rule:
+    GOVERNED only when source_execution_id, trust_assessment_id,
+    analytical_readiness_id, and dataset_id are ALL non-null; LIGHTWEIGHT
+    otherwise. No third tier, no inference from any other column.
+    """
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    organization_service = OrganizationService()
+    source_service = SourceSystemService()
+    dataset_service = DatasetService()
+    trust_service = TrustAssessmentService()
+    intelligence_service = IntelligenceExecutionService()
+    suffix = uuid4().hex[:10]
+    finding_ids: dict[str, UUID] = {}
+
+    with Session(postgres_engine) as session:
+        actor = uuid4()
+        organization = organization_service.create(
+            session,
+            OrganizationCreate(
+                name=f"Governance Backfill {suffix}",
+                slug=f"gov-backfill-{suffix}",
+                country_code="US",
+                default_currency="USD",
+                timezone="UTC",
+            ),
+        )
+        source = source_service.create(
+            session,
+            organization.id,
+            SourceSystemCreate(
+                name="Backfill ERP",
+                code="backfill-erp",
+                system_type="erp",
+                integration_method="api",
+            ),
+            actor,
+        )
+        source.status = "active"
+        session.commit()
+        dataset = dataset_service.create(
+            session,
+            organization.id,
+            DatasetCreate(
+                source_system_id=source.id,
+                name="Backfill dataset",
+                code=f"backfill-dataset-{suffix}",
+                domain="finance",
+                dataset_type="transactional",
+                default_currency="USD",
+            ),
+            actor,
+        )
+        assessment = trust_service.create_and_execute(
+            session,
+            organization.id,
+            dataset.id,
+            TrustAssessmentCreate(
+                records=[{"id": "1", "amount": "10.00"}],
+                rule_configurations={
+                    "required_field_completeness": {"required_fields": ["id", "amount"]},
+                    "numeric_range_validity": {"numeric_ranges": {"amount": {"minimum": 0}}},
+                },
+            ),
+        )
+        execution = intelligence_service.execute(
+            session,
+            organization.id,
+            IntelligenceExecutionCreate(
+                dataset_id=dataset.id,
+                trust_assessment_id=assessment.id,
+                execution_type="calculation",
+                definition_code="sum",
+                records=[{"amount": "10.00"}],
+                parameters={"field": "amount"},
+                currency="USD",
+            ),
+            actor,
+        )
+
+        # L: full governed lineage shape.
+        governed = FindingPublicationService().publish_candidate_finding(
+            session,
+            organization.id,
+            CandidateFindingCreate(
+                execution_id=execution.id,
+                result_id=execution.id,
+                finding_type="kpi",
+                title="Governed backfill shape",
+                summary="Full governed lineage.",
+                domain_code="finance",
+                measured_value=execution.result_value,
+                measured_value_type="currency",
+                measured_currency="USD",
+                severity="info",
+                severity_reason={"policy": "backfill-validation"},
+                dataset_reference=f"{dataset.code}@backfill-validation",
+                evidence_policy_code="P3.03E.1-BACKFILL",
+                evidence_policy_version="1.0",
+                calculation_traces=[
+                    {
+                        "operation_code": "sum",
+                        "input_reference_summary": {"dataset_id": str(dataset.id)},
+                        "parameter_summary": {"field": "amount"},
+                    }
+                ],
+            ),
+            actor,
+        )
+        finding_ids["governed"] = governed.id
+        assert governed.source_execution_id is not None
+        assert governed.trust_assessment_id is not None
+        assert governed.analytical_readiness_id is not None
+        assert governed.dataset_id is not None
+
+        # M: legacy FindingService shape (no lineage FKs, no finding_code).
+        legacy = FindingService().create(
+            session,
+            organization.id,
+            FindingCreate(
+                rule_id="BACKFILL.LEGACY",
+                title="Legacy backfill shape",
+                summary="No governed lineage.",
+                domain="job_to_cash",
+                severity="high",
+                confidence_score=1,
+            ),
+        )
+        finding_ids["legacy"] = legacy.id
+
+        # N: Industry-Pack-like shape (finding_code set, no lineage FKs).
+        industry_pack_like = Finding(
+            organization_id=organization.id,
+            governance_tier=FindingGovernanceTier.LIGHTWEIGHT.value,
+            rule_id="PACK-BACKFILL.RULE",
+            finding_code="PACK-BACKFILL.RULE",
+            finding_type="deterministic_rule",
+            title="Industry-pack-like backfill shape",
+            summary="Direct industry-pack style creation.",
+            domain="operations",
+            severity="medium",
+            confidence_score=1,
+            status="open",
+            industry_pack_code="PACK-BACKFILL",
+            measured_value=Decimal("12"),
+            measured_value_type="observed",
+            exposure_value=Decimal("2"),
+            exposure_value_type="estimated",
+            affected_record_count=1,
+            detected_at=datetime.now(UTC),
+            definition_code="PACK-BACKFILL.RULE",
+            definition_version="1.0.0",
+            confidence_level="high",
+            deduplication_key=uuid4().hex,
+            created_by_user_id=actor,
+        )
+        session.add(industry_pack_like)
+        session.flush()
+        finding_ids["industry_pack_like"] = industry_pack_like.id
+
+        # O: Signature-like shape (finding_code set, no lineage FKs).
+        signature_like = Finding(
+            organization_id=organization.id,
+            governance_tier=FindingGovernanceTier.LIGHTWEIGHT.value,
+            rule_id="SIGNATURE.BACKFILL",
+            finding_code="SIGNATURE.BACKFILL",
+            finding_type="operational_signature",
+            title="Signature-like backfill shape",
+            summary="Direct signature style creation.",
+            domain="oilfield",
+            domain_code="oilfield",
+            severity="medium",
+            confidence_score=Decimal("0.9"),
+            status="open",
+            confidence_level="high",
+            affected_record_count=1,
+            detected_at=datetime.now(UTC),
+            definition_code="SIGNATURE.BACKFILL",
+            definition_version="1.0.0",
+            deduplication_key=uuid4().hex,
+            created_by_user_id=actor,
+        )
+        session.add(signature_like)
+        session.flush()
+        finding_ids["signature_like"] = signature_like.id
+        session.commit()
+
+    # Strip governance_tier back to its pre-P3.03E.1 (nonexistent) state, then
+    # re-apply the migration to exercise the deterministic backfill rule.
+    command.downgrade(config, "20260815_0041")
+    command.upgrade(config, "head")
+
+    inspector = inspect(postgres_engine)
+    columns = {column["name"]: column for column in inspector.get_columns("findings")}
+    assert "governance_tier" in columns
+    assert columns["governance_tier"]["nullable"] is False  # S (NOT NULL half of Q/S)
+
+    check_constraints = {c["name"] for c in inspector.get_check_constraints("findings")}
+    assert "ck_findings_governance_tier" in check_constraints  # S
+
+    indexes = {ix["name"] for ix in inspector.get_indexes("findings")}
+    assert "ix_findings_organization_governance_tier" in indexes  # R
+
+    with Session(postgres_engine) as session:
+        raw_rows = {
+            key: session.get(Finding, finding_id) for key, finding_id in finding_ids.items()
+        }
+        assert all(row is not None for row in raw_rows.values())
+        rows = cast(dict[str, Finding], raw_rows)
+        assert rows["governed"].governance_tier == FindingGovernanceTier.GOVERNED.value  # L
+        assert rows["legacy"].governance_tier == FindingGovernanceTier.LIGHTWEIGHT.value  # M
+        assert (
+            rows["industry_pack_like"].governance_tier == FindingGovernanceTier.LIGHTWEIGHT.value
+        )  # N
+        assert (
+            rows["signature_like"].governance_tier == FindingGovernanceTier.LIGHTWEIGHT.value
+        )  # O
+
+        remaining_null = session.scalar(
+            select(func.count()).select_from(Finding).where(Finding.governance_tier.is_(None))
+        )
+        assert remaining_null == 0  # P
+
+        with pytest.raises(IntegrityError):
+            session.execute(
+                text("UPDATE findings SET governance_tier = 'UNKNOWN' WHERE id = :id"),
+                {"id": str(finding_ids["legacy"])},
+            )
+            session.commit()
+        session.rollback()  # Q
+
+
+@pytest.mark.postgres
+def test_p3_03e1_migration_upgrade_downgrade_reupgrade_lifecycle_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    """P3.03E.1 hard test T."""
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "20260815_0041")
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+    assert "governance_tier" in {column["name"] for column in inspector.get_columns("findings")}
+    command.downgrade(config, "20260815_0041")
+    inspector = inspect(postgres_engine)
+    assert "governance_tier" not in {column["name"] for column in inspector.get_columns("findings")}
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+    columns = {column["name"]: column for column in inspector.get_columns("findings")}
+    assert "governance_tier" in columns
+    assert columns["governance_tier"]["nullable"] is False
+    check_constraints = {c["name"] for c in inspector.get_check_constraints("findings")}
+    assert "ck_findings_governance_tier" in check_constraints
+    indexes = {ix["name"] for ix in inspector.get_indexes("findings")}
+    assert "ix_findings_organization_governance_tier" in indexes

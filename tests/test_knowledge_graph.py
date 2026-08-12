@@ -112,6 +112,7 @@ def _foundation(db: Session, *, entitled: bool = True) -> tuple[Organization, Fi
         )
     finding = Finding(
         organization_id=organization.id,
+        governance_tier="LIGHTWEIGHT",
         rule_id="GRAPH.TEST",
         title="Governed graph test finding",
         summary="A test finding projected from the authoritative store.",
@@ -290,6 +291,7 @@ def test_projection_carries_forward_the_active_snapshot(db: Session) -> None:
     )
     second_finding = Finding(
         organization_id=organization.id,
+        governance_tier="LIGHTWEIGHT",
         rule_id="GRAPH.SECOND",
         title="Second governed finding",
         summary="A second authoritative finding.",

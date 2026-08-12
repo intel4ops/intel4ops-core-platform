@@ -58,6 +58,15 @@ class FindingStatusValue(StrEnum):
     SUPERSEDED = "superseded"
     RESOLVED = "resolved"
     ARCHIVED = "archived"
+    OPEN = "open"
+    ACCEPTED = "accepted"
+    IN_RECOVERY = "in_recovery"
+    VERIFIED = "verified"
+
+
+class FindingGovernanceTierValue(StrEnum):
+    GOVERNED = "GOVERNED"
+    LIGHTWEIGHT = "LIGHTWEIGHT"
 
 
 class EvidenceType(StrEnum):
@@ -279,42 +288,43 @@ class FindingRead(BaseModel):
     id: UUID
     organization_id: UUID
     finding_code: str
-    finding_type: FindingType
+    finding_type: FindingType | str
     title: str
     summary: str
     description: str | None
-    domain_code: str
+    domain_code: str | None
     process_code: str | None
     industry_pack_code: str | None
     status: FindingStatusValue
+    governance_tier: FindingGovernanceTierValue
     severity: FindingSeverity
-    severity_reason: dict[str, object]
-    confidence_level: ConfidenceLevel
+    severity_reason: dict[str, object] | None
+    confidence_level: ConfidenceLevel | str
     confidence_score: Decimal | None
-    measured_value: Decimal
-    measured_value_type: FindingValueType
+    measured_value: Decimal | None
+    measured_value_type: FindingValueType | str | None
     measured_unit: str | None
     measured_currency: str | None
     exposure_value: Decimal | None
-    exposure_value_type: FindingValueType | None
+    exposure_value_type: FindingValueType | str | None
     exposure_currency: str | None
-    affected_record_count: int
+    affected_record_count: int | None
     occurrence_start: datetime | None
     occurrence_end: datetime | None
     detected_at: datetime
     published_at: datetime | None
     superseded_by_finding_id: UUID | None
-    source_execution_id: UUID
-    source_result_id: UUID
-    definition_code: str
-    definition_version: str
-    trust_assessment_id: UUID
-    analytical_readiness_id: UUID
-    dataset_id: UUID
-    dataset_reference: str
-    warnings: list[str]
-    limitations: list[str]
-    content_fingerprint: str
+    source_execution_id: UUID | None
+    source_result_id: UUID | None
+    definition_code: str | None
+    definition_version: str | None
+    trust_assessment_id: UUID | None
+    analytical_readiness_id: UUID | None
+    dataset_id: UUID | None
+    dataset_reference: str | None
+    warnings: list[str] | None
+    limitations: list[str] | None
+    content_fingerprint: str | None
     created_at: datetime
     updated_at: datetime | None
 
