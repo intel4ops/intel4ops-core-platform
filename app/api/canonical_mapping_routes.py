@@ -1,7 +1,7 @@
 from typing import NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import (
@@ -247,16 +247,20 @@ def add_field_mapping(
     organization_id: UUID,
     version_id: UUID,
     payload: FieldMappingCreate,
+    response: Response,
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*OIKB_AUTHOR_ROLES)),
 ) -> object:
     try:
-        return mapping_template_service.add_field_mapping(
+        result = mapping_template_service.add_field_mapping_with_status(
             db,
             version_id,
             payload,
             organization_id,
         )
+        if not result.created:
+            response.status_code = 200
+        return result.field_mapping
     except CanonicalMappingServiceError as exc:
         _raise(exc)
 

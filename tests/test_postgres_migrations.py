@@ -31,6 +31,8 @@ from test_canonical_mapping_foundation import (
 )
 from test_causal_intelligence_foundation import confirm_hypothesis as confirm_causal_hypothesis
 from test_causal_intelligence_foundation import make_org as make_causal_org
+from test_cm03_field_mapping_idempotency import _mapping_context as cm03_mapping_context
+from test_cm03_field_mapping_idempotency import _payload as cm03_payload
 from test_decision_intelligence_foundation import add_graph as add_decision_graph
 from test_decision_intelligence_foundation import make_org as make_decision_org
 from test_executive_narrative_service import FakeNarrativeProvider
@@ -188,6 +190,7 @@ from app.services.ai_operational_profile_service import AIOperationalProfileServ
 from app.services.canonical_mapping_service import (
     CanonicalMappingServiceError,
     mapping_execution_service,
+    mapping_template_service,
     schema_discovery_service,
 )
 from app.services.causal_intelligence_service import (
@@ -5519,6 +5522,100 @@ def test_concurrent_invitation_creation_for_same_email_yields_one_pending(
             )
         )
         assert pending_count == 1
+
+
+@pytest.mark.postgres
+def test_cm03_concurrent_identical_field_mapping_creation_is_idempotent(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, version_id, field_id, _ = cm03_mapping_context(
+            session, f"cm03-pg-identical-{uuid4().hex[:8]}"
+        )
+    payload = cm03_payload(field_id)
+    barrier = Barrier(2)
+
+    def create() -> tuple[UUID, bool, int]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            result = mapping_template_service.add_field_mapping_with_status(
+                session, version_id, payload, organization_id
+            )
+            usable_count = session.scalar(
+                select(func.count())
+                .select_from(FieldMapping)
+                .where(FieldMapping.template_version_id == version_id)
+            )
+            assert usable_count is not None
+            return result.field_mapping.id, result.created, usable_count
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(create)
+        second_future = executor.submit(create)
+        results = [first_future.result(), second_future.result()]
+
+    assert {created for _, created, _ in results} == {False, True}
+    assert results[0][0] == results[1][0]
+    assert all(count == 1 for _, _, count in results)
+    with Session(postgres_engine) as session:
+        rows = list(
+            session.scalars(
+                select(FieldMapping).where(FieldMapping.template_version_id == version_id)
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].origin_memory_version_id is None
+
+
+@pytest.mark.postgres
+def test_cm03_concurrent_conflicting_field_mapping_creation_has_typed_loser(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, version_id, field_id, _ = cm03_mapping_context(
+            session, f"cm03-pg-conflict-{uuid4().hex[:8]}"
+        )
+    barrier = Barrier(2)
+
+    def create(default_value: str) -> tuple[str, UUID | None, str | None, int]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                result = mapping_template_service.add_field_mapping_with_status(
+                    session,
+                    version_id,
+                    cm03_payload(field_id, default_value=default_value),
+                    organization_id,
+                )
+            except CanonicalMappingServiceError as exc:
+                usable_count = session.scalar(
+                    select(func.count())
+                    .select_from(FieldMapping)
+                    .where(FieldMapping.template_version_id == version_id)
+                )
+                assert usable_count is not None
+                return "conflict", None, exc.code, usable_count
+            return "created", result.field_mapping.id, None, 1
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(create, "first")
+        second_future = executor.submit(create, "second")
+        results = [first_future.result(), second_future.result()]
+
+    assert sorted(status for status, _, _, _ in results) == ["conflict", "created"]
+    loser = next(result for result in results if result[0] == "conflict")
+    assert loser[2] == "FIELD_MAPPING_CONFLICT"
+    assert loser[3] == 1
+    with Session(postgres_engine) as session:
+        rows = list(
+            session.scalars(
+                select(FieldMapping).where(FieldMapping.template_version_id == version_id)
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].default_value in {"first", "second"}
 
 
 @pytest.mark.postgres
