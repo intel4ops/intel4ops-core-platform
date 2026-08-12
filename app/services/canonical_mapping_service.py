@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
@@ -91,6 +92,12 @@ from app.services.operational_memory_service import (
 )
 
 _MAPPING_RUN_IDEMPOTENCY_CONSTRAINT = "uq_mapping_run_idempotency_key"
+
+
+@dataclass(frozen=True)
+class FieldMappingCreationResult:
+    field_mapping: FieldMapping
+    created: bool
 
 
 class CanonicalMappingServiceError(RuntimeError):
@@ -445,6 +452,17 @@ class MappingTemplateService:
         payload: FieldMappingCreate,
         organization_id: UUID | None,
     ) -> FieldMapping:
+        return self.add_field_mapping_with_status(
+            db, version_id, payload, organization_id
+        ).field_mapping
+
+    def add_field_mapping_with_status(
+        self,
+        db: Session,
+        version_id: UUID,
+        payload: FieldMappingCreate,
+        organization_id: UUID | None,
+    ) -> FieldMappingCreationResult:
         version = self.require_version(db, version_id, organization_id)
         if version.lifecycle_status not in {
             MappingLifecycleStatus.DRAFT.value,
@@ -473,9 +491,51 @@ class MappingTemplateService:
             )
         field = FieldMapping(template_version_id=version.id, **payload.model_dump())
         db.add(field)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(
+                select(FieldMapping).where(
+                    FieldMapping.template_version_id == version.id,
+                    FieldMapping.source_field_path == payload.source_field_path,
+                    FieldMapping.canonical_field_definition_id
+                    == payload.canonical_field_definition_id,
+                )
+            )
+            if existing is not None:
+                if self._field_mapping_content_matches(existing, payload):
+                    return FieldMappingCreationResult(existing, created=False)
+                _fail(
+                    "FIELD_MAPPING_CONFLICT",
+                    "Field mapping already exists with different content",
+                    409,
+                )
+            sequence_mapping = db.scalar(
+                select(FieldMapping).where(
+                    FieldMapping.template_version_id == version.id,
+                    FieldMapping.sequence == payload.sequence,
+                )
+            )
+            if sequence_mapping is not None:
+                _fail(
+                    "FIELD_MAPPING_SEQUENCE_CONFLICT",
+                    "Field mapping sequence is already occupied",
+                    409,
+                )
+            raise
         db.refresh(field)
-        return field
+        return FieldMappingCreationResult(field, created=True)
+
+    @staticmethod
+    def _field_mapping_content_matches(existing: FieldMapping, payload: FieldMappingCreate) -> bool:
+        return (
+            existing.source_field_path == payload.source_field_path
+            and existing.canonical_field_definition_id == payload.canonical_field_definition_id
+            and existing.default_value == payload.default_value
+            and existing.is_required_for_publication == payload.is_required_for_publication
+            and existing.origin_memory_version_id == payload.origin_memory_version_id
+        )
 
     @staticmethod
     def _validate_origin_memory_lineage(
