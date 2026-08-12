@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.auth.authorization import (
     OrganizationAccess,
-    require_organization_roles,
     require_platform_admin,
 )
+from app.auth.commercial import require_commercial_entitlement
 from app.auth.identity import AuthenticatedUser
 from app.auth.permissions import (
     INGESTION_ADMIN_ROLES,
@@ -138,7 +138,9 @@ def tenant_types(
     organization_id: UUID,
     kind: str = Query(pattern="^(entity|event|metric)$"),
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return canonical_registry_service.list_types(db, kind, organization_id)
@@ -155,7 +157,9 @@ def discover_schema(
     organization_id: UUID,
     payload: SourceSchemaDiscover,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_OPERATION_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
+    ),
 ) -> object:
     try:
         return schema_discovery_service.discover(db, organization_id, payload)
@@ -171,7 +175,9 @@ def schemas_for_version(
     organization_id: UUID,
     dataset_version_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     return schema_discovery_service.for_dataset_version(db, organization_id, dataset_version_id)
 
@@ -184,7 +190,9 @@ def field_mapping_suggestions(
     organization_id: UUID,
     source_schema_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return field_mapping_suggestion_service.suggest(db, organization_id, source_schema_id)
@@ -201,7 +209,9 @@ def create_tenant_template(
     organization_id: UUID,
     payload: MappingTemplateCreate,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_ADMIN_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_ADMIN_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_template_service.create(
@@ -224,7 +234,9 @@ def create_template_version(
     template_id: UUID,
     payload: MappingTemplateVersionCreate,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*OIKB_AUTHOR_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *OIKB_AUTHOR_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_template_service.create_version(
@@ -249,7 +261,9 @@ def add_field_mapping(
     payload: FieldMappingCreate,
     response: Response,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*OIKB_AUTHOR_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *OIKB_AUTHOR_ROLES)
+    ),
 ) -> object:
     try:
         result = mapping_template_service.add_field_mapping_with_status(
@@ -274,7 +288,9 @@ def add_transformation(
     field_mapping_id: UUID,
     payload: TransformationCreate,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*OIKB_AUTHOR_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *OIKB_AUTHOR_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_template_service.add_transformation(
@@ -296,7 +312,9 @@ def transition_template_version(
     version_id: UUID,
     target: MappingLifecycleStatus,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_ADMIN_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_ADMIN_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_template_service.transition(
@@ -315,7 +333,9 @@ def create_crosswalk(
     organization_id: UUID,
     payload: ValueCrosswalkCreate,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_ADMIN_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_ADMIN_ROLES)
+    ),
 ) -> object:
     try:
         return value_crosswalk_service.create(
@@ -334,7 +354,9 @@ def add_crosswalk_entry(
     crosswalk_id: UUID,
     payload: ValueCrosswalkEntryCreate,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*OIKB_AUTHOR_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *OIKB_AUTHOR_ROLES)
+    ),
 ) -> object:
     try:
         return value_crosswalk_service.add_entry(db, crosswalk_id, payload, organization_id)
@@ -347,7 +369,9 @@ def approve_crosswalk_entry(
     organization_id: UUID,
     entry_id: UUID,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_ADMIN_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_ADMIN_ROLES)
+    ),
 ) -> object:
     try:
         return value_crosswalk_service.approve(
@@ -365,7 +389,9 @@ def execute_mapping(
     organization_id: UUID,
     payload: MappingRunCreate,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_OPERATION_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_execution_service.execute(
@@ -383,7 +409,9 @@ def mapping_run(
     organization_id: UUID,
     mapping_run_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_execution_service.get(db, organization_id, mapping_run_id)
@@ -399,7 +427,9 @@ def mapping_exceptions(
     organization_id: UUID,
     mapping_run_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_execution_service.exceptions(db, organization_id, mapping_run_id)
@@ -413,7 +443,9 @@ def review_exception(
     exception_id: UUID,
     payload: MappingReviewCreate,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_OPERATION_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_review_service.review_exception(
@@ -431,7 +463,9 @@ def review_exception(
 def entity_match_candidates(
     organization_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     return entity_resolution_service.candidates(db, organization_id)
 
@@ -442,7 +476,9 @@ def decide_match_candidate(
     candidate_id: UUID,
     payload: EntityMatchDecision,
     db: Session = Depends(get_db),
-    access: OrganizationAccess = Depends(require_organization_roles(*INGESTION_OPERATION_ROLES)),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_review_service.decide_candidate(
@@ -461,7 +497,9 @@ def canonical_entity(
     organization_id: UUID,
     entity_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return canonical_record_service.entity(db, organization_id, entity_id)
@@ -473,7 +511,9 @@ def canonical_entity(
 def canonical_events(
     organization_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     return canonical_record_service.events(db, organization_id)
 
@@ -482,7 +522,9 @@ def canonical_events(
 def canonical_metrics(
     organization_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     return canonical_record_service.metrics(db, organization_id)
 
@@ -495,7 +537,9 @@ def canonical_lineage(
     organization_id: UUID,
     entity_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         node_ids, relationships = canonical_record_service.lineage(
@@ -517,7 +561,9 @@ def mapping_trust_signals(
     organization_id: UUID,
     mapping_run_id: UUID,
     db: Session = Depends(get_db),
-    _: OrganizationAccess = Depends(require_organization_roles(*INGESTION_READ_ROLES)),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
 ) -> object:
     try:
         return mapping_trust_signal_service.signals(db, organization_id, mapping_run_id)
