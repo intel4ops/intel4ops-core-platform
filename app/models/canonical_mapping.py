@@ -661,6 +661,19 @@ class MappingRun(TimestampMixin, Base):
         ),
         Index("ix_mapping_run_template_version", "template_version_id"),
         Index("ix_mapping_run_org_created", "organization_id", "created_at"),
+        Index("ix_mapping_run_retry_root", "organization_id", "root_run_id", "attempt_number"),
+        UniqueConstraint("organization_id", "retry_of_run_id", name="uq_mapping_run_retry_child"),
+        ForeignKeyConstraint(
+            ["organization_id", "retry_of_run_id"],
+            ["mapping_runs.organization_id", "mapping_runs.id"],
+            name="fk_mapping_run_retry_same_org",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "root_run_id"],
+            ["mapping_runs.organization_id", "mapping_runs.id"],
+            name="fk_mapping_run_root_same_org",
+        ),
+        CheckConstraint("attempt_number >= 1", name="ck_mapping_run_attempt_number"),
         Index(
             "ix_mapping_runs_org_source_schema",
             "organization_id",
@@ -689,6 +702,48 @@ class MappingRun(TimestampMixin, Base):
     exception_count: Mapped[int] = mapped_column(Integer, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, default=0)
     created_by_user_id: Mapped[UUID] = mapped_column(Uuid)
+    failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_of_run_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    root_run_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
+    execution_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MappingRunInput(TimestampMixin, Base):
+    __tablename__ = "mapping_run_inputs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "mapping_run_id"],
+            ["mapping_runs.organization_id", "mapping_runs.id"],
+            name="fk_mapping_run_inputs_org_run",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "raw_record_reference_id"],
+            ["raw_record_references.organization_id", "raw_record_references.id"],
+            name="fk_mapping_run_inputs_org_raw_record",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("mapping_run_id", "record_sequence", name="uq_mapping_run_input_sequence"),
+        CheckConstraint("record_sequence >= 0", name="ck_mapping_run_input_sequence"),
+        Index("ix_mapping_run_inputs_org_run", "organization_id", "mapping_run_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(Uuid)
+    mapping_run_id: Mapped[UUID] = mapped_column(Uuid)
+    record_sequence: Mapped[int] = mapped_column(Integer)
+    raw_record_reference_id: Mapped[UUID] = mapped_column(Uuid)
+    values_json: Mapped[dict[str, object]] = mapped_column(portable_json)
+    source_reported_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class MappingRecordResult(MappingConfidenceMixin, TimestampMixin, Base):

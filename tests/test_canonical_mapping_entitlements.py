@@ -88,8 +88,8 @@ def _commercial_dependency(route: APIRoute) -> object | None:
 def test_every_tenant_operation_uses_canonical_mapping_entitlement() -> None:
     routes = [route for route in tenant_router.routes if isinstance(route, APIRoute)]
 
-    assert len(routes) == 27
-    assert len({(route.path, tuple(sorted(route.methods or set()))) for route in routes}) == 27
+    assert len(routes) == 29
+    assert len({(route.path, tuple(sorted(route.methods or set()))) for route in routes}) == 29
     assert all(_commercial_dependency(route) is not None for route in routes)
 
 

@@ -262,6 +262,30 @@ class MappingRunRead(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+    updated_at: datetime
+    created_by_user_id: UUID
+    correlation_id: str | None
+    failure_code: str | None
+    failure_message: str | None
+    failure_retryable: bool | None
+    failed_at: datetime | None
+    retry_of_run_id: UUID | None
+    root_run_id: UUID | None
+    attempt_number: int
+    execution_claimed_at: datetime | None
+    heartbeat_at: datetime | None
+
+
+class MappingRunPage(BaseModel):
+    items: list[MappingRunRead]
+    page: int
+    page_size: int
+    total: int
+
+
+class MappingRunRetryCreate(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    correlation_id: str | None = Field(default=None, max_length=100)
 
 
 class MappingExceptionRead(BaseModel):

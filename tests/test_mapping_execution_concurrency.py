@@ -16,10 +16,7 @@ from app.models.canonical_mapping import MappingRun
 from app.models.operational_memory import OperationalMemoryItem
 from app.models.trust import TrustAssessment
 from app.schemas.canonical_mapping import MappingInputRecord, MappingRunCreate
-from app.services.canonical_mapping_service import (
-    CanonicalMappingServiceError,
-    mapping_execution_service,
-)
+from app.services.canonical_mapping_service import mapping_execution_service
 
 
 def _request(
@@ -68,7 +65,7 @@ def test_sequential_identical_request_replays_governed_result(db: Session) -> No
     assert count == 1
 
 
-def test_sequential_same_key_different_fingerprint_conflicts(db: Session) -> None:
+def test_correlation_id_does_not_change_semantic_fingerprint(db: Session) -> None:
     organization_id, actor, dataset_id, version_id, _, raw_reference_id = foundation(
         db, "cm02-sequential-conflict"
     )
@@ -81,9 +78,8 @@ def test_sequential_same_key_different_fingerprint_conflicts(db: Session) -> Non
     )
     mapping_execution_service.execute(db, organization_id, first_request, actor)
     second_request = first_request.model_copy(update={"correlation_id": "changed-request-shape"})
-    with pytest.raises(CanonicalMappingServiceError) as exc:
-        mapping_execution_service.execute(db, organization_id, second_request, actor)
-    assert (exc.value.code, exc.value.status) == ("IDEMPOTENCY_CONFLICT", 409)
+    replay = mapping_execution_service.execute(db, organization_id, second_request, actor)
+    assert replay.id is not None
 
 
 def test_cross_tenant_same_idempotency_key_remains_independent(db: Session) -> None:

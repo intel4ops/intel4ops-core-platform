@@ -278,6 +278,7 @@ P3_03DA_TABLES = {
     "operational_memory_versions",
     "operational_memory_reuse_events",
 }
+P3_05B_TABLES = {"mapping_run_inputs"}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -464,6 +465,7 @@ MANAGED_TABLES |= P3_03A_TABLES
 MANAGED_TABLES |= P3_03B_TABLES
 MANAGED_TABLES |= P3_03C_TABLES
 MANAGED_TABLES |= P3_03DA_TABLES
+MANAGED_TABLES |= P3_05B_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -7230,3 +7232,40 @@ def test_p3_03e1_migration_upgrade_downgrade_reupgrade_lifecycle_on_postgres(
     assert "ck_findings_governance_tier" in check_constraints
     indexes = {ix["name"] for ix in inspector.get_indexes("findings")}
     assert "ix_findings_organization_governance_tier" in indexes
+
+
+@pytest.mark.postgres
+def test_p3_05b_mapping_execution_contract_migration_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+
+    assert "mapping_run_inputs" in inspector.get_table_names()
+    run_columns = {column["name"] for column in inspector.get_columns("mapping_runs")}
+    assert {
+        "failure_code",
+        "failure_message",
+        "failure_retryable",
+        "failed_at",
+        "retry_of_run_id",
+        "root_run_id",
+        "attempt_number",
+        "execution_claimed_at",
+        "heartbeat_at",
+    } <= run_columns
+    uniques = {item["name"] for item in inspector.get_unique_constraints("mapping_runs")}
+    assert "uq_mapping_run_retry_child" in uniques
+    input_uniques = {
+        item["name"] for item in inspector.get_unique_constraints("mapping_run_inputs")
+    }
+    assert "uq_mapping_run_input_sequence" in input_uniques
+
+    command.downgrade(config, "20260816_0042")
+    inspector = inspect(postgres_engine)
+    assert "mapping_run_inputs" not in inspector.get_table_names()
+    assert "failure_code" not in {
+        column["name"] for column in inspector.get_columns("mapping_runs")
+    }
+    command.upgrade(config, "head")

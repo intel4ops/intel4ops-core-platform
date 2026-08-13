@@ -11,7 +11,7 @@ from typing import Any, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -38,6 +38,7 @@ from app.models.canonical_mapping import (
     MappingRecordStatus,
     MappingReview,
     MappingRun,
+    MappingRunInput,
     MappingRunStatus,
     MappingTemplate,
     MappingTemplateVersion,
@@ -75,6 +76,8 @@ from app.schemas.canonical_mapping import (
     MappingInputRecord,
     MappingReviewCreate,
     MappingRunCreate,
+    MappingRunPage,
+    MappingRunRetryCreate,
     MappingTemplateCreate,
     MappingTemplateRead,
     MappingTemplateVersionConfigurationRead,
@@ -1029,6 +1032,373 @@ class FieldMappingSuggestionService:
 
 
 class MappingExecutionService:
+    transitions = {
+        MappingRunStatus.QUEUED.value: {
+            MappingRunStatus.RUNNING.value,
+            MappingRunStatus.FAILED.value,
+        },
+        MappingRunStatus.RUNNING.value: {
+            MappingRunStatus.COMPLETED.value,
+            MappingRunStatus.PARTIALLY_COMPLETED.value,
+            MappingRunStatus.FAILED.value,
+        },
+    }
+
+    @staticmethod
+    def _request_fingerprint(payload: MappingRunCreate) -> str:
+        semantic = payload.model_dump(mode="json", exclude={"correlation_id", "idempotency_key"})
+        return _fingerprint(semantic)
+
+    def submit(
+        self, db: Session, organization_id: UUID, payload: MappingRunCreate, actor_user_id: UUID
+    ) -> tuple[MappingRun, bool]:
+        request_fingerprint = self._request_fingerprint(payload)
+        existing = db.scalar(
+            select(MappingRun).where(
+                MappingRun.organization_id == organization_id,
+                MappingRun.idempotency_key == payload.idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.request_fingerprint != request_fingerprint:
+                _fail(
+                    "IDEMPOTENCY_CONFLICT",
+                    "Idempotency key was reused with a different mapping request",
+                    409,
+                )
+            return existing, False
+        self._validate_submission(db, organization_id, payload)
+        source_schema = db.get(SourceSchema, payload.source_schema_id)
+        assert source_schema is not None
+        run = MappingRun(
+            organization_id=organization_id,
+            dataset_version_id=payload.dataset_version_id,
+            template_version_id=payload.template_version_id,
+            source_schema_id=payload.source_schema_id,
+            schema_fingerprint_snapshot=source_schema.schema_fingerprint,
+            status=MappingRunStatus.QUEUED.value,
+            idempotency_key=payload.idempotency_key,
+            request_fingerprint=request_fingerprint,
+            correlation_id=payload.correlation_id,
+            input_count=len(payload.records),
+            created_by_user_id=actor_user_id,
+            attempt_number=1,
+        )
+        db.add(run)
+        try:
+            db.flush()
+            run.root_run_id = run.id
+            db.add_all(
+                [
+                    MappingRunInput(
+                        organization_id=organization_id,
+                        mapping_run_id=run.id,
+                        record_sequence=sequence,
+                        raw_record_reference_id=record.raw_record_reference_id,
+                        values_json=record.values,
+                        source_reported_timestamp=record.source_reported_timestamp,
+                    )
+                    for sequence, record in enumerate(payload.records)
+                ]
+            )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            concurrent = db.scalar(
+                select(MappingRun).where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.idempotency_key == payload.idempotency_key,
+                )
+            )
+            if concurrent is None:
+                raise
+            if concurrent.request_fingerprint != request_fingerprint:
+                _fail(
+                    "IDEMPOTENCY_CONFLICT",
+                    "Idempotency key was reused with a different mapping request",
+                    409,
+                )
+            return concurrent, False
+        db.refresh(run)
+        return run, True
+
+    def _validate_submission(
+        self, db: Session, organization_id: UUID, payload: MappingRunCreate
+    ) -> None:
+        dataset_version = db.scalar(
+            select(DatasetVersion).where(
+                DatasetVersion.id == payload.dataset_version_id,
+                DatasetVersion.organization_id == organization_id,
+            )
+        )
+        if dataset_version is None:
+            _fail("DATASET_VERSION_NOT_FOUND", "Dataset version is outside tenant scope", 404)
+        source_schema = db.scalar(
+            select(SourceSchema).where(
+                SourceSchema.id == payload.source_schema_id,
+                SourceSchema.organization_id == organization_id,
+            )
+        )
+        if source_schema is None:
+            _fail("SOURCE_SCHEMA_NOT_FOUND", "Source schema is outside tenant scope", 404)
+        if source_schema.dataset_version_id != payload.dataset_version_id:
+            _fail(
+                "SOURCE_SCHEMA_DATASET_VERSION_MISMATCH",
+                "Source schema does not belong to the selected dataset version",
+                409,
+            )
+        if source_schema.status in {SchemaStatus.CHANGED.value, SchemaStatus.INCOMPATIBLE.value}:
+            _fail(
+                "SOURCE_SCHEMA_NOT_USABLE",
+                "Source schema is changed or incompatible and cannot govern execution",
+                409,
+            )
+        version = mapping_template_service.require_version(
+            db, payload.template_version_id, organization_id
+        )
+        if version.lifecycle_status != MappingLifecycleStatus.PUBLISHED.value:
+            _fail("MAPPING_VERSION_NOT_PUBLISHED", "Only published mappings may execute", 409)
+        for record in payload.records:
+            raw = db.scalar(
+                select(RawRecordReference.id).where(
+                    RawRecordReference.id == record.raw_record_reference_id,
+                    RawRecordReference.organization_id == organization_id,
+                    RawRecordReference.dataset_version_id == payload.dataset_version_id,
+                )
+            )
+            if raw is None:
+                _fail(
+                    "RAW_RECORD_NOT_FOUND",
+                    "Raw record is outside tenant or dataset scope",
+                    404,
+                )
+
+    def claim_and_execute(self, db: Session, organization_id: UUID, run_id: UUID) -> MappingRun:
+        now = utc_now()
+        claim_result = db.execute(
+            update(MappingRun)
+            .where(
+                MappingRun.id == run_id,
+                MappingRun.organization_id == organization_id,
+                MappingRun.status == MappingRunStatus.QUEUED.value,
+            )
+            .values(
+                status=MappingRunStatus.RUNNING.value,
+                execution_claimed_at=now,
+                heartbeat_at=now,
+                started_at=now,
+            )
+        )
+        claimed = getattr(claim_result, "rowcount", 0)
+        db.commit()
+        if claimed != 1:
+            run = self.get(db, organization_id, run_id)
+            _fail("MAPPING_RUN_INVALID_TRANSITION", f"Run in {run.status} cannot be claimed", 409)
+        run = self.get(db, organization_id, run_id)
+        inputs = list(
+            db.scalars(
+                select(MappingRunInput)
+                .where(
+                    MappingRunInput.organization_id == organization_id,
+                    MappingRunInput.mapping_run_id == run.id,
+                )
+                .order_by(MappingRunInput.record_sequence)
+            )
+        )
+        version = mapping_template_service.require_version(
+            db, run.template_version_id, organization_id
+        )
+        template = db.get(MappingTemplate, version.template_id)
+        assert template is not None
+        try:
+            for item in inputs:
+                self._map_record(
+                    db,
+                    organization_id,
+                    run,
+                    template,
+                    version,
+                    MappingInputRecord(
+                        raw_record_reference_id=item.raw_record_reference_id,
+                        values=item.values_json,
+                        source_reported_timestamp=item.source_reported_timestamp,
+                    ),
+                    run.created_by_user_id,
+                )
+            target = (
+                MappingRunStatus.COMPLETED.value
+                if run.exception_count == 0
+                else MappingRunStatus.PARTIALLY_COMPLETED.value
+            )
+            self._transition(run, target)
+            run.completed_at = utc_now()
+            db.commit()
+            db.refresh(run)
+            return run
+        except CanonicalMappingServiceError:
+            db.rollback()
+            return self.fail(
+                db,
+                organization_id,
+                run_id,
+                "MAPPING_EXECUTION_TERMINAL_FAILURE",
+                "Mapping execution could not complete",
+                False,
+            )
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            return self.fail(
+                db,
+                organization_id,
+                run_id,
+                "MAPPING_EXECUTION_INTERNAL_ERROR",
+                "Mapping execution encountered an internal error",
+                False,
+            )
+
+    def _transition(self, run: MappingRun, target: str) -> None:
+        if target not in self.transitions.get(run.status, set()):
+            _fail(
+                "MAPPING_RUN_INVALID_TRANSITION", f"{run.status} cannot transition to {target}", 409
+            )
+        run.status = target
+
+    def fail(
+        self,
+        db: Session,
+        organization_id: UUID,
+        run_id: UUID,
+        code: str,
+        message: str,
+        retryable: bool,
+    ) -> MappingRun:
+        run = self.get(db, organization_id, run_id)
+        self._transition(run, MappingRunStatus.FAILED.value)
+        run.failure_code = code
+        run.failure_message = message
+        run.failure_retryable = retryable
+        run.failed_at = utc_now()
+        db.commit()
+        db.refresh(run)
+        return run
+
+    def retry(
+        self,
+        db: Session,
+        organization_id: UUID,
+        run_id: UUID,
+        payload: MappingRunRetryCreate,
+        actor_user_id: UUID,
+    ) -> tuple[MappingRun, bool]:
+        predecessor = self.get(db, organization_id, run_id)
+        existing_key = db.scalar(
+            select(MappingRun).where(
+                MappingRun.organization_id == organization_id,
+                MappingRun.idempotency_key == payload.idempotency_key,
+            )
+        )
+        if existing_key is not None:
+            if existing_key.retry_of_run_id == predecessor.id:
+                return existing_key, False
+            _fail("IDEMPOTENCY_CONFLICT", "Idempotency key was reused for another mapping run", 409)
+        if predecessor.status in {
+            MappingRunStatus.QUEUED.value,
+            MappingRunStatus.RUNNING.value,
+            MappingRunStatus.CREATED.value,
+        }:
+            _fail("MAPPING_RUN_ACTIVE", "Active mapping runs cannot be retried", 409)
+        if predecessor.status != MappingRunStatus.FAILED.value:
+            _fail("MAPPING_RUN_NOT_RETRYABLE", "Mapping run is not retryable", 409)
+        if not predecessor.failure_retryable:
+            _fail("MAPPING_RUN_TERMINAL_FAILURE", "Mapping run failure is not retryable", 409)
+        inputs = list(
+            db.scalars(
+                select(MappingRunInput)
+                .where(
+                    MappingRunInput.organization_id == organization_id,
+                    MappingRunInput.mapping_run_id == predecessor.id,
+                )
+                .order_by(MappingRunInput.record_sequence)
+            )
+        )
+        if len(inputs) != predecessor.input_count:
+            _fail(
+                "MAPPING_RUN_TERMINAL_FAILURE", "Historical mapping run input is unavailable", 409
+            )
+        child = MappingRun(
+            organization_id=organization_id,
+            dataset_version_id=predecessor.dataset_version_id,
+            template_version_id=predecessor.template_version_id,
+            source_schema_id=predecessor.source_schema_id,
+            schema_fingerprint_snapshot=predecessor.schema_fingerprint_snapshot,
+            status=MappingRunStatus.QUEUED.value,
+            idempotency_key=payload.idempotency_key,
+            request_fingerprint=predecessor.request_fingerprint,
+            correlation_id=payload.correlation_id,
+            input_count=predecessor.input_count,
+            created_by_user_id=actor_user_id,
+            retry_of_run_id=predecessor.id,
+            root_run_id=predecessor.root_run_id or predecessor.id,
+            attempt_number=predecessor.attempt_number + 1,
+        )
+        db.add(child)
+        try:
+            db.flush()
+            db.add_all(
+                [
+                    MappingRunInput(
+                        organization_id=organization_id,
+                        mapping_run_id=child.id,
+                        record_sequence=item.record_sequence,
+                        raw_record_reference_id=item.raw_record_reference_id,
+                        values_json=item.values_json,
+                        source_reported_timestamp=item.source_reported_timestamp,
+                    )
+                    for item in inputs
+                ]
+            )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            sibling = db.scalar(
+                select(MappingRun).where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.retry_of_run_id == predecessor.id,
+                )
+            )
+            if sibling is not None and sibling.idempotency_key == payload.idempotency_key:
+                return sibling, False
+            _fail(
+                "MAPPING_RUN_RETRY_ALREADY_CREATED",
+                "A retry already exists for this mapping run",
+                409,
+            )
+        db.refresh(child)
+        return child, True
+
+    def list_runs(
+        self, db: Session, organization_id: UUID, page: int, page_size: int, **filters: object
+    ) -> MappingRunPage:
+        conditions = [MappingRun.organization_id == organization_id]
+        for name, value in filters.items():
+            if value is not None and name not in {"created_from", "created_to"}:
+                conditions.append(getattr(MappingRun, name) == value)
+        if filters.get("created_from") is not None:
+            conditions.append(MappingRun.created_at >= filters["created_from"])
+        if filters.get("created_to") is not None:
+            conditions.append(MappingRun.created_at <= filters["created_to"])
+        total = db.scalar(select(func.count()).select_from(MappingRun).where(*conditions)) or 0
+        items = list(
+            db.scalars(
+                select(MappingRun)
+                .where(*conditions)
+                .order_by(MappingRun.created_at.desc(), MappingRun.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        return MappingRunPage(items=items, page=page, page_size=page_size, total=total)
+
     def execute(
         self,
         db: Session,
@@ -1036,7 +1406,7 @@ class MappingExecutionService:
         payload: MappingRunCreate,
         actor_user_id: UUID,
     ) -> MappingRun:
-        request_fingerprint = _fingerprint(payload.model_dump(mode="json"))
+        request_fingerprint = self._request_fingerprint(payload)
         existing = db.scalar(
             select(MappingRun).where(
                 MappingRun.organization_id == organization_id,
