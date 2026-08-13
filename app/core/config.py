@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://intel4ops:intel4ops@localhost:5432/intel4ops"
     cors_origins: str = "http://localhost:5173"
+    mapping_worker_id: str | None = Field(default=None, max_length=200)
+    mapping_worker_poll_interval_seconds: float = Field(default=2.0, gt=0, le=60)
+    mapping_worker_heartbeat_interval_seconds: float = Field(default=10.0, gt=0, le=60)
+    mapping_worker_stale_threshold_seconds: float = Field(default=60.0, ge=10, le=3600)
+    mapping_worker_db_backoff_seconds: float = Field(default=5.0, gt=0, le=300)
+    mapping_worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
 
     ai_enabled: bool = False
     ai_provider: str = "openai"
