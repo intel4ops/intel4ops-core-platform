@@ -661,6 +661,8 @@ class MappingRun(TimestampMixin, Base):
         ),
         Index("ix_mapping_run_template_version", "template_version_id"),
         Index("ix_mapping_run_org_created", "organization_id", "created_at"),
+        Index("ix_mapping_run_dispatch_fifo", "status", "created_at", "id"),
+        Index("ix_mapping_run_stale_heartbeat", "status", "heartbeat_at"),
         Index("ix_mapping_run_retry_root", "organization_id", "root_run_id", "attempt_number"),
         UniqueConstraint("organization_id", "retry_of_run_id", name="uq_mapping_run_retry_child"),
         ForeignKeyConstraint(
@@ -713,6 +715,8 @@ class MappingRun(TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_lease_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    execution_worker_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class MappingRunInput(TimestampMixin, Base):

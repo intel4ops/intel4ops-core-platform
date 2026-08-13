@@ -2,7 +2,7 @@ import ast
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
@@ -17,7 +17,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from governed_provenance_helpers import add_eligible_dataset_version
-from sqlalchemy import Table, create_engine, delete, func, insert, inspect, select, text
+from sqlalchemy import Table, create_engine, delete, func, insert, inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import ReflectedForeignKeyConstraint
 from sqlalchemy.exc import IntegrityError
@@ -196,6 +196,8 @@ from app.services.access_context_service import (
 from app.services.ai_operational_profile_service import AIOperationalProfileService
 from app.services.canonical_mapping_service import (
     CanonicalMappingServiceError,
+    MappingExecutionClaim,
+    MappingExecutionLeaseLost,
     mapping_execution_service,
     mapping_template_service,
     schema_discovery_service,
@@ -6421,7 +6423,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260817_0043"]
+    assert heads == ["20260818_0044"]
 
 
 @pytest.mark.postgres
@@ -6974,7 +6976,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260817_0043"]
+    assert heads == ["20260818_0044"]
 
 
 @pytest.mark.postgres
@@ -7680,3 +7682,291 @@ def test_p3_05b_database_prevents_two_direct_retry_children(
         )
         session.rollback()
         assert session.get(MappingRun, first.id) is not None
+
+
+@pytest.mark.postgres
+def test_p3_05c_worker_lease_migration_lifecycle(postgres_engine: Engine) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.downgrade(config, "20260817_0043")
+    assert "execution_lease_id" not in {
+        column["name"] for column in inspect(postgres_engine).get_columns("mapping_runs")
+    }
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+    assert {"execution_lease_id", "execution_worker_id"} <= {
+        column["name"] for column in inspector.get_columns("mapping_runs")
+    }
+    assert {
+        "ix_mapping_run_dispatch_fifo",
+        "ix_mapping_run_stale_heartbeat",
+    } <= {index["name"] for index in inspector.get_indexes("mapping_runs")}
+    command.downgrade(config, "20260817_0043")
+    assert {"execution_lease_id", "execution_worker_id"}.isdisjoint(
+        column["name"] for column in inspect(postgres_engine).get_columns("mapping_runs")
+    )
+    command.upgrade(config, "head")
+
+
+def _p3_05c_queued_run(postgres_engine: Engine, label: str) -> tuple[UUID, UUID, UUID]:
+    organization_id, actor, version_id, template_id, schema_id, raw_id = _p3_05b_postgres_context(
+        postgres_engine, label
+    )
+    with Session(postgres_engine) as session:
+        run, _ = mapping_execution_service.submit(
+            session,
+            organization_id,
+            _p3_05b_request(
+                version_id, template_id, schema_id, raw_id, f"p305c-pg-{label}-{uuid4()}"
+            ),
+            actor,
+        )
+        return organization_id, actor, run.id
+
+
+@pytest.mark.postgres
+def test_p3_05c_same_run_claim_race(postgres_engine: Engine) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "same-claim")
+    barrier = Barrier(2)
+
+    def claim(worker_id: str) -> tuple[str, object]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                result = mapping_execution_service.claim_run(
+                    session, organization_id, run_id, worker_id
+                )
+                return "ok", result.lease_id
+            except CanonicalMappingServiceError as exc:
+                return exc.code, exc.status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(claim, ("worker-a", "worker-b")))
+    assert sum(outcome[0] == "ok" for outcome in outcomes) == 1
+    assert sum(outcome[0] == "MAPPING_RUN_INVALID_TRANSITION" for outcome in outcomes) == 1
+
+
+@pytest.mark.postgres
+def test_p3_05c_multi_worker_skip_locked_claims_each_run_once(
+    postgres_engine: Engine,
+) -> None:
+    with Session(postgres_engine) as session:
+        session.execute(
+            update(MappingRun)
+            .where(MappingRun.status == MappingRunStatus.QUEUED.value)
+            .values(
+                status=MappingRunStatus.FAILED.value,
+                failure_code="TEST_ISOLATION",
+                failure_message="Test isolation",
+                failure_retryable=False,
+            )
+        )
+        session.commit()
+    for index in range(10):
+        _p3_05c_queued_run(postgres_engine, f"multi-{index}")
+    barrier = Barrier(3)
+
+    def drain(worker_id: str) -> list[UUID]:
+        claimed: list[UUID] = []
+        barrier.wait()
+        while True:
+            with Session(postgres_engine) as session:
+                claim = mapping_execution_service.claim_next(session, worker_id)
+            if claim is None:
+                return claimed
+            claimed.append(claim.run_id)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        batches = list(executor.map(drain, ("worker-a", "worker-b", "worker-c")))
+    claimed_ids = [run_id for batch in batches for run_id in batch]
+    assert len(claimed_ids) == 10
+    assert len(set(claimed_ids)) == 10
+
+
+@pytest.mark.postgres
+def test_p3_05c_heartbeat_and_stale_recovery_are_fenced(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "heartbeat")
+    with Session(postgres_engine) as session:
+        claim = mapping_execution_service.claim_run(session, organization_id, run_id, "worker-a")
+    wrong = MappingExecutionClaim(run_id, organization_id, uuid4(), "worker-b")
+    with Session(postgres_engine) as session:
+        assert mapping_execution_service.heartbeat(session, wrong) is False
+        assert mapping_execution_service.heartbeat(session, claim) is True
+        assert (organization_id, run_id) not in mapping_execution_service.recover_stale(
+            session, timedelta(seconds=60)
+        )
+        session.execute(
+            update(MappingRun)
+            .where(MappingRun.id == run_id)
+            .values(heartbeat_at=func.now() - timedelta(minutes=5))
+        )
+        session.commit()
+    with Session(postgres_engine) as session:
+        recovered = mapping_execution_service.recover_stale(session, timedelta(seconds=60))
+        assert recovered == [(organization_id, run_id)]
+    with Session(postgres_engine) as session:
+        run = session.get(MappingRun, run_id)
+        assert run is not None
+        assert run.status == MappingRunStatus.FAILED.value
+        assert run.failure_code == "MAPPING_EXECUTION_WORKER_LOST"
+        assert run.failure_retryable is True
+        assert run.execution_lease_id is None
+        assert mapping_execution_service.heartbeat(session, claim) is False
+
+
+@pytest.mark.postgres
+def test_p3_05c_replaced_lease_cannot_finalize(postgres_engine: Engine) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "replaced-lease")
+    with Session(postgres_engine) as session:
+        old_claim = mapping_execution_service.claim_run(
+            session, organization_id, run_id, "worker-a"
+        )
+    new_lease = uuid4()
+    original_map_record = mapping_execution_service._map_record
+
+    def map_after_lease_replacement(*args: object, **kwargs: object) -> None:
+        with Session(postgres_engine) as replacement_session:
+            replacement_session.execute(
+                update(MappingRun)
+                .where(MappingRun.id == run_id)
+                .values(execution_lease_id=new_lease, execution_worker_id="worker-b")
+            )
+            replacement_session.commit()
+        original_map_record(*args, **kwargs)  # type: ignore[arg-type]
+
+    with Session(postgres_engine) as session:
+        with patch.object(
+            mapping_execution_service, "_map_record", side_effect=map_after_lease_replacement
+        ):
+            with pytest.raises(MappingExecutionLeaseLost):
+                mapping_execution_service.execute_claimed(session, old_claim)
+    with Session(postgres_engine) as session:
+        run = session.get(MappingRun, run_id)
+        assert run is not None
+        assert run.status == MappingRunStatus.RUNNING.value
+        assert run.execution_worker_id == "worker-b"
+        assert run.execution_lease_id == new_lease
+
+
+@pytest.mark.postgres
+def test_p3_05c_concurrent_stale_sweep_recovers_once(postgres_engine: Engine) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "stale-race")
+    with Session(postgres_engine) as session:
+        mapping_execution_service.claim_run(session, organization_id, run_id, "worker-a")
+        session.execute(
+            update(MappingRun)
+            .where(MappingRun.id == run_id)
+            .values(heartbeat_at=func.now() - timedelta(minutes=5))
+        )
+        session.commit()
+    barrier = Barrier(2)
+
+    def recover() -> list[tuple[UUID, UUID]]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            return mapping_execution_service.recover_stale(session, timedelta(seconds=60))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _: recover(), range(2)))
+    assert sum(len(outcome) for outcome in outcomes) == 1
+
+
+@pytest.mark.postgres
+def test_p3_05c_late_worker_rolls_back_business_output(postgres_engine: Engine) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "late-worker")
+    with Session(postgres_engine) as session:
+        claim = mapping_execution_service.claim_run(session, organization_id, run_id, "worker-a")
+    original_map_record = mapping_execution_service._map_record
+    recovered = False
+
+    def map_after_lease_loss(*args: object, **kwargs: object) -> None:
+        nonlocal recovered
+        if not recovered:
+            with Session(postgres_engine) as recovery_session:
+                recovery_session.execute(
+                    update(MappingRun)
+                    .where(MappingRun.id == run_id)
+                    .values(heartbeat_at=func.now() - timedelta(minutes=5))
+                )
+                recovery_session.commit()
+                assert mapping_execution_service.recover_stale(
+                    recovery_session, timedelta(seconds=60)
+                ) == [(organization_id, run_id)]
+            recovered = True
+        original_map_record(*args, **kwargs)  # type: ignore[arg-type]
+
+    with Session(postgres_engine) as session:
+        with patch.object(
+            mapping_execution_service, "_map_record", side_effect=map_after_lease_loss
+        ):
+            with pytest.raises(MappingExecutionLeaseLost):
+                mapping_execution_service.execute_claimed(session, claim)
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRecordResult)
+                .where(MappingRecordResult.mapping_run_id == run_id)
+            )
+            == 0
+        )
+        run = session.get(MappingRun, run_id)
+        assert run is not None and run.status == MappingRunStatus.FAILED.value
+
+
+@pytest.mark.postgres
+def test_p3_05c_crash_before_final_commit_leaves_no_partial_result(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, _, run_id = _p3_05c_queued_run(postgres_engine, "crash")
+    with Session(postgres_engine) as session:
+        claim = mapping_execution_service.claim_run(session, organization_id, run_id, "worker-a")
+    original_map_record = mapping_execution_service._map_record
+
+    def crash_after_mapping(*args: object, **kwargs: object) -> None:
+        original_map_record(*args, **kwargs)  # type: ignore[arg-type]
+        raise RuntimeError("controlled worker crash")
+
+    with Session(postgres_engine) as session:
+        with patch.object(
+            mapping_execution_service, "_map_record", side_effect=crash_after_mapping
+        ):
+            failed = mapping_execution_service.execute_claimed(session, claim)
+            assert failed.status == MappingRunStatus.FAILED.value
+            assert failed.failure_code == "MAPPING_EXECUTION_INTERNAL_ERROR"
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRecordResult)
+                .where(MappingRecordResult.mapping_run_id == run_id)
+            )
+            == 0
+        )
+
+
+@pytest.mark.postgres
+def test_p3_05c_terminal_and_tenant_claim_protection_and_retry_child(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, actor, run_id = _p3_05c_queued_run(postgres_engine, "retry-child")
+    with Session(postgres_engine) as session:
+        failed = mapping_execution_service.fail(
+            session, organization_id, run_id, "RETRYABLE_TEST", "Retryable", True
+        )
+        child, _ = mapping_execution_service.retry(
+            session,
+            organization_id,
+            failed.id,
+            MappingRunRetryCreate(idempotency_key=f"p305c-retry-{uuid4()}"),
+            actor,
+        )
+        with pytest.raises(CanonicalMappingServiceError):
+            mapping_execution_service.claim_run(session, uuid4(), child.id, "foreign-worker")
+        claim = mapping_execution_service.claim_run(
+            session, organization_id, child.id, "retry-worker"
+        )
+        assert claim.run_id == child.id
+        with pytest.raises(CanonicalMappingServiceError):
+            mapping_execution_service.claim_run(session, organization_id, run_id, "worker-a")

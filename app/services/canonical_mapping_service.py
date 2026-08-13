@@ -4,11 +4,11 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from typing import Any, NoReturn
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select, update
@@ -119,6 +119,18 @@ class CanonicalMappingServiceError(RuntimeError):
 
 class CanonicalFieldValidationError(ValueError):
     pass
+
+
+class MappingExecutionLeaseLost(RuntimeError):
+    """The worker no longer owns the authoritative execution lease."""
+
+
+@dataclass(frozen=True)
+class MappingExecutionClaim:
+    run_id: UUID
+    organization_id: UUID
+    lease_id: UUID
+    worker_id: str
 
 
 def _fail(code: str, message: str, status: int = 400) -> NoReturn:
@@ -1173,48 +1185,136 @@ class MappingExecutionService:
                     404,
                 )
 
-    def claim_and_execute(self, db: Session, organization_id: UUID, run_id: UUID) -> MappingRun:
+    @staticmethod
+    def _claim_values(worker_id: str, lease_id: UUID) -> dict[str, object]:
         now = utc_now()
-        claim_result = db.execute(
-            update(MappingRun)
+        return {
+            "status": MappingRunStatus.RUNNING.value,
+            "execution_claimed_at": now,
+            "heartbeat_at": now,
+            "started_at": now,
+            "execution_worker_id": worker_id,
+            "execution_lease_id": lease_id,
+        }
+
+    def claim_next(self, db: Session, worker_id: str) -> MappingExecutionClaim | None:
+        run = db.scalar(
+            select(MappingRun)
+            .where(MappingRun.status == MappingRunStatus.QUEUED.value)
+            .order_by(MappingRun.created_at.asc(), MappingRun.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if run is None:
+            db.rollback()
+            return None
+        lease_id = uuid4()
+        for name, value in self._claim_values(worker_id, lease_id).items():
+            setattr(run, name, value)
+        db.commit()
+        return MappingExecutionClaim(run.id, run.organization_id, lease_id, worker_id)
+
+    def claim_run(
+        self, db: Session, organization_id: UUID, run_id: UUID, worker_id: str
+    ) -> MappingExecutionClaim:
+        run = db.scalar(
+            select(MappingRun)
             .where(
                 MappingRun.id == run_id,
                 MappingRun.organization_id == organization_id,
                 MappingRun.status == MappingRunStatus.QUEUED.value,
             )
-            .values(
-                status=MappingRunStatus.RUNNING.value,
-                execution_claimed_at=now,
-                heartbeat_at=now,
-                started_at=now,
+            .with_for_update(skip_locked=True)
+        )
+        if run is None:
+            db.rollback()
+            current = self.get(db, organization_id, run_id)
+            _fail(
+                "MAPPING_RUN_INVALID_TRANSITION", f"Run in {current.status} cannot be claimed", 409
+            )
+        lease_id = uuid4()
+        for name, value in self._claim_values(worker_id, lease_id).items():
+            setattr(run, name, value)
+        db.commit()
+        return MappingExecutionClaim(run.id, run.organization_id, lease_id, worker_id)
+
+    def heartbeat(self, db: Session, claim: MappingExecutionClaim) -> bool:
+        result = db.execute(
+            update(MappingRun)
+            .where(
+                MappingRun.id == claim.run_id,
+                MappingRun.organization_id == claim.organization_id,
+                MappingRun.status == MappingRunStatus.RUNNING.value,
+                MappingRun.execution_lease_id == claim.lease_id,
+            )
+            .values(heartbeat_at=func.now())
+            .execution_options(synchronize_session=False)
+        )
+        db.commit()
+        return getattr(result, "rowcount", 0) == 1
+
+    def recover_stale(
+        self, db: Session, stale_after: timedelta, limit: int = 10
+    ) -> list[tuple[UUID, UUID]]:
+        stale_runs = list(
+            db.scalars(
+                select(MappingRun)
+                .where(
+                    MappingRun.status == MappingRunStatus.RUNNING.value,
+                    MappingRun.heartbeat_at.is_not(None),
+                    MappingRun.heartbeat_at < func.now() - stale_after,
+                )
+                .order_by(MappingRun.heartbeat_at.asc(), MappingRun.id.asc())
+                .limit(limit)
+                .with_for_update(skip_locked=True)
             )
         )
-        claimed = getattr(claim_result, "rowcount", 0)
+        recovered: list[tuple[UUID, UUID]] = []
+        for run in stale_runs:
+            run.status = MappingRunStatus.FAILED.value
+            run.failure_code = "MAPPING_EXECUTION_WORKER_LOST"
+            run.failure_message = "Mapping execution worker lease expired"
+            run.failure_retryable = True
+            run.failed_at = utc_now()
+            run.execution_lease_id = None
+            run.execution_worker_id = None
+            recovered.append((run.organization_id, run.id))
         db.commit()
-        if claimed != 1:
-            run = self.get(db, organization_id, run_id)
-            _fail("MAPPING_RUN_INVALID_TRANSITION", f"Run in {run.status} cannot be claimed", 409)
-        run = self.get(db, organization_id, run_id)
+        return recovered
+
+    def execute_claimed(self, db: Session, claim: MappingExecutionClaim) -> MappingRun:
+        run = db.scalar(
+            select(MappingRun).where(
+                MappingRun.id == claim.run_id,
+                MappingRun.organization_id == claim.organization_id,
+                MappingRun.status == MappingRunStatus.RUNNING.value,
+                MappingRun.execution_lease_id == claim.lease_id,
+            )
+        )
+        if run is None:
+            db.rollback()
+            raise MappingExecutionLeaseLost(str(claim.run_id))
         inputs = list(
             db.scalars(
                 select(MappingRunInput)
                 .where(
-                    MappingRunInput.organization_id == organization_id,
+                    MappingRunInput.organization_id == claim.organization_id,
                     MappingRunInput.mapping_run_id == run.id,
                 )
                 .order_by(MappingRunInput.record_sequence)
             )
         )
         version = mapping_template_service.require_version(
-            db, run.template_version_id, organization_id
+            db, run.template_version_id, claim.organization_id
         )
         template = db.get(MappingTemplate, version.template_id)
         assert template is not None
+        db.expunge(run)
         try:
             for item in inputs:
                 self._map_record(
                     db,
-                    organization_id,
+                    claim.organization_id,
                     run,
                     template,
                     version,
@@ -1230,31 +1330,100 @@ class MappingExecutionService:
                 if run.exception_count == 0
                 else MappingRunStatus.PARTIALLY_COMPLETED.value
             )
-            self._transition(run, target)
-            run.completed_at = utc_now()
+            final = db.execute(
+                update(MappingRun)
+                .where(
+                    MappingRun.id == claim.run_id,
+                    MappingRun.organization_id == claim.organization_id,
+                    MappingRun.status == MappingRunStatus.RUNNING.value,
+                    MappingRun.execution_lease_id == claim.lease_id,
+                )
+                .values(
+                    status=target,
+                    mapped_count=run.mapped_count,
+                    exception_count=run.exception_count,
+                    rejected_count=run.rejected_count,
+                    completed_at=utc_now(),
+                    execution_lease_id=None,
+                    execution_worker_id=None,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if getattr(final, "rowcount", 0) != 1:
+                db.rollback()
+                raise MappingExecutionLeaseLost(str(claim.run_id))
             db.commit()
-            db.refresh(run)
-            return run
+            completed = self.get(db, claim.organization_id, claim.run_id)
+            if (
+                completed.status == MappingRunStatus.COMPLETED.value
+                and completed.source_schema_id is not None
+            ):
+                self._register_field_mapping_evidence(
+                    db,
+                    claim.organization_id,
+                    completed.id,
+                    completed.source_schema_id,
+                    completed.template_version_id,
+                    completed.schema_fingerprint_snapshot,
+                )
+            return completed
+        except MappingExecutionLeaseLost:
+            raise
         except CanonicalMappingServiceError:
             db.rollback()
-            return self.fail(
+            return self.fail_claimed(
                 db,
-                organization_id,
-                run_id,
+                claim,
                 "MAPPING_EXECUTION_TERMINAL_FAILURE",
                 "Mapping execution could not complete",
                 False,
             )
         except Exception:  # noqa: BLE001
             db.rollback()
-            return self.fail(
+            return self.fail_claimed(
                 db,
-                organization_id,
-                run_id,
+                claim,
                 "MAPPING_EXECUTION_INTERNAL_ERROR",
                 "Mapping execution encountered an internal error",
                 False,
             )
+
+    def fail_claimed(
+        self,
+        db: Session,
+        claim: MappingExecutionClaim,
+        code: str,
+        message: str,
+        retryable: bool,
+    ) -> MappingRun:
+        result = db.execute(
+            update(MappingRun)
+            .where(
+                MappingRun.id == claim.run_id,
+                MappingRun.organization_id == claim.organization_id,
+                MappingRun.status == MappingRunStatus.RUNNING.value,
+                MappingRun.execution_lease_id == claim.lease_id,
+            )
+            .values(
+                status=MappingRunStatus.FAILED.value,
+                failure_code=code,
+                failure_message=message,
+                failure_retryable=retryable,
+                failed_at=utc_now(),
+                execution_lease_id=None,
+                execution_worker_id=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            db.rollback()
+            raise MappingExecutionLeaseLost(str(claim.run_id))
+        db.commit()
+        return self.get(db, claim.organization_id, claim.run_id)
+
+    def claim_and_execute(self, db: Session, organization_id: UUID, run_id: UUID) -> MappingRun:
+        claim = self.claim_run(db, organization_id, run_id, "mapping-execution-inline")
+        return self.execute_claimed(db, claim)
 
     def _transition(self, run: MappingRun, target: str) -> None:
         if target not in self.transitions.get(run.status, set()):
