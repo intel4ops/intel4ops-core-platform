@@ -120,6 +120,27 @@ class FieldMappingRead(BaseModel):
     updated_at: datetime
 
 
+class MappingTransformationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    field_mapping_id: UUID
+    sequence: int
+    transformation_type: str
+    parameters_json: dict[str, object]
+    created_at: datetime
+    updated_at: datetime
+
+
+class FieldMappingConfigurationRead(FieldMappingRead):
+    transformations: list[MappingTransformationRead] = Field(default_factory=list)
+
+
+class MappingTemplateVersionConfigurationRead(MappingTemplateVersionRead):
+    template: MappingTemplateRead
+    field_mappings: list[FieldMappingConfigurationRead] = Field(default_factory=list)
+
+
 class TransformationCreate(BaseModel):
     sequence: int = Field(ge=0)
     transformation_type: Literal[

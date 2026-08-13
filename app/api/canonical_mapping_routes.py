@@ -37,6 +37,7 @@ from app.schemas.canonical_mapping import (
     MappingRunRead,
     MappingTemplateCreate,
     MappingTemplateRead,
+    MappingTemplateVersionConfigurationRead,
     MappingTemplateVersionCreate,
     MappingTemplateVersionRead,
     SourceSchemaDiscover,
@@ -220,6 +221,68 @@ def create_tenant_template(
             access.user.user_id,
             authorized_organization_id=organization_id,
         )
+    except CanonicalMappingServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get("/mapping-templates", response_model=list[MappingTemplateRead])
+def list_mapping_templates(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
+) -> object:
+    return mapping_template_service.list_templates(db, organization_id)
+
+
+@tenant_router.get("/mapping-templates/{template_id}", response_model=MappingTemplateRead)
+def get_mapping_template(
+    organization_id: UUID,
+    template_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
+) -> object:
+    try:
+        return mapping_template_service.get_template(db, organization_id, template_id)
+    except CanonicalMappingServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get(
+    "/mapping-templates/{template_id}/versions",
+    response_model=list[MappingTemplateVersionRead],
+)
+def list_mapping_template_versions(
+    organization_id: UUID,
+    template_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
+) -> object:
+    try:
+        return mapping_template_service.list_versions(db, organization_id, template_id)
+    except CanonicalMappingServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get(
+    "/mapping-template-versions/{version_id}",
+    response_model=MappingTemplateVersionConfigurationRead,
+)
+def get_mapping_template_version(
+    organization_id: UUID,
+    version_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
+) -> object:
+    try:
+        return mapping_template_service.get_version_configuration(db, organization_id, version_id)
     except CanonicalMappingServiceError as exc:
         _raise(exc)
 
