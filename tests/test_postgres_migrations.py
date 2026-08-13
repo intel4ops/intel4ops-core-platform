@@ -98,7 +98,13 @@ from test_trust_service import trust_foundation
 from app.core.config import Settings
 from app.models.access import InvitationStatus, OrganizationInvitation
 from app.models.actions import ActionPlanStep
-from app.models.canonical_mapping import FieldMapping, MappingRecordResult, MappingRun
+from app.models.canonical_mapping import (
+    FieldMapping,
+    MappingRecordResult,
+    MappingRun,
+    MappingRunInput,
+    MappingRunStatus,
+)
 from app.models.causal_intelligence import CausalEvidenceLink, CausalHypothesis
 from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
 from app.models.entities import (
@@ -153,6 +159,7 @@ from app.schemas.access import InvitationCreate
 from app.schemas.canonical_mapping import (
     MappingInputRecord,
     MappingRunCreate,
+    MappingRunRetryCreate,
     SourceFieldCreate,
     SourceSchemaDiscover,
 )
@@ -278,6 +285,7 @@ P3_03DA_TABLES = {
     "operational_memory_versions",
     "operational_memory_reuse_events",
 }
+P3_05B_TABLES = {"mapping_run_inputs"}
 WP_214B_DECISION_TABLES = {
     "decision_method_definitions",
     "decision_problems",
@@ -464,6 +472,7 @@ MANAGED_TABLES |= P3_03A_TABLES
 MANAGED_TABLES |= P3_03B_TABLES
 MANAGED_TABLES |= P3_03C_TABLES
 MANAGED_TABLES |= P3_03DA_TABLES
+MANAGED_TABLES |= P3_05B_TABLES
 DISPOSABLE_NAME_MARKERS = ("test", "testing", "disposable", "validation")
 
 
@@ -2252,6 +2261,7 @@ def test_migrations_on_disposable_postgres(postgres_engine: Engine) -> None:
         - P3_03B_TABLES
         - P3_03C_TABLES
         - P3_03DA_TABLES
+        - P3_05B_TABLES
         <= wp_203_tables
     )
 
@@ -6411,7 +6421,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260816_0042"]
+    assert heads == ["20260817_0043"]
 
 
 @pytest.mark.postgres
@@ -6644,7 +6654,7 @@ def test_cm02_concurrent_identical_execution_stress_probe(postgres_engine: Engin
 
 
 @pytest.mark.postgres
-def test_cm02_concurrent_different_fingerprint_yields_controlled_conflict(
+def test_cm02_concurrent_correlation_metadata_is_exact_replay(
     postgres_engine: Engine,
 ) -> None:
     command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
@@ -6695,10 +6705,8 @@ def test_cm02_concurrent_different_fingerprint_yields_controlled_conflict(
         second.result(timeout=20)
 
     winners = [outcome for outcome in outcomes if outcome[0] == "ok"]
-    conflicts = [outcome for outcome in outcomes if outcome[0] == "IDEMPOTENCY_CONFLICT"]
-    assert len(winners) == 1
-    assert len(conflicts) == 1
-    assert conflicts[0][1] == 409
+    assert len(winners) == 2
+    assert len({outcome[1] for outcome in winners}) == 1
 
     with Session(postgres_engine) as verify_session:
         run_count = verify_session.scalar(
@@ -6710,6 +6718,79 @@ def test_cm02_concurrent_different_fingerprint_yields_controlled_conflict(
             )
         )
         assert run_count == 1
+
+
+@pytest.mark.postgres
+def test_cm02_concurrent_semantic_difference_yields_controlled_conflict(
+    postgres_engine: Engine,
+) -> None:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"cm02-pg-semantic-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, "cm02-pg-semantic"
+        )
+        template_version_id = template_version.id
+        schema_id = schema.id
+
+    idempotency_key = "cm02-pg-semantic-conflict-key"
+    request_a = MappingRunCreate(
+        dataset_version_id=version_id,
+        template_version_id=template_version_id,
+        source_schema_id=schema_id,
+        idempotency_key=idempotency_key,
+        records=[
+            MappingInputRecord(
+                raw_record_reference_id=raw_reference_id,
+                values={"customer_id": "C-A", "customer_name": "Acme"},
+            )
+        ],
+    )
+    request_b = request_a.model_copy(
+        update={
+            "records": [
+                MappingInputRecord(
+                    raw_record_reference_id=raw_reference_id,
+                    values={"customer_id": "C-B", "customer_name": "Beta"},
+                )
+            ]
+        }
+    )
+    barrier = Barrier(2)
+
+    def submit_run(request: MappingRunCreate) -> tuple[str, object]:
+        with Session(postgres_engine) as worker_session:
+            barrier.wait()
+            try:
+                run, _ = mapping_execution_service.submit(
+                    worker_session, organization_id, request, actor
+                )
+                return "ok", run.id
+            except CanonicalMappingServiceError as exc:
+                return exc.code, exc.status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(submit_run, (request_a, request_b)))
+
+    assert sum(outcome[0] == "ok" for outcome in outcomes) == 1
+    assert [outcome for outcome in outcomes if outcome[0] != "ok"] == [
+        ("IDEMPOTENCY_CONFLICT", 409)
+    ]
+    with Session(postgres_engine) as verify_session:
+        assert (
+            verify_session.scalar(
+                select(func.count())
+                .select_from(MappingRun)
+                .where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.idempotency_key == idempotency_key,
+                )
+            )
+            == 1
+        )
 
 
 @pytest.mark.postgres
@@ -6893,7 +6974,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260816_0042"]
+    assert heads == ["20260817_0043"]
 
 
 @pytest.mark.postgres
@@ -7230,3 +7311,372 @@ def test_p3_03e1_migration_upgrade_downgrade_reupgrade_lifecycle_on_postgres(
     assert "ck_findings_governance_tier" in check_constraints
     indexes = {ix["name"] for ix in inspector.get_indexes("findings")}
     assert "ix_findings_organization_governance_tier" in indexes
+
+
+@pytest.mark.postgres
+def test_p3_05b_mapping_execution_contract_migration_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+
+    assert "mapping_run_inputs" in inspector.get_table_names()
+    run_columns = {column["name"] for column in inspector.get_columns("mapping_runs")}
+    assert {
+        "failure_code",
+        "failure_message",
+        "failure_retryable",
+        "failed_at",
+        "retry_of_run_id",
+        "root_run_id",
+        "attempt_number",
+        "execution_claimed_at",
+        "heartbeat_at",
+    } <= run_columns
+    uniques = {item["name"] for item in inspector.get_unique_constraints("mapping_runs")}
+    assert "uq_mapping_run_retry_child" in uniques
+    input_uniques = {
+        item["name"] for item in inspector.get_unique_constraints("mapping_run_inputs")
+    }
+    assert "uq_mapping_run_input_sequence" in input_uniques
+
+    command.downgrade(config, "20260816_0042")
+    inspector = inspect(postgres_engine)
+    assert "mapping_run_inputs" not in inspector.get_table_names()
+    assert "failure_code" not in {
+        column["name"] for column in inspector.get_columns("mapping_runs")
+    }
+    command.upgrade(config, "head")
+
+
+def _p3_05b_postgres_context(
+    postgres_engine: Engine, label: str
+) -> tuple[UUID, UUID, UUID, UUID, UUID, UUID]:
+    command.upgrade(alembic_config(require_disposable_postgres_url()), "head")
+    with Session(postgres_engine) as session:
+        organization_id, actor, dataset_id, version_id, _, raw_reference_id = (
+            canonical_mapping_foundation(session, f"p305b-pg-{label}-{uuid4().hex[:8]}")
+        )
+        _, template_version = cm01_published_entity_mapping(session, organization_id, actor)
+        schema = cm01_discovered_schema(
+            session, organization_id, dataset_id, version_id, f"p305b-pg-{label}"
+        )
+        return organization_id, actor, version_id, template_version.id, schema.id, raw_reference_id
+
+
+def _p3_05b_request(
+    version_id: UUID,
+    template_version_id: UUID,
+    schema_id: UUID,
+    raw_reference_id: UUID,
+    idempotency_key: str,
+    customer_id: str = "C-001",
+) -> MappingRunCreate:
+    return MappingRunCreate(
+        dataset_version_id=version_id,
+        template_version_id=template_version_id,
+        source_schema_id=schema_id,
+        idempotency_key=idempotency_key,
+        records=[
+            MappingInputRecord(
+                raw_record_reference_id=raw_reference_id,
+                values={"customer_id": customer_id, "customer_name": "Acme"},
+            )
+        ],
+    )
+
+
+@pytest.mark.postgres
+def test_p3_05b_concurrent_exact_submission_on_postgres(postgres_engine: Engine) -> None:
+    organization_id, actor, version_id, template_id, schema_id, raw_id = _p3_05b_postgres_context(
+        postgres_engine, "exact-submit"
+    )
+    request = _p3_05b_request(version_id, template_id, schema_id, raw_id, "p305b-pg-exact-submit")
+    barrier = Barrier(2)
+    insert_barrier = Barrier(2)
+    validate_submission = mapping_execution_service._validate_submission
+
+    def synchronized_validation(
+        session: Session, tenant_id: UUID, payload: MappingRunCreate
+    ) -> None:
+        validate_submission(session, tenant_id, payload)
+        insert_barrier.wait()
+
+    def submit() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            run, _ = mapping_execution_service.submit(session, organization_id, request, actor)
+            return run.id
+
+    with patch.object(
+        mapping_execution_service, "_validate_submission", side_effect=synchronized_validation
+    ):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            run_ids = list(executor.map(lambda _: submit(), range(2)))
+
+    assert len(set(run_ids)) == 1
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRun)
+                .where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.idempotency_key == request.idempotency_key,
+                )
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRunInput)
+                .where(MappingRunInput.mapping_run_id == run_ids[0])
+            )
+            == 1
+        )
+
+
+@pytest.mark.postgres
+def test_p3_05b_concurrent_conflicting_submission_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, actor, version_id, template_id, schema_id, raw_id = _p3_05b_postgres_context(
+        postgres_engine, "conflict-submit"
+    )
+    requests = (
+        _p3_05b_request(
+            version_id, template_id, schema_id, raw_id, "p305b-pg-conflict-submit", "C-A"
+        ),
+        _p3_05b_request(
+            version_id, template_id, schema_id, raw_id, "p305b-pg-conflict-submit", "C-B"
+        ),
+    )
+    barrier = Barrier(2)
+    insert_barrier = Barrier(2)
+    validate_submission = mapping_execution_service._validate_submission
+
+    def synchronized_validation(
+        session: Session, tenant_id: UUID, payload: MappingRunCreate
+    ) -> None:
+        validate_submission(session, tenant_id, payload)
+        insert_barrier.wait()
+
+    def submit(request: MappingRunCreate) -> tuple[str, object]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                run, _ = mapping_execution_service.submit(session, organization_id, request, actor)
+                return "ok", run.id
+            except CanonicalMappingServiceError as exc:
+                return exc.code, exc.status
+
+    with patch.object(
+        mapping_execution_service, "_validate_submission", side_effect=synchronized_validation
+    ):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(submit, requests))
+
+    assert sum(outcome[0] == "ok" for outcome in outcomes) == 1
+    assert [outcome for outcome in outcomes if outcome[0] != "ok"] == [
+        ("IDEMPOTENCY_CONFLICT", 409)
+    ]
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRun)
+                .where(
+                    MappingRun.organization_id == organization_id,
+                    MappingRun.idempotency_key == "p305b-pg-conflict-submit",
+                )
+            )
+            == 1
+        )
+
+
+@pytest.mark.postgres
+def test_p3_05b_atomic_claim_on_postgres(postgres_engine: Engine) -> None:
+    organization_id, actor, version_id, template_id, schema_id, raw_id = _p3_05b_postgres_context(
+        postgres_engine, "claim"
+    )
+    with Session(postgres_engine) as session:
+        run, _ = mapping_execution_service.submit(
+            session,
+            organization_id,
+            _p3_05b_request(version_id, template_id, schema_id, raw_id, "p305b-pg-claim"),
+            actor,
+        )
+        run_id = run.id
+    barrier = Barrier(2)
+
+    def claim() -> tuple[str, object]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                result = mapping_execution_service.claim_and_execute(
+                    session, organization_id, run_id
+                )
+                return "ok", result.id
+            except CanonicalMappingServiceError as exc:
+                return exc.code, exc.status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _: claim(), range(2)))
+
+    assert sum(outcome[0] == "ok" for outcome in outcomes) == 1
+    assert [outcome for outcome in outcomes if outcome[0] != "ok"] == [
+        ("MAPPING_RUN_INVALID_TRANSITION", 409)
+    ]
+    with Session(postgres_engine) as session:
+        persisted = session.get(MappingRun, run_id)
+        assert persisted is not None
+        assert persisted.execution_claimed_at is not None
+        assert persisted.status in {
+            MappingRunStatus.COMPLETED.value,
+            MappingRunStatus.PARTIALLY_COMPLETED.value,
+            MappingRunStatus.FAILED.value,
+        }
+
+
+def _p3_05b_retryable_predecessor(postgres_engine: Engine, label: str) -> tuple[UUID, UUID, UUID]:
+    organization_id, actor, version_id, template_id, schema_id, raw_id = _p3_05b_postgres_context(
+        postgres_engine, label
+    )
+    with Session(postgres_engine) as session:
+        run, _ = mapping_execution_service.submit(
+            session,
+            organization_id,
+            _p3_05b_request(version_id, template_id, schema_id, raw_id, f"p305b-pg-{label}-root"),
+            actor,
+        )
+        failed = mapping_execution_service.fail(
+            session, organization_id, run.id, "RETRYABLE_TEST_FAILURE", "Retryable failure", True
+        )
+        return organization_id, actor, failed.id
+
+
+@pytest.mark.postgres
+def test_p3_05b_concurrent_same_key_retry_on_postgres(postgres_engine: Engine) -> None:
+    organization_id, actor, predecessor_id = _p3_05b_retryable_predecessor(
+        postgres_engine, "same-retry"
+    )
+    payload = MappingRunRetryCreate(idempotency_key="p305b-pg-same-retry-child")
+    barrier = Barrier(2)
+
+    def retry() -> UUID:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            child, _ = mapping_execution_service.retry(
+                session, organization_id, predecessor_id, payload, actor
+            )
+            return child.id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        child_ids = list(executor.map(lambda _: retry(), range(2)))
+
+    assert len(set(child_ids)) == 1
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRun)
+                .where(MappingRun.retry_of_run_id == predecessor_id)
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRunInput)
+                .where(MappingRunInput.mapping_run_id == child_ids[0])
+            )
+            == 1
+        )
+
+
+@pytest.mark.postgres
+def test_p3_05b_concurrent_different_key_retry_on_postgres(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, actor, predecessor_id = _p3_05b_retryable_predecessor(
+        postgres_engine, "different-retry"
+    )
+    payloads = (
+        MappingRunRetryCreate(idempotency_key="p305b-pg-different-retry-a"),
+        MappingRunRetryCreate(idempotency_key="p305b-pg-different-retry-b"),
+    )
+    barrier = Barrier(2)
+
+    def retry(payload: MappingRunRetryCreate) -> tuple[str, object]:
+        with Session(postgres_engine) as session:
+            barrier.wait()
+            try:
+                child, _ = mapping_execution_service.retry(
+                    session, organization_id, predecessor_id, payload, actor
+                )
+                return "ok", child.id
+            except CanonicalMappingServiceError as exc:
+                return exc.code, exc.status
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(retry, payloads))
+
+    assert sum(outcome[0] == "ok" for outcome in outcomes) == 1
+    assert [outcome for outcome in outcomes if outcome[0] != "ok"] == [
+        ("MAPPING_RUN_RETRY_ALREADY_CREATED", 409)
+    ]
+    with Session(postgres_engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MappingRun)
+                .where(MappingRun.retry_of_run_id == predecessor_id)
+            )
+            == 1
+        )
+
+
+@pytest.mark.postgres
+def test_p3_05b_database_prevents_two_direct_retry_children(
+    postgres_engine: Engine,
+) -> None:
+    organization_id, actor, predecessor_id = _p3_05b_retryable_predecessor(
+        postgres_engine, "direct-child"
+    )
+    with Session(postgres_engine) as session:
+        first, _ = mapping_execution_service.retry(
+            session,
+            organization_id,
+            predecessor_id,
+            MappingRunRetryCreate(idempotency_key="p305b-pg-direct-child-a"),
+            actor,
+        )
+        predecessor = session.get(MappingRun, predecessor_id)
+        assert predecessor is not None
+        session.add(
+            MappingRun(
+                organization_id=organization_id,
+                dataset_version_id=predecessor.dataset_version_id,
+                template_version_id=predecessor.template_version_id,
+                source_schema_id=predecessor.source_schema_id,
+                schema_fingerprint_snapshot=predecessor.schema_fingerprint_snapshot,
+                status=MappingRunStatus.QUEUED.value,
+                idempotency_key="p305b-pg-direct-child-b",
+                request_fingerprint=predecessor.request_fingerprint,
+                input_count=predecessor.input_count,
+                created_by_user_id=actor,
+                retry_of_run_id=predecessor_id,
+                root_run_id=predecessor.root_run_id,
+                attempt_number=predecessor.attempt_number + 1,
+            )
+        )
+        with pytest.raises(IntegrityError) as exc:
+            session.commit()
+        assert (
+            getattr(getattr(exc.value.orig, "diag", None), "constraint_name", None)
+            == "uq_mapping_run_retry_child"
+        )
+        session.rollback()
+        assert session.get(MappingRun, first.id) is not None

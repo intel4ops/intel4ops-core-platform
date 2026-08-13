@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import NoReturn
 from uuid import UUID
 
@@ -17,7 +18,7 @@ from app.auth.permissions import (
     OIKB_AUTHOR_ROLES,
 )
 from app.db.session import get_db
-from app.models.canonical_mapping import MappingLifecycleStatus
+from app.models.canonical_mapping import MappingLifecycleStatus, MappingRunStatus
 from app.schemas.canonical_mapping import (
     CanonicalEntityRead,
     CanonicalEventRead,
@@ -34,7 +35,9 @@ from app.schemas.canonical_mapping import (
     MappingExceptionRead,
     MappingReviewCreate,
     MappingRunCreate,
+    MappingRunPage,
     MappingRunRead,
+    MappingRunRetryCreate,
     MappingTemplateCreate,
     MappingTemplateRead,
     MappingTemplateVersionConfigurationRead,
@@ -447,22 +450,82 @@ def approve_crosswalk_entry(
         _raise(exc)
 
 
-@tenant_router.post("/mapping-runs", response_model=MappingRunRead, status_code=201)
+@tenant_router.post("/mapping-runs", response_model=MappingRunRead, status_code=202)
 def execute_mapping(
     organization_id: UUID,
     payload: MappingRunCreate,
+    response: Response,
     db: Session = Depends(get_db),
     access: OrganizationAccess = Depends(
         require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
     ),
 ) -> object:
     try:
-        return mapping_execution_service.execute(
+        run, created = mapping_execution_service.submit(
             db,
             organization_id,
             payload,
             access.user.user_id,
         )
+        if not created:
+            response.status_code = 200
+        return run
+    except CanonicalMappingServiceError as exc:
+        _raise(exc)
+
+
+@tenant_router.get("/mapping-runs", response_model=MappingRunPage)
+def list_mapping_runs(
+    organization_id: UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    status: MappingRunStatus | None = None,
+    template_version_id: UUID | None = None,
+    dataset_version_id: UUID | None = None,
+    source_schema_id: UUID | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    retry_of_run_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_READ_ROLES)
+    ),
+) -> object:
+    return mapping_execution_service.list_runs(
+        db,
+        organization_id,
+        page,
+        page_size,
+        status=status.value if status else None,
+        template_version_id=template_version_id,
+        dataset_version_id=dataset_version_id,
+        source_schema_id=source_schema_id,
+        created_from=created_from,
+        created_to=created_to,
+        retry_of_run_id=retry_of_run_id,
+    )
+
+
+@tenant_router.post(
+    "/mapping-runs/{mapping_run_id}/retry", response_model=MappingRunRead, status_code=202
+)
+def retry_mapping_run(
+    organization_id: UUID,
+    mapping_run_id: UUID,
+    payload: MappingRunRetryCreate,
+    response: Response,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("connect.canonical_mapping", *INGESTION_OPERATION_ROLES)
+    ),
+) -> object:
+    try:
+        run, created = mapping_execution_service.retry(
+            db, organization_id, mapping_run_id, payload, access.user.user_id
+        )
+        if not created:
+            response.status_code = 200
+        return run
     except CanonicalMappingServiceError as exc:
         _raise(exc)
 
