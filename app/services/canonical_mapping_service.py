@@ -11,9 +11,10 @@ from typing import Any, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.canonical_mapping import (
     CanonicalEntity,
@@ -66,14 +67,20 @@ from app.schemas.canonical_mapping import (
     CanonicalFieldCreate,
     CanonicalTypeCreate,
     EntityMatchDecision,
+    FieldMappingConfigurationRead,
     FieldMappingCreate,
+    FieldMappingRead,
     FieldMappingSuggestion,
     FieldMappingSuggestionListRead,
     MappingInputRecord,
     MappingReviewCreate,
     MappingRunCreate,
     MappingTemplateCreate,
+    MappingTemplateRead,
+    MappingTemplateVersionConfigurationRead,
     MappingTemplateVersionCreate,
+    MappingTemplateVersionRead,
+    MappingTransformationRead,
     SourceSchemaDiscover,
     TransformationCreate,
     ValueCrosswalkCreate,
@@ -379,6 +386,107 @@ class MappingTemplateService:
         MappingLifecycleStatus.DEPRECATED.value: {MappingLifecycleStatus.RETIRED.value},
         MappingLifecycleStatus.RETIRED.value: set(),
     }
+
+    @staticmethod
+    def _visible_template_condition(organization_id: UUID) -> ColumnElement[bool]:
+        return or_(
+            MappingTemplate.scope_type != "organization",
+            MappingTemplate.owner_organization_id == organization_id,
+        )
+
+    def list_templates(self, db: Session, organization_id: UUID) -> list[MappingTemplate]:
+        return list(
+            db.scalars(
+                select(MappingTemplate)
+                .where(self._visible_template_condition(organization_id))
+                .order_by(MappingTemplate.name, MappingTemplate.template_code, MappingTemplate.id)
+            )
+        )
+
+    def get_template(
+        self, db: Session, organization_id: UUID, template_id: UUID
+    ) -> MappingTemplate:
+        template = db.scalar(
+            select(MappingTemplate).where(
+                MappingTemplate.id == template_id,
+                self._visible_template_condition(organization_id),
+            )
+        )
+        if template is None:
+            _fail("MAPPING_TEMPLATE_NOT_FOUND", "Mapping template is outside scope", 404)
+        return template
+
+    def list_versions(
+        self, db: Session, organization_id: UUID, template_id: UUID
+    ) -> list[MappingTemplateVersion]:
+        self.get_template(db, organization_id, template_id)
+        return list(
+            db.scalars(
+                select(MappingTemplateVersion)
+                .where(MappingTemplateVersion.template_id == template_id)
+                .order_by(
+                    MappingTemplateVersion.created_at.desc(),
+                    MappingTemplateVersion.semantic_version.desc(),
+                    MappingTemplateVersion.id,
+                )
+            )
+        )
+
+    def get_version_configuration(
+        self, db: Session, organization_id: UUID, version_id: UUID
+    ) -> MappingTemplateVersionConfigurationRead:
+        row = db.execute(
+            select(MappingTemplateVersion, MappingTemplate)
+            .join(MappingTemplate, MappingTemplate.id == MappingTemplateVersion.template_id)
+            .where(
+                MappingTemplateVersion.id == version_id,
+                self._visible_template_condition(organization_id),
+            )
+        ).one_or_none()
+        if row is None:
+            _fail("MAPPING_VERSION_NOT_FOUND", "Mapping version was not found", 404)
+        version, template = row
+        field_mappings = list(
+            db.scalars(
+                select(FieldMapping)
+                .where(FieldMapping.template_version_id == version.id)
+                .order_by(FieldMapping.sequence, FieldMapping.id)
+            )
+        )
+        field_ids = [field.id for field in field_mappings]
+        transformations = (
+            list(
+                db.scalars(
+                    select(MappingTransformation)
+                    .where(MappingTransformation.field_mapping_id.in_(field_ids))
+                    .order_by(
+                        MappingTransformation.field_mapping_id,
+                        MappingTransformation.sequence,
+                        MappingTransformation.id,
+                    )
+                )
+            )
+            if field_ids
+            else []
+        )
+        by_field: dict[UUID, list[MappingTransformationRead]] = {
+            field_id: [] for field_id in field_ids
+        }
+        for transformation in transformations:
+            by_field[transformation.field_mapping_id].append(
+                MappingTransformationRead.model_validate(transformation)
+            )
+        return MappingTemplateVersionConfigurationRead(
+            **MappingTemplateVersionRead.model_validate(version).model_dump(),
+            template=MappingTemplateRead.model_validate(template),
+            field_mappings=[
+                FieldMappingConfigurationRead(
+                    **FieldMappingRead.model_validate(field).model_dump(),
+                    transformations=by_field[field.id],
+                )
+                for field in field_mappings
+            ],
+        )
 
     def create(
         self,
