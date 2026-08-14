@@ -32,6 +32,7 @@ from app.models.decision_intelligence import (
     DecisionSolution,
     DecisionVariableDefinition,
 )
+from app.models.entities import Finding
 from app.models.recovery_ledger import (
     RecoveryCase,
     RecoveryExecution,
@@ -1033,6 +1034,79 @@ class DecisionApprovalService:
         return action
 
 
+class FindingDecisionWorkspaceService:
+    def get(
+        self, db: Session, organization_id: UUID, finding_id: UUID
+    ) -> tuple[
+        DecisionRecommendation | None,
+        DecisionApproval | None,
+        list[DecisionAuditEvent],
+    ]:
+        finding = db.scalar(
+            select(Finding.id).where(
+                Finding.id == finding_id,
+                Finding.organization_id == organization_id,
+            )
+        )
+        if finding is None:
+            raise DecisionIntelligenceServiceError(
+                "finding not found", code="finding_not_found", status=404
+            )
+
+        recommendation = db.scalar(
+            select(DecisionRecommendation)
+            .join(
+                DecisionSolution,
+                (DecisionSolution.id == DecisionRecommendation.solution_id)
+                & (DecisionSolution.organization_id == DecisionRecommendation.organization_id),
+            )
+            .join(
+                DecisionExecution,
+                (DecisionExecution.id == DecisionSolution.execution_id)
+                & (DecisionExecution.organization_id == DecisionSolution.organization_id),
+            )
+            .join(
+                DecisionScenarioInput,
+                (DecisionScenarioInput.scenario_id == DecisionExecution.scenario_id)
+                & (DecisionScenarioInput.organization_id == DecisionExecution.organization_id),
+            )
+            .where(
+                DecisionRecommendation.organization_id == organization_id,
+                DecisionSolution.organization_id == organization_id,
+                DecisionExecution.organization_id == organization_id,
+                DecisionScenarioInput.organization_id == organization_id,
+                DecisionScenarioInput.input_kind == "finding",
+                DecisionScenarioInput.source_id == finding_id,
+            )
+            .order_by(DecisionRecommendation.created_at.desc(), DecisionRecommendation.id.desc())
+            .limit(1)
+        )
+        if recommendation is None:
+            return None, None, []
+
+        approval = db.scalar(
+            select(DecisionApproval)
+            .where(
+                DecisionApproval.organization_id == organization_id,
+                DecisionApproval.recommendation_id == recommendation.id,
+            )
+            .order_by(DecisionApproval.decided_at.desc(), DecisionApproval.id.desc())
+            .limit(1)
+        )
+        history = list(
+            db.scalars(
+                select(DecisionAuditEvent)
+                .where(
+                    DecisionAuditEvent.organization_id == organization_id,
+                    DecisionAuditEvent.entity_type == "decision_recommendation",
+                    DecisionAuditEvent.entity_id == recommendation.id,
+                )
+                .order_by(DecisionAuditEvent.occurred_at, DecisionAuditEvent.id)
+            ).all()
+        )
+        return recommendation, approval, history
+
+
 class SensitivityAnalysisService:
     def record(
         self,
@@ -1158,5 +1232,6 @@ solver_adapter_service = SolverAdapterService()
 decision_execution_service = DecisionExecutionService()
 recommendation_service = RecommendationService()
 decision_approval_service = DecisionApprovalService()
+finding_decision_workspace_service = FindingDecisionWorkspaceService()
 sensitivity_analysis_service = SensitivityAnalysisService()
 decision_outcome_service = DecisionOutcomeService()
