@@ -94,6 +94,16 @@ def test_recovery_workspace_requires_authentication(
     assert client.get(_path(uuid4(), uuid4())).status_code == 401
 
 
+def test_recovery_workspace_requires_tenant_membership(
+    client: TestClient, identity: IdentityState, db: Session
+) -> None:
+    organization_id, _ = make_org(db, "p308-membership")
+    finding = _finding(db, organization_id, "MEMBERSHIP")
+    identity.is_platform_admin = False
+    identity.user_id = uuid4()
+    assert client.get(_path(organization_id, finding.id)).status_code in {403, 404}
+
+
 def test_empty_and_approved_without_action_are_honest(client: TestClient, db: Session) -> None:
     organization_id, actor_id = make_org(db, "p308-empty")
     finding = _finding(db, organization_id, "EMPTY")
