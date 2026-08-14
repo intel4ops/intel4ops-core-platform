@@ -39,6 +39,7 @@ from app.api.orchestration_routes import engine_router
 from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.recovery_ledger_routes import router as recovery_ledger_router
+from app.api.recovery_workspace_routes import router as recovery_workspace_router
 from app.api.reliability_routes import router as reliability_router
 from app.api.routes import router
 from app.api.signature_routes import catalog_router as signature_catalog_router
@@ -145,6 +146,7 @@ app.include_router(canonical_mapping_tenant_router)
 app.include_router(memory_effectiveness_router)
 app.include_router(economics_router)
 app.include_router(recovery_ledger_router)
+app.include_router(recovery_workspace_router)
 app.include_router(commercial_catalog_router)
 app.include_router(commercial_tenant_router)
 app.include_router(industry_pack_catalog_router)
