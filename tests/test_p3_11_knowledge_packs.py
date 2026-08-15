@@ -1,6 +1,7 @@
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+import pytest
 from conftest import IdentityState
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -292,3 +293,126 @@ def test_tenant_reads_filters_pagination_and_openapi(client: TestClient, db: Ses
         if isinstance(operation, dict) and "operationId" in operation
     ]
     assert len(ids) == len(set(ids))
+
+
+def test_audit_order_is_deterministic_under_a_forced_identical_timestamp(
+    monkeypatch: pytest.MonkeyPatch, db: Session
+) -> None:
+    """Regression for the P3.11 post-merge defect: pack_created and version_created
+    used to receive independent datetime.now(UTC) calls and were ordered by
+    (occurred_at, id) -- a random UUID tiebreaker whenever both calls landed on the
+    same timestamp. Force that exact tie here and prove `sequence` decides order
+    instead, deterministically, every time."""
+    from datetime import UTC, datetime
+    from datetime import tzinfo as TzInfo
+
+    import app.services.knowledge_pack_service as kp_module
+    from app.schemas.knowledge_pack import KnowledgePackCreate
+    from app.services.knowledge_pack_service import knowledge_pack_service
+
+    organization_id, actor_id = make_org(db, "p311-audit-tie")
+    frozen = datetime(2026, 8, 21, 12, 0, 0, tzinfo=UTC)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: TzInfo | None = None) -> "_FrozenDateTime":
+            return cast(_FrozenDateTime, frozen)
+
+    monkeypatch.setattr(kp_module, "datetime", _FrozenDateTime)
+    for attempt in range(25):
+        pack = knowledge_pack_service.create(
+            db,
+            organization_id,
+            KnowledgePackCreate(
+                name="Forced-tie reference pack",
+                slug=f"forced-tie-{attempt}",
+                description="Deterministic ordering regression fixture.",
+                industry="oilfield_services",
+                domain="job_to_cash",
+                scope="Reference test context only.",
+                change_summary="Initial draft",
+            ),
+            actor_id,
+            "organization_admin",
+        )
+        events = [(e.event_type, e.occurred_at.replace(tzinfo=UTC)) for e in pack.audit_history]
+        assert events[0][1] == events[1][1] == frozen, "test did not actually force a tie"
+        assert [e.event_type for e in pack.audit_history] == [
+            "pack_created",
+            "version_created",
+        ], f"attempt {attempt}: audit order was not deterministic under a forced timestamp tie"
+
+
+def test_audit_order_survives_many_creation_repetitions(client: TestClient, db: Session) -> None:
+    organization_id, _ = make_org(db, "p311-audit-repeat")
+    for attempt in range(60):
+        pack = _create(client, organization_id, f"repeat-reference-{attempt}")
+        assert [event["event_type"] for event in pack["audit_history"]] == [
+            "pack_created",
+            "version_created",
+        ], f"repetition {attempt} produced non-deterministic audit order"
+
+
+def test_version_lifecycle_audit_preserves_true_event_order(
+    client: TestClient, db: Session
+) -> None:
+    organization_id, actor_id = make_org(db, "p311-audit-lifecycle")
+    learning = _learning(db, organization_id, actor_id, "lifecycle-v1", "production")
+    second = _learning(db, organization_id, actor_id, "lifecycle-v2", "manual")
+    pack = _create(client, organization_id, "lifecycle-reference")
+    v1 = pack["latest_draft_version"]
+    _add(client, organization_id, pack["id"], v1["id"], learning.id)
+    _transition(client, organization_id, pack["id"], v1["id"], "submit")
+    _transition(client, organization_id, pack["id"], v1["id"], "approve")
+    next_version = client.post(
+        _path(organization_id, f"/{pack['id']}/versions"),
+        json={"change_summary": "Next bounded revision."},
+    ).json()
+    v2 = next_version["latest_draft_version"]
+    _add(client, organization_id, pack["id"], v2["id"], second.id)
+    _transition(client, organization_id, pack["id"], v2["id"], "submit")
+    promoted = _transition(client, organization_id, pack["id"], v2["id"], "approve")
+    event_types = [event["event_type"] for event in promoted["audit_history"]]
+    # True causal order: v1 is created, gains its Learning, is submitted and approved;
+    # only then does v2 exist to be created, gain Learning, be submitted, and on its
+    # own approval, cause v1's supersession as part of that same request.
+    assert event_types == [
+        "pack_created",
+        "version_created",
+        "learning_added",
+        "submit",
+        "approve",
+        "version_created",
+        "learning_added",
+        "submit",
+        "version_superseded",
+        "approve",
+    ]
+    for event in promoted["audit_history"]:
+        assert event["actor_role"]
+        assert event["actor_user_id"]
+    supersede_event = next(
+        e for e in promoted["audit_history"] if e["event_type"] == "version_superseded"
+    )
+    assert supersede_event["prior_status"] == "approved"
+    assert supersede_event["new_status"] == "superseded"
+    assert supersede_event["rationale"] == "Governed approve after bounded human review."
+
+
+def test_audit_retrieval_remains_tenant_scoped_after_ordering_fix(
+    client: TestClient, db: Session
+) -> None:
+    first_id, _ = make_org(db, "p311-audit-tenant-first")
+    second_id, _ = make_org(db, "p311-audit-tenant-second")
+    _create(client, first_id, "tenant-audit-first")
+    _create(client, second_id, "tenant-audit-second")
+    first_page = client.get(_path(first_id)).json()
+    assert first_page["total"] == 1
+    assert all(
+        event["event_type"] in {"pack_created", "version_created"}
+        for pack in first_page["items"]
+        for event in pack["audit_history"]
+    )
+    second_page = client.get(_path(second_id)).json()
+    assert second_page["total"] == 1
+    assert first_page["items"][0]["id"] != second_page["items"][0]["id"]

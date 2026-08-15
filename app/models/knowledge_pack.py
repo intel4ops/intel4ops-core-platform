@@ -142,7 +142,17 @@ class KnowledgePackAuditEvent(Base):
             name="fk_pack_audit_org_pack",
             ondelete="CASCADE",
         ),
+        UniqueConstraint(
+            "organization_id",
+            "knowledge_pack_id",
+            "sequence",
+            name="uq_pack_audit_org_pack_sequence",
+        ),
+        CheckConstraint("sequence > 0", name="ck_pack_audit_sequence_positive"),
         Index("ix_pack_audit_org_pack_time", "organization_id", "knowledge_pack_id", "occurred_at"),
+        Index(
+            "ix_pack_audit_org_pack_sequence", "organization_id", "knowledge_pack_id", "sequence"
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID] = mapped_column(
@@ -160,3 +170,7 @@ class KnowledgePackAuditEvent(Base):
     rationale: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict[str, object]] = mapped_column(portable_json, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    # Deterministic, service-assigned monotonic order within a pack. occurred_at alone
+    # cannot guarantee ordering when two events are recorded within the same timestamp
+    # resolution window; sequence is the authoritative read-order key.
+    sequence: Mapped[int] = mapped_column(Integer)
