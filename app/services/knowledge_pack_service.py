@@ -71,9 +71,14 @@ class KnowledgePackService:
         )
         db.add(version)
         db.flush()
-        db.add(self._audit(pack, version, "pack_created", None, "draft", actor_id, actor_role))
+        db.add(self._audit(db, pack, version, "pack_created", None, "draft", actor_id, actor_role))
+        # Flush explicitly so the pack_created row (and its assigned sequence) is durably
+        # visible before version_created's sequence is computed -- this makes the ordering
+        # airtight rather than depending on autoflush batching behavior.
+        db.flush()
         db.add(
             self._audit(
+                db=db,
                 version=version,
                 pack=pack,
                 event="version_created",
@@ -126,7 +131,9 @@ class KnowledgePackService:
                     inclusion_rationale=link.inclusion_rationale,
                 )
             )
-        db.add(self._audit(pack, version, "version_created", None, "draft", actor_id, actor_role))
+        db.add(
+            self._audit(db, pack, version, "version_created", None, "draft", actor_id, actor_role)
+        )
         db.commit()
         return self.get(db, organization_id, pack_id)
 
@@ -140,7 +147,7 @@ class KnowledgePackService:
         actor_id: UUID,
         actor_role: str,
     ) -> KnowledgePackVersionRead:
-        pack = self._pack(db, organization_id, pack_id)
+        pack = self._pack(db, organization_id, pack_id, lock=True)
         version = self._version(db, organization_id, pack_id, version_id)
         self._editable(version)
         learning = self._eligible_learning(db, organization_id, payload.learning_id)
@@ -167,6 +174,7 @@ class KnowledgePackService:
         self._refresh_provenance(db, organization_id, version)
         db.add(
             self._audit(
+                db,
                 pack,
                 version,
                 "learning_added",
@@ -190,7 +198,7 @@ class KnowledgePackService:
         actor_id: UUID,
         actor_role: str,
     ) -> KnowledgePackVersionRead:
-        pack = self._pack(db, organization_id, pack_id)
+        pack = self._pack(db, organization_id, pack_id, lock=True)
         version = self._version(db, organization_id, pack_id, version_id)
         self._editable(version)
         link = db.scalar(
@@ -209,6 +217,7 @@ class KnowledgePackService:
         self._refresh_provenance(db, organization_id, version)
         db.add(
             self._audit(
+                db,
                 pack,
                 version,
                 "learning_removed",
@@ -265,6 +274,7 @@ class KnowledgePackService:
                 previous.superseded_at = now
                 db.add(
                     self._audit(
+                        db,
                         pack,
                         previous,
                         "version_superseded",
@@ -276,6 +286,9 @@ class KnowledgePackService:
                         {"superseded_by_version_id": str(version.id)},
                     )
                 )
+                # Flush so version_superseded's sequence is durably assigned before the
+                # transition event below computes its own -- same rationale as create().
+                db.flush()
             version.approved_by_user_id = actor_id
             version.approved_at = now
         if command in {"submit", "approve", "reject"}:
@@ -284,7 +297,9 @@ class KnowledgePackService:
         if command == "retire":
             version.retired_at = now
         version.lifecycle_status = target
-        db.add(self._audit(pack, version, command, prior, target, actor_id, actor_role, rationale))
+        db.add(
+            self._audit(db, pack, version, command, prior, target, actor_id, actor_role, rationale)
+        )
         db.commit()
         return self.get(db, organization_id, pack_id)
 
@@ -374,7 +389,9 @@ class KnowledgePackService:
                     KnowledgePackAuditEvent.organization_id == organization_id,
                     KnowledgePackAuditEvent.knowledge_pack_id.in_(pack_ids),
                 )
-                .order_by(KnowledgePackAuditEvent.occurred_at, KnowledgePackAuditEvent.id)
+                .order_by(
+                    KnowledgePackAuditEvent.knowledge_pack_id, KnowledgePackAuditEvent.sequence
+                )
             )
         )
         return [
@@ -598,6 +615,7 @@ class KnowledgePackService:
 
     @staticmethod
     def _audit(
+        db: Session,
         pack: KnowledgePack,
         version: KnowledgePackVersion,
         event: str,
@@ -608,6 +626,21 @@ class KnowledgePackService:
         rationale: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> KnowledgePackAuditEvent:
+        # `sequence` is the authoritative read-order key (see the model docstring). It is
+        # computed here, under the session's default autoflush, so any audit event already
+        # `db.add()`-ed earlier in the same call is visible to this MAX query before this
+        # row is constructed -- this is what makes back-to-back audit events within one
+        # service call (e.g. create()'s pack_created + version_created) deterministically
+        # ordered even when they share an identical `occurred_at` timestamp.
+        next_sequence = (
+            db.scalar(
+                select(func.max(KnowledgePackAuditEvent.sequence)).where(
+                    KnowledgePackAuditEvent.organization_id == pack.organization_id,
+                    KnowledgePackAuditEvent.knowledge_pack_id == pack.id,
+                )
+            )
+            or 0
+        ) + 1
         return KnowledgePackAuditEvent(
             organization_id=pack.organization_id,
             knowledge_pack_id=pack.id,
@@ -620,6 +653,7 @@ class KnowledgePackService:
             rationale=rationale,
             metadata_json={"version_number": version.version_number, **(metadata or {})},
             occurred_at=datetime.now(UTC),
+            sequence=next_sequence,
         )
 
 
