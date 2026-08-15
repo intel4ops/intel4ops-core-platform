@@ -16,6 +16,7 @@ from app.api.commercial_routes import catalog_router as commercial_catalog_route
 from app.api.commercial_routes import tenant_router as commercial_tenant_router
 from app.api.decision_intelligence_routes import catalog_router as decision_catalog_router
 from app.api.decision_intelligence_routes import tenant_router as decision_tenant_router
+from app.api.decision_intelligence_routes import workspace_router as decision_workspace_router
 from app.api.economics_routes import router as economics_router
 from app.api.executive_narrative_routes import router as executive_narrative_router
 from app.api.finding_routes import router as finding_router
@@ -30,6 +31,7 @@ from app.api.invitation_routes import router as invitation_router
 from app.api.job_to_cash_routes import router as job_to_cash_router
 from app.api.knowledge_graph_routes import catalog_router as knowledge_graph_catalog_router
 from app.api.knowledge_graph_routes import tenant_router as knowledge_graph_tenant_router
+from app.api.learning_routes import router as learning_router
 from app.api.membership_routes import router as membership_router
 from app.api.memory_effectiveness_routes import router as memory_effectiveness_router
 from app.api.oikb_routes import router as oikb_router
@@ -38,6 +40,8 @@ from app.api.orchestration_routes import engine_router
 from app.api.orchestration_routes import router as orchestration_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.recovery_ledger_routes import router as recovery_ledger_router
+from app.api.recovery_portfolio_routes import router as recovery_portfolio_router
+from app.api.recovery_workspace_routes import router as recovery_workspace_router
 from app.api.reliability_routes import router as reliability_router
 from app.api.routes import router
 from app.api.signature_routes import catalog_router as signature_catalog_router
@@ -144,6 +148,8 @@ app.include_router(canonical_mapping_tenant_router)
 app.include_router(memory_effectiveness_router)
 app.include_router(economics_router)
 app.include_router(recovery_ledger_router)
+app.include_router(recovery_portfolio_router)
+app.include_router(recovery_workspace_router)
 app.include_router(commercial_catalog_router)
 app.include_router(commercial_tenant_router)
 app.include_router(industry_pack_catalog_router)
@@ -155,10 +161,12 @@ app.include_router(signature_catalog_router)
 app.include_router(signature_tenant_router)
 app.include_router(knowledge_graph_catalog_router)
 app.include_router(knowledge_graph_tenant_router)
+app.include_router(learning_router)
 app.include_router(causal_intelligence_catalog_router)
 app.include_router(causal_intelligence_tenant_router)
 app.include_router(decision_catalog_router)
 app.include_router(decision_tenant_router)
+app.include_router(decision_workspace_router)
 app.include_router(value_scan_router)
 app.include_router(executive_narrative_router)
 app.include_router(workspace_catalog_router)

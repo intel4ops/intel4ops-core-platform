@@ -43,6 +43,9 @@ from app.schemas.decision_intelligence import (
     DecisionSensitivityCreate,
     DecisionSolutionRead,
     DecisionVariableCreate,
+    DecisionWorkspaceHistoryEntry,
+    DecisionWorkspaceRead,
+    DecisionWorkspaceRecommendationRead,
 )
 from app.services.decision_intelligence_service import (
     DecisionIntelligenceServiceError,
@@ -53,6 +56,7 @@ from app.services.decision_intelligence_service import (
     decision_problem_service,
     decision_scenario_service,
     decision_validation_service,
+    finding_decision_workspace_service,
     recommendation_service,
     sensitivity_analysis_service,
 )
@@ -60,6 +64,10 @@ from app.services.decision_intelligence_service import (
 catalog_router = APIRouter(prefix="/api/v1/decision-methods", tags=["decision-methods"])
 tenant_router = APIRouter(
     prefix="/api/v1/organizations/{organization_id}/decisions",
+    tags=["decision-intelligence"],
+)
+workspace_router = APIRouter(
+    prefix="/api/v1/organizations/{organization_id}/findings",
     tags=["decision-intelligence"],
 )
 
@@ -72,6 +80,34 @@ def _raise(exc: DecisionIntelligenceServiceError) -> NoReturn:
 
 def _role(access: OrganizationAccess) -> str:
     return "platform_admin" if access.membership is None else str(access.membership.role)
+
+
+@workspace_router.get(
+    "/{finding_id}/decision-workspace",
+    response_model=DecisionWorkspaceRead,
+)
+def get_finding_decision_workspace(
+    organization_id: UUID,
+    finding_id: UUID,
+    db: Session = Depends(get_db),
+    _: OrganizationAccess = Depends(require_organization_roles(*DECISION_READ_ROLES)),
+) -> DecisionWorkspaceRead:
+    try:
+        recommendation, approval, history = finding_decision_workspace_service.get(
+            db, organization_id, finding_id
+        )
+    except DecisionIntelligenceServiceError as exc:
+        _raise(exc)
+    return DecisionWorkspaceRead(
+        finding_id=finding_id,
+        recommendation=(
+            DecisionWorkspaceRecommendationRead.model_validate(recommendation)
+            if recommendation is not None
+            else None
+        ),
+        approval=(DecisionApprovalRead.model_validate(approval) if approval is not None else None),
+        history=[DecisionWorkspaceHistoryEntry.model_validate(item) for item in history],
+    )
 
 
 @catalog_router.get("", response_model=list[DecisionMethodRead])

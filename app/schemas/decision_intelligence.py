@@ -327,3 +327,45 @@ class DecisionHistoryEntry(BaseModel):
     entity_id: UUID
     summary: str
     occurred_at: datetime
+
+
+class DecisionWorkspaceRecommendationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    solution_id: UUID
+    selected_alternative_id: UUID
+    approved_by_approval_id: UUID | None
+    converted_action_id: UUID | None
+    lifecycle_status: str
+    title: str
+    rationale: str
+    objective_explanation: dict[str, object]
+    constraint_explanation: dict[str, object]
+    evidence_summary: list[dict[str, object]]
+    expires_at: datetime | None
+    created_by_user_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class DecisionWorkspaceHistoryEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    event_type: str
+    entity_type: str
+    entity_id: UUID
+    actor_user_id: UUID | None
+    actor_role: str | None
+    summary: str
+    event_metadata: dict[str, object]
+    occurred_at: datetime
+
+
+class DecisionWorkspaceRead(BaseModel):
+    finding_id: UUID
+    recommendation: DecisionWorkspaceRecommendationRead | None
+    approval: DecisionApprovalRead | None
+    history: list[DecisionWorkspaceHistoryEntry]
