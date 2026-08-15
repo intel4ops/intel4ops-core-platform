@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from conftest import IdentityState
@@ -10,7 +10,15 @@ from test_p3_08_recovery_workspace import _approve, _finding, _recommendation
 from test_recovery_ledger_api import approved_foundation
 
 from app.main import app
-from app.models.actions import ActionOutcome
+from app.models.actions import ActionOutcome, OperationalAction
+from app.models.decision_intelligence import DecisionApproval, DecisionRecommendation
+from app.models.entities import Finding
+from app.models.recovery_ledger import (
+    RecoveryExecution,
+    RecoveryFinanceVerification,
+    RecoveryValueMeasurement,
+    VerifiedValueLedgerEntry,
+)
 from app.services.decision_intelligence_service import decision_approval_service
 from app.services.recovery_portfolio_service import RecoveryPortfolioService
 
@@ -23,7 +31,7 @@ def _path(organization_id: UUID | str, **params: object) -> str:
 
 def _approved_recommendation(
     db: Session, organization_id: UUID, actor_id: UUID, suffix: str
-) -> tuple[object, object]:
+) -> tuple[Finding, DecisionRecommendation]:
     finding = _finding(db, organization_id, suffix)
     recommendation = _recommendation(db, organization_id, finding.id, actor_id)
     _approve(db, organization_id, recommendation, actor_id)
@@ -35,7 +43,7 @@ def _verified_chain(
     identity: IdentityState,
     db: Session,
     slug: str,
-) -> tuple[UUID, object, object, dict[str, object]]:
+) -> tuple[UUID, Finding, OperationalAction, dict[str, object]]:
     organization_id_text, _, baseline = approved_foundation(client, slug)
     organization_id = UUID(organization_id_text)
     actor_id = identity.user_id
@@ -182,7 +190,7 @@ def test_verified_portfolio_values_filters_overdue_and_currency_groups(
     cad_action = decision_approval_service.convert_to_action(
         db, organization_id, cad_recommendation.id, actor_id
     )
-    cad_action.expected_avoided_cost = 500
+    cad_action.expected_avoided_cost = Decimal("500")
     cad_action.currency_code = "CAD"
     cad_action.assigned_role = "operator"
     db.commit()
@@ -222,13 +230,14 @@ def test_verified_portfolio_values_filters_overdue_and_currency_groups(
 
 def test_stage_mapping_never_collapses_lifecycle_states() -> None:
     service = RecoveryPortfolioService()
-    recommendation = SimpleNamespace()
-    approved = SimpleNamespace(decision="approve")
-    action = SimpleNamespace(status="completed")
-    execution = SimpleNamespace(status="in_progress")
-    outcome = SimpleNamespace()
-    submitted = SimpleNamespace(status="submitted")
-    rejected = SimpleNamespace(decision="rejected")
+    recommendation = DecisionRecommendation()
+    approved = DecisionApproval(decision="approve")
+    action = OperationalAction(status="completed")
+    execution = RecoveryExecution(status="in_progress")
+    outcome = ActionOutcome()
+    submitted = RecoveryValueMeasurement(status="submitted")
+    rejected = RecoveryFinanceVerification(decision="rejected")
+    ledger_entry = VerifiedValueLedgerEntry()
     assert service._stage(recommendation, approved, None, None, None, None, None, []) == (
         "approved_no_action"
     )
@@ -253,7 +262,14 @@ def test_stage_mapping_never_collapses_lifecycle_states() -> None:
     )
     assert (
         service._stage(
-            recommendation, approved, action, execution, outcome, submitted, rejected, [object()]
+            recommendation,
+            approved,
+            action,
+            execution,
+            outcome,
+            submitted,
+            rejected,
+            [ledger_entry],
         )
         == "verified"
     )

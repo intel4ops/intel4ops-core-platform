@@ -12,6 +12,7 @@ from app.main import app
 from app.models.actions import ActionEvidence, ActionOutcome
 from app.models.decision_intelligence import (
     DecisionExecution,
+    DecisionRecommendation,
     DecisionScenarioInput,
     DecisionSolution,
 )
@@ -49,7 +50,9 @@ def _finding(db: Session, organization_id: UUID, suffix: str) -> Finding:
     return row
 
 
-def _recommendation(db: Session, organization_id: UUID, finding_id: UUID, actor_id: UUID) -> object:
+def _recommendation(
+    db: Session, organization_id: UUID, finding_id: UUID, actor_id: UUID
+) -> DecisionRecommendation:
     recommendation, _ = add_graph(db, organization_id, actor_id)
     scenario_id = db.scalar(
         select(DecisionExecution.scenario_id)
@@ -72,7 +75,12 @@ def _recommendation(db: Session, organization_id: UUID, finding_id: UUID, actor_
     return recommendation
 
 
-def _approve(db: Session, organization_id: UUID, recommendation: object, actor_id: UUID) -> None:
+def _approve(
+    db: Session,
+    organization_id: UUID,
+    recommendation: DecisionRecommendation,
+    actor_id: UUID,
+) -> None:
     decision_approval_service.decide(
         db,
         organization_id,
