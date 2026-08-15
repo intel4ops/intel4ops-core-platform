@@ -13,7 +13,7 @@ Revises: 20260820_0046
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "20260821_0047"
 down_revision: str | None = "20260820_0046"
@@ -27,6 +27,8 @@ _INDEX_NAME = "ix_pack_audit_org_pack_sequence"
 
 
 def _backfill_sequence() -> None:
+    if context.is_offline_mode():
+        return
     connection = op.get_bind()
     metadata = sa.MetaData()
     audit = sa.Table(_TABLE, metadata, autoload_with=connection)
@@ -50,6 +52,8 @@ def _backfill_sequence() -> None:
 
 
 def _validate_no_nulls_remain() -> None:
+    if context.is_offline_mode():
+        return
     connection = op.get_bind()
     metadata = sa.MetaData()
     audit = sa.Table(_TABLE, metadata, autoload_with=connection)
