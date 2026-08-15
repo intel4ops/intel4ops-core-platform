@@ -6423,7 +6423,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260819_0045"]
+    assert heads == ["20260820_0046"]
 
 
 @pytest.mark.postgres
@@ -6976,7 +6976,40 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260819_0045"]
+    assert heads == ["20260820_0046"]
+
+
+@pytest.mark.postgres
+def test_p3_11_knowledge_pack_migration_round_trip_and_tenant_links(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+    assert {
+        "knowledge_packs",
+        "knowledge_pack_versions",
+        "knowledge_pack_learning_links",
+        "knowledge_pack_audit_events",
+    } <= set(inspector.get_table_names())
+    link_foreign_keys = {
+        foreign_key["name"]: foreign_key
+        for foreign_key in inspector.get_foreign_keys("knowledge_pack_learning_links")
+    }
+    assert set(link_foreign_keys["fk_pack_learning_org_version"]["constrained_columns"]) == {
+        "organization_id",
+        "knowledge_pack_version_id",
+    }
+    assert set(link_foreign_keys["fk_pack_learning_org_learning"]["constrained_columns"]) == {
+        "organization_id",
+        "operational_learning_id",
+    }
+
+    command.downgrade(config, "20260819_0045")
+    assert "knowledge_packs" not in inspect(postgres_engine).get_table_names()
+    command.upgrade(config, "head")
+    assert "knowledge_packs" in inspect(postgres_engine).get_table_names()
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260820_0046"]
 
 
 @pytest.mark.postgres
