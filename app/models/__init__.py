@@ -146,6 +146,12 @@ from app.models.knowledge_graph import (
     KnowledgeGraphRelationshipTypeVersion,
     KnowledgeGraphVersion,
 )
+from app.models.knowledge_pack import (
+    KnowledgePack,
+    KnowledgePackAuditEvent,
+    KnowledgePackLearningLink,
+    KnowledgePackVersion,
+)
 from app.models.learning import LearningAuditEvent, LearningSourceCase, OperationalLearning
 from app.models.oikb import (
     OIKBApproval,
@@ -417,6 +423,10 @@ __all__ = [
     "OperationalLearning",
     "LearningSourceCase",
     "LearningAuditEvent",
+    "KnowledgePack",
+    "KnowledgePackVersion",
+    "KnowledgePackLearningLink",
+    "KnowledgePackAuditEvent",
     "AnomalyReviewFeedback",
     "AnomalySuppressionRecord",
     "StatisticalBaseline",
