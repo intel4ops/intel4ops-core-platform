@@ -146,6 +146,7 @@ from app.models.knowledge_graph import (
     KnowledgeGraphRelationshipTypeVersion,
     KnowledgeGraphVersion,
 )
+from app.models.learning import LearningAuditEvent, LearningSourceCase, OperationalLearning
 from app.models.oikb import (
     OIKBApproval,
     OIKBChangeLog,
@@ -413,6 +414,9 @@ __all__ = [
     "OperationalMemoryItem",
     "OperationalMemoryReuseEvent",
     "OperationalMemoryVersion",
+    "OperationalLearning",
+    "LearningSourceCase",
+    "LearningAuditEvent",
     "AnomalyReviewFeedback",
     "AnomalySuppressionRecord",
     "StatisticalBaseline",

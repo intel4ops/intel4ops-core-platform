@@ -31,6 +31,7 @@ from app.api.invitation_routes import router as invitation_router
 from app.api.job_to_cash_routes import router as job_to_cash_router
 from app.api.knowledge_graph_routes import catalog_router as knowledge_graph_catalog_router
 from app.api.knowledge_graph_routes import tenant_router as knowledge_graph_tenant_router
+from app.api.learning_routes import router as learning_router
 from app.api.membership_routes import router as membership_router
 from app.api.memory_effectiveness_routes import router as memory_effectiveness_router
 from app.api.oikb_routes import router as oikb_router
@@ -160,6 +161,7 @@ app.include_router(signature_catalog_router)
 app.include_router(signature_tenant_router)
 app.include_router(knowledge_graph_catalog_router)
 app.include_router(knowledge_graph_tenant_router)
+app.include_router(learning_router)
 app.include_router(causal_intelligence_catalog_router)
 app.include_router(causal_intelligence_tenant_router)
 app.include_router(decision_catalog_router)
