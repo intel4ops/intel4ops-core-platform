@@ -1,4 +1,10 @@
-"""Synthetic golden dataset for the P3.12 Oilfield Services Job-to-Cash pack.
+"""Synthetic golden dataset for the Oilfield Services Job-to-Cash pack (P3.12 + P3.13).
+
+Coverage is scoped to Tier 1 (validated) patterns only. P3.13 promoted three
+additional Tier 2 candidates to Tier 1 (J2C-OFS-20, J2C-OFS-24, J2C-OFS-30)
+because their preconditions/exclusions support credible deterministic
+validation; the rest of the P3.13 portfolio stays Tier 2 (reference
+specified) and is deliberately not golden-validated here.
 
 Purely synthetic data -- no client data, no production references. Each case
 has an OBSERVED view (the only thing a detector may read) and a separate
@@ -67,6 +73,19 @@ CLEAN_BASE: dict[str, Any] = {
     "actual_margin_pct": 24.0,
     "unbilled_change_order": False,
     "margin_variance_is_normal_business_variance": True,
+    # P3.13-promoted Tier 1 patterns
+    "vendor_pass_through_eligible": False,
+    "vendor_pass_through_billed": True,
+    "vendor_pass_through_absorbed_in_flat_rate": False,
+    "vendor_pass_through_markup_waived_approved": False,
+    "npt_event_customer_attributable": False,
+    "npt_event_duration_meets_threshold": False,
+    "standby_waiver_in_effect": False,
+    "npt_event_billed_as_standby": True,
+    "portal_rejection_code_present": False,
+    "portal_resubmitted_successfully": True,
+    "portal_rejection_is_duplicate": False,
+    "portal_invoice_withdrawn_invalid": False,
 }
 
 
@@ -564,6 +583,88 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         payment_days_outstanding=10,
         standard_payment_term_days=30,
     ),
+    # --- J2C-OFS-20: Third-Party Pass-Through / Re-Rental Not Billed ---
+    _case(
+        "LEAK-20-A",
+        "leakage",
+        ("J2C-OFS-20",),
+        "Pass-through-eligible vendor cost never carried onto the customer invoice.",
+        vendor_pass_through_eligible=True,
+        vendor_pass_through_billed=False,
+    ),
+    _case(
+        "EDGE-20-A",
+        "edge",
+        (),
+        "Vendor cost not eligible for customer pass-through under the contract.",
+        vendor_pass_through_eligible=False,
+        vendor_pass_through_billed=False,
+    ),
+    _case(
+        "EDGE-20-B",
+        "edge",
+        (),
+        "Vendor cost already absorbed in a flat day-rate that includes it.",
+        vendor_pass_through_eligible=True,
+        vendor_pass_through_billed=False,
+        vendor_pass_through_absorbed_in_flat_rate=True,
+    ),
+    # --- J2C-OFS-24: NPT vs. Standby Misclassification ---
+    _case(
+        "LEAK-24-A",
+        "leakage",
+        ("J2C-OFS-24",),
+        "Customer-caused downtime meeting the standby threshold, still coded as NPT.",
+        npt_event_customer_attributable=True,
+        npt_event_duration_meets_threshold=True,
+        npt_event_billed_as_standby=False,
+    ),
+    _case(
+        "EDGE-24-A",
+        "edge",
+        (),
+        "Downtime root cause is not customer-attributable.",
+        npt_event_customer_attributable=False,
+        npt_event_duration_meets_threshold=True,
+        npt_event_billed_as_standby=False,
+    ),
+    _case(
+        "EDGE-24-B",
+        "edge",
+        (),
+        "Customer-attributable downtime, but an approved standby waiver is in effect.",
+        npt_event_customer_attributable=True,
+        npt_event_duration_meets_threshold=True,
+        standby_waiver_in_effect=True,
+        npt_event_billed_as_standby=False,
+    ),
+    # --- J2C-OFS-30: E-Invoicing Portal Rejection ---
+    _case(
+        "LEAK-30-A",
+        "leakage",
+        ("J2C-OFS-30",),
+        "Portal-rejected invoice never resubmitted.",
+        portal_rejection_code_present=True,
+        portal_resubmitted_successfully=False,
+    ),
+    _case(
+        "EDGE-30-A",
+        "edge",
+        (),
+        "Rejection was for a duplicate submission of an already-accepted invoice.",
+        portal_rejection_code_present=True,
+        portal_resubmitted_successfully=False,
+        portal_rejection_is_duplicate=True,
+    ),
+    _case(
+        "EDGE-30-B",
+        "edge",
+        (),
+        "Invoice was withdrawn because the underlying charge was invalid.",
+        portal_rejection_code_present=True,
+        portal_resubmitted_successfully=False,
+        portal_invoice_withdrawn_invalid=True,
+    ),
 )
 
 
@@ -648,6 +749,36 @@ def detect_job_margin_erosion(o: dict[str, Any]) -> bool:
     return bool(shortfall > 5.0 and o["unbilled_change_order"])
 
 
+def detect_third_party_pass_through_not_billed(o: dict[str, Any]) -> bool:
+    if not o["vendor_pass_through_eligible"]:
+        return False
+    if o["vendor_pass_through_absorbed_in_flat_rate"]:
+        return False
+    if o["vendor_pass_through_markup_waived_approved"]:
+        return False
+    return not o["vendor_pass_through_billed"]
+
+
+def detect_npt_vs_standby_misclassification(o: dict[str, Any]) -> bool:
+    if not o["npt_event_customer_attributable"]:
+        return False
+    if not o["npt_event_duration_meets_threshold"]:
+        return False
+    if o["standby_waiver_in_effect"]:
+        return False
+    return not o["npt_event_billed_as_standby"]
+
+
+def detect_einvoicing_portal_rejection(o: dict[str, Any]) -> bool:
+    if not o["portal_rejection_code_present"]:
+        return False
+    if o["portal_rejection_is_duplicate"]:
+        return False
+    if o["portal_invoice_withdrawn_invalid"]:
+        return False
+    return not o["portal_resubmitted_successfully"]
+
+
 DETECTORS: dict[str, Any] = {
     "J2C-OFS-01": detect_completed_job_not_invoiced,
     "J2C-OFS-02": detect_field_ticket_not_invoiced,
@@ -661,6 +792,9 @@ DETECTORS: dict[str, Any] = {
     "J2C-OFS-10": detect_invoice_delay_after_completion,
     "J2C-OFS-11": detect_payment_delay_documentation_blocker,
     "J2C-OFS-12": detect_job_margin_erosion,
+    "J2C-OFS-20": detect_third_party_pass_through_not_billed,
+    "J2C-OFS-24": detect_npt_vs_standby_misclassification,
+    "J2C-OFS-30": detect_einvoicing_portal_rejection,
 }
 
 
