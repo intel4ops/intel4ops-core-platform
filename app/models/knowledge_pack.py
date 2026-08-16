@@ -30,6 +30,16 @@ PACK_VERSION_STATUSES = (
     "retired",
 )
 PACK_PROVENANCE_TYPES = ("production", "simulation", "manual", "mixed")
+PACK_PATTERN_PROCESS_STAGES = (
+    "job_creation",
+    "field_execution",
+    "evidence_capture",
+    "resource_validation",
+    "contract_rate_validation",
+    "invoicing",
+    "payment",
+    "recovery",
+)
 
 
 class KnowledgePack(Base):
@@ -130,6 +140,54 @@ class KnowledgePackLearningLink(Base):
     knowledge_pack_version_id: Mapped[UUID] = mapped_column(Uuid)
     operational_learning_id: Mapped[UUID] = mapped_column(Uuid)
     inclusion_rationale: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class KnowledgePackPattern(Base):
+    """A declarative reference leakage/detection pattern authored as pack content.
+
+    Distinct from OperationalLearning: a pattern is pack-native reference
+    knowledge (Reference Knowledge != Client-Validated Learning), authored
+    directly on a draft version rather than curated from an already-approved,
+    independently-governed Learning. content_json carries the rich nested
+    structure (evidence, exclusions, causal hypotheses, recovery playbook,
+    etc.); the flat columns are the fields query/uniqueness needs to reach.
+    """
+
+    __tablename__ = "knowledge_pack_patterns"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "knowledge_pack_version_id"],
+            ["knowledge_pack_versions.organization_id", "knowledge_pack_versions.id"],
+            name="fk_pack_pattern_org_version",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "knowledge_pack_version_id",
+            "pattern_key",
+            name="uq_pack_pattern_org_version_key",
+        ),
+        CheckConstraint(
+            f"process_stage IN {PACK_PATTERN_PROCESS_STAGES}", name="ck_pack_pattern_process_stage"
+        ),
+        CheckConstraint(
+            f"provenance_type IN {PACK_PROVENANCE_TYPES}", name="ck_pack_pattern_provenance"
+        ),
+        Index("ix_pack_pattern_org_version", "organization_id", "knowledge_pack_version_id"),
+    )
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT")
+    )
+    knowledge_pack_version_id: Mapped[UUID] = mapped_column(Uuid)
+    pattern_key: Mapped[str] = mapped_column(String(60))
+    name: Mapped[str] = mapped_column(String(250))
+    process_stage: Mapped[str] = mapped_column(String(40))
+    description: Mapped[str] = mapped_column(Text)
+    provenance_type: Mapped[str] = mapped_column(String(20))
+    content_json: Mapped[dict[str, object]] = mapped_column(portable_json)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

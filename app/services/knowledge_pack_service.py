@@ -11,6 +11,7 @@ from app.models.knowledge_pack import (
     KnowledgePack,
     KnowledgePackAuditEvent,
     KnowledgePackLearningLink,
+    KnowledgePackPattern,
     KnowledgePackVersion,
 )
 from app.models.learning import OperationalLearning
@@ -20,6 +21,8 @@ from app.schemas.knowledge_pack import (
     KnowledgePackLearningAdd,
     KnowledgePackMemberRead,
     KnowledgePackPage,
+    KnowledgePackPatternCreate,
+    KnowledgePackPatternRead,
     KnowledgePackRead,
     KnowledgePackVersionCreate,
     KnowledgePackVersionRead,
@@ -131,6 +134,20 @@ class KnowledgePackService:
                     inclusion_rationale=link.inclusion_rationale,
                 )
             )
+        for pattern in self._patterns(db, organization_id, approved.id):
+            db.add(
+                KnowledgePackPattern(
+                    organization_id=organization_id,
+                    knowledge_pack_version_id=version.id,
+                    pattern_key=pattern.pattern_key,
+                    name=pattern.name,
+                    process_stage=pattern.process_stage,
+                    description=pattern.description,
+                    provenance_type=pattern.provenance_type,
+                    content_json=pattern.content_json,
+                    created_by_user_id=actor_id,
+                )
+            )
         db.add(
             self._audit(db, pack, version, "version_created", None, "draft", actor_id, actor_role)
         )
@@ -226,6 +243,100 @@ class KnowledgePackService:
                 actor_id,
                 actor_role,
                 metadata={"learning_id": str(learning_id)},
+            )
+        )
+        db.commit()
+        return self.get_version(db, organization_id, pack_id, version_id)
+
+    def add_pattern(
+        self,
+        db: Session,
+        organization_id: UUID,
+        pack_id: UUID,
+        version_id: UUID,
+        payload: KnowledgePackPatternCreate,
+        actor_id: UUID,
+        actor_role: str,
+    ) -> KnowledgePackVersionRead:
+        pack = self._pack(db, organization_id, pack_id, lock=True)
+        version = self._version(db, organization_id, pack_id, version_id)
+        self._editable(version)
+        existing = db.scalar(
+            select(KnowledgePackPattern).where(
+                KnowledgePackPattern.organization_id == organization_id,
+                KnowledgePackPattern.knowledge_pack_version_id == version_id,
+                KnowledgePackPattern.pattern_key == payload.pattern_key,
+            )
+        )
+        if existing is not None:
+            raise KnowledgePackServiceError(
+                "PATTERN_KEY_ALREADY_USED", "Pattern key already used in this version"
+            )
+        db.add(
+            KnowledgePackPattern(
+                organization_id=organization_id,
+                knowledge_pack_version_id=version_id,
+                pattern_key=payload.pattern_key,
+                name=payload.name,
+                process_stage=payload.process_stage,
+                description=payload.description,
+                provenance_type=payload.provenance_type,
+                content_json=payload.content,
+                created_by_user_id=actor_id,
+            )
+        )
+        db.flush()
+        db.add(
+            self._audit(
+                db,
+                pack,
+                version,
+                "pattern_added",
+                version.lifecycle_status,
+                version.lifecycle_status,
+                actor_id,
+                actor_role,
+                metadata={"pattern_key": payload.pattern_key},
+            )
+        )
+        db.commit()
+        return self.get_version(db, organization_id, pack_id, version_id)
+
+    def remove_pattern(
+        self,
+        db: Session,
+        organization_id: UUID,
+        pack_id: UUID,
+        version_id: UUID,
+        pattern_key: str,
+        actor_id: UUID,
+        actor_role: str,
+    ) -> KnowledgePackVersionRead:
+        pack = self._pack(db, organization_id, pack_id, lock=True)
+        version = self._version(db, organization_id, pack_id, version_id)
+        self._editable(version)
+        pattern = db.scalar(
+            select(KnowledgePackPattern).where(
+                KnowledgePackPattern.organization_id == organization_id,
+                KnowledgePackPattern.knowledge_pack_version_id == version_id,
+                KnowledgePackPattern.pattern_key == pattern_key,
+            )
+        )
+        if pattern is None:
+            raise KnowledgePackServiceError("PACK_PATTERN_NOT_FOUND", "Pack pattern not found", 404)
+        db.delete(pattern)
+        db.flush()
+        db.add(
+            self._audit(
+                db,
+                pack,
+                version,
+                "pattern_removed",
+                version.lifecycle_status,
+                version.lifecycle_status,
+                actor_id,
+                actor_role,
+                metadata={"pattern_key": pattern_key},
             )
         )
         db.commit()
@@ -467,6 +578,16 @@ class KnowledgePackService:
                 learnings, learning_service._reads(db, organization_id, learnings), strict=True
             )
         }
+        patterns = list(
+            db.scalars(
+                select(KnowledgePackPattern)
+                .where(
+                    KnowledgePackPattern.organization_id == organization_id,
+                    KnowledgePackPattern.knowledge_pack_version_id.in_(version_ids),
+                )
+                .order_by(KnowledgePackPattern.pattern_key)
+            )
+        )
         return [
             KnowledgePackVersionRead(
                 id=version.id,
@@ -493,6 +614,11 @@ class KnowledgePackService:
                     for link in links
                     if link.knowledge_pack_version_id == version.id
                 ],
+                patterns=[
+                    KnowledgePackPatternRead.model_validate(pattern)
+                    for pattern in patterns
+                    if pattern.knowledge_pack_version_id == version.id
+                ],
             )
             for version in versions
         ]
@@ -501,9 +627,14 @@ class KnowledgePackService:
         self, db: Session, organization_id: UUID, version: KnowledgePackVersion
     ) -> None:
         links = self._links(db, organization_id, version.id)
-        if not links:
+        patterns = self._patterns(db, organization_id, version.id)
+        # A version is publishable content once it carries EITHER curated, already-approved
+        # Learning OR pack-authored reference pattern content -- a v1.0 reference/simulation
+        # pack is legitimately allowed to have zero production Learning members.
+        if not links and not patterns:
             raise KnowledgePackServiceError(
-                "PACK_MEMBERSHIP_REQUIRED", "A Knowledge Pack version requires approved Learning"
+                "PACK_MEMBERSHIP_REQUIRED",
+                "A Knowledge Pack version requires approved Learning or reference pattern content",
             )
         for link in links:
             self._eligible_learning(db, organization_id, link.operational_learning_id)
@@ -609,6 +740,19 @@ class KnowledgePackService:
                 select(KnowledgePackLearningLink).where(
                     KnowledgePackLearningLink.organization_id == organization_id,
                     KnowledgePackLearningLink.knowledge_pack_version_id == version_id,
+                )
+            )
+        )
+
+    @staticmethod
+    def _patterns(
+        db: Session, organization_id: UUID, version_id: UUID
+    ) -> list[KnowledgePackPattern]:
+        return list(
+            db.scalars(
+                select(KnowledgePackPattern).where(
+                    KnowledgePackPattern.organization_id == organization_id,
+                    KnowledgePackPattern.knowledge_pack_version_id == version_id,
                 )
             )
         )
