@@ -7,6 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.learning import LearningRead, ProvenanceType
 
 PackLifecycle = Literal["draft", "in_review", "approved", "rejected", "superseded", "retired"]
+PackPatternProcessStage = Literal[
+    "job_creation",
+    "field_execution",
+    "evidence_capture",
+    "resource_validation",
+    "contract_rate_validation",
+    "invoicing",
+    "payment",
+    "recovery",
+]
 
 
 class KnowledgePackCreate(BaseModel):
@@ -30,6 +40,26 @@ class KnowledgePackLearningAdd(BaseModel):
 
 class KnowledgePackTransition(BaseModel):
     rationale: str = Field(min_length=1, max_length=2000)
+
+
+class KnowledgePackPatternCreate(BaseModel):
+    pattern_key: str = Field(pattern=r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$", max_length=60)
+    name: str = Field(min_length=1, max_length=250)
+    process_stage: PackPatternProcessStage
+    description: str = Field(min_length=1, max_length=5000)
+    provenance_type: ProvenanceType
+    content: dict[str, object]
+
+
+class KnowledgePackPatternRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    pattern_key: str
+    name: str
+    process_stage: PackPatternProcessStage
+    description: str
+    provenance_type: ProvenanceType
+    content_json: dict[str, object]
+    created_at: datetime
 
 
 class KnowledgePackAuditRead(BaseModel):
@@ -68,6 +98,7 @@ class KnowledgePackVersionRead(BaseModel):
     superseded_at: datetime | None
     retired_at: datetime | None
     members: list[KnowledgePackMemberRead]
+    patterns: list[KnowledgePackPatternRead]
 
 
 class KnowledgePackRead(BaseModel):

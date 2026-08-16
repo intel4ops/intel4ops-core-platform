@@ -12,6 +12,7 @@ from app.schemas.knowledge_pack import (
     KnowledgePackCreate,
     KnowledgePackLearningAdd,
     KnowledgePackPage,
+    KnowledgePackPatternCreate,
     KnowledgePackRead,
     KnowledgePackTransition,
     KnowledgePackVersionCreate,
@@ -177,6 +178,64 @@ def remove_pack_learning(
             pack_id,
             version_id,
             learning_id,
+            access.user.user_id,
+            _role(access),
+        )
+    except KnowledgePackServiceError as exc:
+        _error(exc)
+    return Response(status_code=204)
+
+
+@router.post(
+    "/{pack_id}/versions/{version_id}/patterns",
+    response_model=KnowledgePackVersionRead,
+    status_code=201,
+)
+def add_pack_pattern(
+    organization_id: UUID,
+    pack_id: UUID,
+    version_id: UUID,
+    payload: KnowledgePackPatternCreate,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("intelligence.findings", *FINDING_REVIEW_ROLES)
+    ),
+) -> KnowledgePackVersionRead:
+    try:
+        return knowledge_pack_service.add_pattern(
+            db,
+            organization_id,
+            pack_id,
+            version_id,
+            payload,
+            access.user.user_id,
+            _role(access),
+        )
+    except KnowledgePackServiceError as exc:
+        _error(exc)
+
+
+@router.delete(
+    "/{pack_id}/versions/{version_id}/patterns/{pattern_key}",
+    status_code=204,
+)
+def remove_pack_pattern(
+    organization_id: UUID,
+    pack_id: UUID,
+    version_id: UUID,
+    pattern_key: str,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(
+        require_commercial_entitlement("intelligence.findings", *FINDING_REVIEW_ROLES)
+    ),
+) -> Response:
+    try:
+        knowledge_pack_service.remove_pattern(
+            db,
+            organization_id,
+            pack_id,
+            version_id,
+            pattern_key,
             access.user.user_id,
             _role(access),
         )
