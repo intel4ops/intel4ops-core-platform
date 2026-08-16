@@ -97,10 +97,17 @@ def test_pack_provenance_is_truthful_and_not_fabricated_production(
     assert draft["provenance_summary"] != "production"
 
 
-def test_pattern_keys_are_unique_and_bounded_between_eight_and_twelve() -> None:
+_ORIGINAL_P3_12_PATTERN_KEYS = frozenset(f"J2C-OFS-{n:02d}" for n in range(1, 13))
+
+
+def test_pattern_keys_are_unique_and_original_twelve_remain_present() -> None:
+    # P3.13 legitimately expanded the portfolio beyond the original P3.12 8-12 pattern bound
+    # (see tests/test_p3_13_oilfield_leakage_intelligence.py for the current portfolio-size
+    # invariant). This P3.12 regression only guards that keys stay unique and none of the
+    # original 12 P3.12 patterns were renamed, removed, or duplicated by that expansion.
     keys = [p["pattern_key"] for p in PATTERNS]
     assert len(keys) == len(set(keys))
-    assert 8 <= len(PATTERNS) <= 12
+    assert _ORIGINAL_P3_12_PATTERN_KEYS <= set(keys)
 
 
 def test_pattern_metadata_is_structurally_valid(client: TestClient, db: Session) -> None:
@@ -195,8 +202,12 @@ def test_golden_dataset_clean_cases_produce_no_detections() -> None:
 
 
 def test_golden_dataset_leakage_cases_trigger_intended_patterns() -> None:
+    # Golden-dataset coverage is scoped to Tier 1 (validated) patterns only, by design --
+    # Tier 2 (reference-specified) patterns are governed content that has not been exercised
+    # through the synthetic validation framework and must not claim validated status.
+    tier_1_patterns = [p for p in PATTERNS if p["content"]["validation_tier"] == "tier_1_validated"]
     leakage_cases = [case for case in GOLDEN_CASES if case.case_type == "leakage"]
-    assert len(leakage_cases) >= len(PATTERNS)
+    assert len(leakage_cases) >= len(tier_1_patterns)
     for case in leakage_cases:
         assert detect(case.observed) == frozenset(case.expected_patterns), case.case_id
 
