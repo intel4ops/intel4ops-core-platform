@@ -38,16 +38,16 @@ def test_coverage_matrix_contains_all_35_patterns() -> None:
     assert len(VALIDATION_COVERAGE_MATRIX) == 35
 
 
-def test_all_15_tier1_patterns_mapped_to_scenarios() -> None:
-    assert len(_TIER1_KEYS) == 15
+def test_all_tier1_patterns_mapped_to_scenarios() -> None:
+    assert len(_TIER1_KEYS) == 23
     for pattern_id in _TIER1_KEYS:
         row = VALIDATION_COVERAGE_MATRIX[pattern_id]
         assert row.tier == "tier_1_validated"
         assert len(row.scenario_ids) >= 1
 
 
-def test_all_20_tier2_patterns_have_validation_plans() -> None:
-    assert len(_TIER2_KEYS) == 20
+def test_all_tier2_patterns_have_validation_plans() -> None:
+    assert len(_TIER2_KEYS) == 12
     for pattern_id in _TIER2_KEYS:
         plan = TIER2_VALIDATION_PLANS[pattern_id]
         assert plan.required_systems
@@ -139,7 +139,7 @@ def test_ambiguous_cases_do_not_produce_unjustified_certainty() -> None:
 
 def test_contamination_handling() -> None:
     contaminated = [c for c in GOLDEN_CASES if c.case_type == "contaminated"]
-    assert len(contaminated) == 15
+    assert len(contaminated) == 23
     for case in contaminated:
         owner = case_pattern_number(case)
         assert owner in DETECTORS
@@ -251,11 +251,14 @@ def test_dataset_version_traceability() -> None:
 
 
 def test_lih_adversarial_semantics() -> None:
-    plan = TIER2_VALIDATION_PLANS["J2C-OFS-16"]
-    text = (plan.scenario_concept + plan.blocker_to_promotion).lower()
-    assert "asset value" in text or "liability" in text
-    content = _PATTERN_BY_KEY["J2C-OFS-16"]["content"]
-    assert "recover" in str(content["value_basis"]).lower()
+    # J2C-OFS-16 was promoted to Tier 1 in P3.15; its liability/asset-value
+    # safeguard now lives in the pattern description and value_basis, not a
+    # Tier 2 plan. The detector itself never reads an asset-value field.
+    pattern = _PATTERN_BY_KEY["J2C-OFS-16"]
+    text = (pattern["description"] + str(pattern["content"]["value_basis"])).lower()
+    assert "asset value" in text
+    assert "recover" in text
+    assert pattern["content"]["validation_tier"] == "tier_1_validated"
 
 
 def test_npt_standby_adversarial_semantics() -> None:
@@ -307,11 +310,13 @@ def test_billing_grace_period_exclusions() -> None:
 
 
 def test_p3_13_regression_35_pattern_portfolio_unchanged() -> None:
+    # The P3.13 portfolio itself (35 patterns, 6 families) is unchanged by P3.15 --
+    # only the Tier 1/Tier 2 split moved, and only via evidence-gated promotion.
     assert len(PATTERNS) == 35
     tier1 = [p for p in PATTERNS if p["content"]["validation_tier"] == "tier_1_validated"]
     tier2 = [p for p in PATTERNS if p["content"]["validation_tier"] != "tier_1_validated"]
-    assert len(tier1) == 15
-    assert len(tier2) == 20
+    assert len(tier1) == 23
+    assert len(tier2) == 12
     families = {p["content"]["family"] for p in PATTERNS}
     assert families == {"A", "B", "C", "D", "E", "F"}
 

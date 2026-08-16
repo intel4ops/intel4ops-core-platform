@@ -50,7 +50,7 @@ from oilfield_j2c_golden_dataset import DETECTORS, GOLDEN_CASES, GoldenCase
 
 from app.validation.certification import evidence_hash
 
-DATASET_VERSION = "p3.14-oilfield-golden-v1"
+DATASET_VERSION = "p3.15-oilfield-golden-v2"
 
 TIER_1_PATTERN_IDS: tuple[str, ...] = tuple(sorted(DETECTORS))
 
@@ -443,6 +443,119 @@ class Tier2ValidationPlan:
     exclusion_case_concept: str
     ambiguity_case_concept: str
     blocker_to_promotion: str
+    readiness: str = "DEFERRED"
+    next_validation_action: str = ""
+
+
+@dataclass(frozen=True)
+class ReadinessAssessment:
+    pattern_id: str
+    readiness: str
+    assessment: str
+
+
+TIER2_READINESS_ASSESSMENT: dict[str, ReadinessAssessment] = {
+    "J2C-OFS-13": ReadinessAssessment(
+        pattern_id="J2C-OFS-13",
+        readiness="BLOCKED_UNSAFE_TO_AUTOMATE",
+        assessment="requires free-text crew-log interpretation; no structured source.",
+    ),
+    "J2C-OFS-14": ReadinessAssessment(
+        pattern_id="J2C-OFS-14",
+        readiness="READY_NOW",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-15": ReadinessAssessment(
+        pattern_id="J2C-OFS-15",
+        readiness="READY_NOW",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-16": ReadinessAssessment(
+        pattern_id="J2C-OFS-16",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="promoted to Tier 1 in P3.15; detector never reads asset value alone.",
+    ),
+    "J2C-OFS-17": ReadinessAssessment(
+        pattern_id="J2C-OFS-17",
+        readiness="DEFERRED",
+        assessment="needs a dedicated transfer/return fixture family; high FP risk.",
+    ),
+    "J2C-OFS-18": ReadinessAssessment(
+        pattern_id="J2C-OFS-18",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="promoted to Tier 1 in P3.15, with an unreliable-telemetry abstention path.",
+    ),
+    "J2C-OFS-19": ReadinessAssessment(
+        pattern_id="J2C-OFS-19",
+        readiness="DEFERRED",
+        assessment="near-duplicate of J2C-OFS-16; revisit once it matures further.",
+    ),
+    "J2C-OFS-21": ReadinessAssessment(
+        pattern_id="J2C-OFS-21",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="needs a billable-travel-radius/zone fixture, not a boolean flag.",
+    ),
+    "J2C-OFS-22": ReadinessAssessment(
+        pattern_id="J2C-OFS-22",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-23": ReadinessAssessment(
+        pattern_id="J2C-OFS-23",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="detector feasible; deprioritized this round vs. higher-value ones.",
+    ),
+    "J2C-OFS-25": ReadinessAssessment(
+        pattern_id="J2C-OFS-25",
+        readiness="READY_NOW",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-26": ReadinessAssessment(
+        pattern_id="J2C-OFS-26",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="needs an index-source/fallback fixture so fallback isn't flagged.",
+    ),
+    "J2C-OFS-27": ReadinessAssessment(
+        pattern_id="J2C-OFS-27",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="needs an explicit scope-materiality-threshold fixture first.",
+    ),
+    "J2C-OFS-28": ReadinessAssessment(
+        pattern_id="J2C-OFS-28",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-29": ReadinessAssessment(
+        pattern_id="J2C-OFS-29",
+        readiness="READY_NOW",
+        assessment="single clean boolean check; deprioritized this round, no fixture.",
+    ),
+    "J2C-OFS-31": ReadinessAssessment(
+        pattern_id="J2C-OFS-31",
+        readiness="READY_NOW",
+        assessment="needs a postmark-vs-bank-received-date fixture for its ambiguity.",
+    ),
+    "J2C-OFS-32": ReadinessAssessment(
+        pattern_id="J2C-OFS-32",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="promoted to Tier 1 in P3.15.",
+    ),
+    "J2C-OFS-33": ReadinessAssessment(
+        pattern_id="J2C-OFS-33",
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        assessment="needs an authorization-matrix fixture (amount tier -> approver).",
+    ),
+    "J2C-OFS-34": ReadinessAssessment(
+        pattern_id="J2C-OFS-34",
+        readiness="BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+        assessment="requires a governed tax-jurisdiction rule source; no invented tax.",
+    ),
+    "J2C-OFS-35": ReadinessAssessment(
+        pattern_id="J2C-OFS-35",
+        readiness="BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+        assessment="requires an explicit contract FX-basis clause and rate source.",
+    ),
+}
 
 
 TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
@@ -459,68 +572,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires a synthetic crew-log/dispatch data source distinct from the existing "
             "field-ticket-centric golden dataset before a credible detector can be written"
         ),
-    ),
-    "J2C-OFS-14": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-14",
-        required_systems=("CLM/MSA", "rate book", "ERP billing"),
-        required_fields=("job type code", "contract ID", "invoice line ID"),
-        scenario_concept="Job duration/scope below the contractual minimum charge threshold.",
-        clean_case_concept="Job below minimum, invoice correctly reflects the minimum charge.",
-        positive_case_concept="Job below minimum, invoice reflects only actual (lower) usage.",
-        exclusion_case_concept="Contract has no minimum-charge clause for this job type.",
-        ambiguity_case_concept=(
-            "Minimum-charge clause exists but the applicable threshold is unclear."
-        ),
-        blocker_to_promotion=(
-            "requires an authoritative per-job-type minimum-charge threshold fixture, "
-            "not yet represented in the golden dataset's contract vocabulary"
-        ),
-    ),
-    "J2C-OFS-15": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-15",
-        required_systems=("field ticketing", "ERP billing"),
-        required_fields=("ticket ID", "ticket line item ID", "invoice line ID"),
-        scenario_concept="A billable ticket is invoiced, but only some of its line items are.",
-        clean_case_concept="All billable ticket line items appear on the invoice.",
-        positive_case_concept="Ticket invoiced, but one or more billable line items are missing.",
-        exclusion_case_concept="Missing line item was explicitly voided on the ticket itself.",
-        ambiguity_case_concept=(
-            "Ticket line items lack stable identifiers to reconcile against invoice lines."
-        ),
-        blocker_to_promotion=(
-            "requires line-item-level (not ticket-level) fields in the golden dataset, "
-            "which the current dict-of-booleans case shape does not yet model"
-        ),
-    ),
-    "J2C-OFS-16": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-16",
-        required_systems=(
-            "field ticketing",
-            "EAM / asset management",
-            "incident record",
-            "CLM/MSA",
-            "ERP billing",
-        ),
-        required_fields=("asset ID", "job/well ID", "incident ID", "contract liability clause ID"),
-        scenario_concept=(
-            "Tool lost in hole or damaged; contractual liability "
-            "allocation determines recoverability."
-        ),
-        clean_case_concept=(
-            "Incident recorded, contract places liability with the operator; no exposure."
-        ),
-        positive_case_concept=(
-            "Incident recorded, contract places liability with the customer within terms."
-        ),
-        exclusion_case_concept="Asset value alone, with no incident record -- not evaluable.",
-        ambiguity_case_concept=(
-            "Liability clause exists but the specific incident's cause is undetermined."
-        ),
-        blocker_to_promotion=(
-            "requires an authoritative liability-allocation clause fixture per contract, "
-            "explicitly noted in the pattern content as the reason asset value alone must "
-            "never be treated as recovery -- this is deliberately not synthesized casually"
-        ),
+        readiness="BLOCKED_UNSAFE_TO_AUTOMATE",
+        next_validation_action="requires free-text crew-log interpretation; no structured source.",
     ),
     "J2C-OFS-17": Tier2ValidationPlan(
         pattern_id="J2C-OFS-17",
@@ -552,28 +605,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires a clear, contract-sourced distinction between operational shrinkage "
             "tolerance and customer-billable quantity, not yet represented as a fixture"
         ),
-    ),
-    "J2C-OFS-18": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-18",
-        required_systems=("EAM / asset management", "GPS/telematics", "field ticketing", "CLM/MSA"),
-        required_fields=(
-            "asset serial",
-            "job ID",
-            "location",
-            "ticket stop time",
-            "departure time",
-        ),
-        scenario_concept="Asset remains on location and billable after ticket-recorded stop time.",
-        clean_case_concept="Asset departs at or before ticket stop time.",
-        positive_case_concept="GPS shows asset on location well past ticket stop time, uninvoiced.",
-        exclusion_case_concept=(
-            "Extended presence was pre-approved standby, already billed as standby."
-        ),
-        ambiguity_case_concept="GPS telemetry gap around the stop-time window.",
-        blocker_to_promotion=(
-            "requires GPS/telematics time-series fixtures, a data shape the golden dataset "
-            "does not currently model (only point-in-time boolean/numeric fields)"
-        ),
+        readiness="DEFERRED",
+        next_validation_action="needs a dedicated transfer/return fixture family; high FP risk.",
     ),
     "J2C-OFS-19": Tier2ValidationPlan(
         pattern_id="J2C-OFS-19",
@@ -599,6 +632,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires an authoritative damage-cause-code taxonomy shared with Loss-in-Hole "
             "(J2C-OFS-16) before both can be validated without cross-pattern ambiguity"
         ),
+        readiness="DEFERRED",
+        next_validation_action="near-duplicate of J2C-OFS-16; revisit once it matures further.",
     ),
     "J2C-OFS-21": Tier2ValidationPlan(
         pattern_id="J2C-OFS-21",
@@ -625,29 +660,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires expense-management and crew-roster fixtures, systems not yet "
             "represented anywhere in the current golden dataset"
         ),
-    ),
-    "J2C-OFS-22": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-22",
-        required_systems=("GPS/telematics", "field ticketing", "EAM", "CLM/MSA"),
-        required_fields=(
-            "asset",
-            "ticket signoff time",
-            "actual departure time",
-            "demob/standby clause",
-        ),
-        scenario_concept=(
-            "Demobilization is delayed by the customer; delay itself is billable standby."
-        ),
-        clean_case_concept="Demob delay billed as standby per the demob/standby clause.",
-        positive_case_concept="Demob delay recorded operationally but never billed as standby.",
-        exclusion_case_concept=(
-            "Delay was the servicer's own logistics failure, not customer-caused."
-        ),
-        ambiguity_case_concept="Cause of the demob delay (customer vs. servicer) is not recorded.",
-        blocker_to_promotion=(
-            "shares the GPS/telematics time-series gap with J2C-OFS-18; also requires the "
-            "delay-attribution vocabulary this pack has not yet defined for demob specifically"
-        ),
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        next_validation_action="needs a billable-travel-radius/zone fixture, not a boolean flag.",
     ),
     "J2C-OFS-23": Tier2ValidationPlan(
         pattern_id="J2C-OFS-23",
@@ -667,33 +681,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "Pass-Through pattern (J2C-OFS-20); promotion should reuse that detector's "
             "structure once a freight-specific fixture exists"
         ),
-    ),
-    "J2C-OFS-25": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-25",
-        required_systems=("ERP revenue", "CRM", "CLM/rate schedule"),
-        required_fields=(
-            "customer ID",
-            "cumulative spend",
-            "tier threshold",
-            "effective date",
-            "applied discount tier",
-        ),
-        scenario_concept=(
-            "A tiered-volume discount is applied before the "
-            "customer's spend crosses the tier threshold."
-        ),
-        clean_case_concept="Applied discount tier matches cumulative spend against the schedule.",
-        positive_case_concept=(
-            "Discount tier applied ahead of the cumulative-spend threshold being met."
-        ),
-        exclusion_case_concept="Tier was contractually pre-negotiated as a forward commitment.",
-        ambiguity_case_concept=(
-            "Cumulative-spend calculation period is not clearly defined in the contract."
-        ),
-        blocker_to_promotion=(
-            "requires a cumulative, time-series spend fixture per customer, a shape the "
-            "current per-job golden dataset does not model"
-        ),
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        next_validation_action="detector feasible; deprioritized this round vs. higher-value ones.",
     ),
     "J2C-OFS-26": Tier2ValidationPlan(
         pattern_id="J2C-OFS-26",
@@ -723,6 +712,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "per pack doctrine, this must never assume a generic CPI/fuel index without "
             "contract support, so no generic fixture can substitute for a real clause"
         ),
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        next_validation_action="needs an index-source/fallback fixture so fallback isn't flagged.",
     ),
     "J2C-OFS-27": Tier2ValidationPlan(
         pattern_id="J2C-OFS-27",
@@ -741,36 +732,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires an AFE/change-order fixture distinct from the field-ticket-only "
             "shape the golden dataset currently models"
         ),
-    ),
-    "J2C-OFS-28": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-28",
-        required_systems=("JSA/site safety", "DDR/operations", "field ticketing", "CLM/MSA"),
-        required_fields=(
-            "hold timestamp",
-            "job/well ID",
-            "responsible party",
-            "access restriction ID",
-            "standby clause",
-        ),
-        scenario_concept=(
-            "A SIMOPS/site-access hold stands the crew down; "
-            "billability depends on cause and contract."
-        ),
-        clean_case_concept=(
-            "Hold billed as standby only when the standby "
-            "clause and responsible-party test both pass."
-        ),
-        positive_case_concept=(
-            "Hold meets the standby-clause and responsible-party test but was never billed."
-        ),
-        exclusion_case_concept=(
-            "Hold was the servicer's own safety violation -- correctly not billable."
-        ),
-        ambiguity_case_concept="Responsible party for the access restriction is not recorded.",
-        blocker_to_promotion=(
-            "requires a site-safety/JSA fixture and an explicit standby-clause-applicability "
-            "test distinct from the already-Tier-1 NPT vs. Standby pattern (J2C-OFS-24)"
-        ),
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        next_validation_action="needs an explicit scope-materiality-threshold fixture first.",
     ),
     "J2C-OFS-29": Tier2ValidationPlan(
         pattern_id="J2C-OFS-29",
@@ -792,6 +755,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires a customer authorized-approver-list fixture, not modeled in the "
             "current golden dataset's per-job shape"
         ),
+        readiness="READY_NOW",
+        next_validation_action="single clean boolean check; deprioritized this round, no fixture.",
     ),
     "J2C-OFS-31": Tier2ValidationPlan(
         pattern_id="J2C-OFS-31",
@@ -812,32 +777,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires a bank/remittance fixture with reconciled payment-posting dates, "
             "a data source not yet represented in the golden dataset"
         ),
-    ),
-    "J2C-OFS-32": Tier2ValidationPlan(
-        pattern_id="J2C-OFS-32",
-        required_systems=("ERP AR", "bank/remittance", "dispute/deduction system", "invoice lines"),
-        required_fields=(
-            "invoice line",
-            "remittance",
-            "deduction amount",
-            "dispute reason",
-            "deduction age",
-        ),
-        scenario_concept=(
-            "A customer deduction on remittance is not tied to any resolved or justified dispute."
-        ),
-        clean_case_concept="Deduction matches an approved dispute/credit memo.",
-        positive_case_concept=(
-            "Deduction has no matching dispute record and is aged past the resolution SLA."
-        ),
-        exclusion_case_concept=(
-            "Deduction matches a contractually pre-agreed adjustment (e.g. volume rebate)."
-        ),
-        ambiguity_case_concept="Dispute reason code is missing or unmapped.",
-        blocker_to_promotion=(
-            "requires a dispute/deduction-management fixture with aging, not modeled in "
-            "the current per-job golden dataset"
-        ),
+        readiness="READY_NOW",
+        next_validation_action="needs a postmark-vs-bank-received-date fixture for its ambiguity.",
     ),
     "J2C-OFS-33": Tier2ValidationPlan(
         pattern_id="J2C-OFS-33",
@@ -862,6 +803,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "requires a delegation-of-authority fixture (amount thresholds per role), "
             "not modeled anywhere in the current dataset"
         ),
+        readiness="READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+        next_validation_action="needs an authorization-matrix fixture (amount tier -> approver).",
     ),
     "J2C-OFS-34": Tier2ValidationPlan(
         pattern_id="J2C-OFS-34",
@@ -891,6 +834,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "validation is possible -- this pattern must remain investigation/reference "
             "only and must never encode tax advice"
         ),
+        readiness="BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+        next_validation_action="requires a governed tax-jurisdiction rule source; no invented tax.",
     ),
     "J2C-OFS-35": Tier2ValidationPlan(
         pattern_id="J2C-OFS-35",
@@ -917,6 +862,8 @@ TIER2_VALIDATION_PLANS: dict[str, Tier2ValidationPlan] = {
             "source before executable validation is possible -- normal FX movement must "
             "never be treated as leakage by default"
         ),
+        readiness="BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+        next_validation_action="requires an explicit contract FX-basis clause and rate source.",
     ),
 }
 
