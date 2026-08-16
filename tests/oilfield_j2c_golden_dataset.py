@@ -92,7 +92,7 @@ CLEAN_BASE: dict[str, Any] = {
 @dataclass(frozen=True)
 class GoldenCase:
     case_id: str
-    case_type: str  # "clean" | "leakage" | "edge" | "ambiguous"
+    case_type: str  # "clean" | "leakage" | "edge" | "ambiguous" | "contaminated"
     expected_patterns: tuple[str, ...]
     observed: dict[str, Any]
     notes: str = ""
@@ -664,6 +664,133 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         portal_rejection_code_present=True,
         portal_resubmitted_successfully=False,
         portal_invoice_withdrawn_invalid=True,
+    ),
+    # --- P3.14: contamination cases (data-quality noise, business truth unchanged) ---
+    _case(
+        "CONTAM-01-A",
+        "contaminated",
+        (),
+        "Clean, correctly invoiced job; completion-feed timestamp arrived stale/duplicated.",
+        data_quality_defect="stale_duplicated_completion_timestamp",
+    ),
+    _case(
+        "CONTAM-02-A",
+        "contaminated",
+        ("J2C-OFS-02",),
+        "Billable ticket never invoiced; ticket id duplicated in the source feed.",
+        field_ticket_billable=True,
+        field_ticket_invoiced=False,
+        data_quality_defect="duplicate_ticket_id_in_feed",
+    ),
+    _case(
+        "CONTAM-03-A",
+        "contaminated",
+        (),
+        "Clean labor billing; unit-of-measure recorded inconsistently across systems.",
+        data_quality_defect="incorrect_unit_of_measure",
+    ),
+    _case(
+        "CONTAM-04-A",
+        "contaminated",
+        ("J2C-OFS-04",),
+        "Equipment hours underbilled; asset-to-job mapping field is wrong in the source system.",
+        equipment_hours_recorded=12.0,
+        equipment_hours_invoiced=6.0,
+        data_quality_defect="wrong_asset_job_mapping",
+    ),
+    _case(
+        "CONTAM-05-A",
+        "contaminated",
+        (),
+        "Clean material billing; consumption quantity was rounded by an upstream system.",
+        data_quality_defect="rounded_quantity",
+    ),
+    _case(
+        "CONTAM-06-A",
+        "contaminated",
+        ("J2C-OFS-06",),
+        "Billable standby omitted; standby events arrived out of order in the field feed.",
+        standby_minutes=90,
+        standby_minimum_minutes=60,
+        standby_customer_caused=True,
+        standby_invoiced=False,
+        data_quality_defect="out_of_order_event",
+    ),
+    _case(
+        "CONTAM-07-A",
+        "contaminated",
+        (),
+        "Clean job, no mobilization; mobilization flag field missing entirely from the feed.",
+        data_quality_defect="missing_field:mobilization_flag",
+    ),
+    _case(
+        "CONTAM-08-A",
+        "contaminated",
+        ("J2C-OFS-08",),
+        "Rate mismatch beyond tolerance; rate-sheet field is corrupted/malformed upstream.",
+        billed_rate=130.0,
+        authorized_rate=100.0,
+        data_quality_defect="corrupted_rate_field",
+    ),
+    _case(
+        "CONTAM-09-A",
+        "contaminated",
+        (),
+        "Clean job, no credit; payment record duplicated in the remittance feed.",
+        data_quality_defect="duplicated_payment_record",
+    ),
+    _case(
+        "CONTAM-10-A",
+        "contaminated",
+        ("J2C-OFS-10",),
+        "Invoice issued past turnaround; completion timestamp has an uncorrected timezone offset.",
+        invoice_issued_days_after_completion=21,
+        expected_invoicing_turnaround_days=7,
+        data_quality_defect="timezone_offset_uncorrected",
+    ),
+    _case(
+        "CONTAM-11-A",
+        "contaminated",
+        (),
+        "Clean payment cycle; remittance feed shows a batching-glitch partial-payment artifact.",
+        data_quality_defect="partial_payment_batching_artifact",
+    ),
+    _case(
+        "CONTAM-12-A",
+        "contaminated",
+        ("J2C-OFS-12",),
+        "Genuine margin erosion from an unbilled change order; cost feed has an outlier row.",
+        expected_margin_pct=25.0,
+        actual_margin_pct=15.0,
+        margin_variance_is_normal_business_variance=False,
+        unbilled_change_order=True,
+        data_quality_defect="synthetic_outlier_cost_row",
+    ),
+    _case(
+        "CONTAM-20-A",
+        "contaminated",
+        (),
+        "Clean, at-cost-only vendor pass-through; conflicting contract-version records upstream.",
+        vendor_pass_through_eligible=False,
+        vendor_pass_through_billed=True,
+        data_quality_defect="conflicting_contract_versions",
+    ),
+    _case(
+        "CONTAM-24-A",
+        "contaminated",
+        ("J2C-OFS-24",),
+        "Customer-attributable NPT not billed as standby; DDR event is unmatched to its ticket.",
+        npt_event_customer_attributable=True,
+        npt_event_duration_meets_threshold=True,
+        npt_event_billed_as_standby=False,
+        data_quality_defect="unmatched_ticket_reference",
+    ),
+    _case(
+        "CONTAM-30-A",
+        "contaminated",
+        (),
+        "Clean portal submission, no rejection; an unrelated same-job invoice has a bad signature.",
+        data_quality_defect="invalid_signature_on_unrelated_invoice",
     ),
 )
 
