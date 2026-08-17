@@ -1,0 +1,38 @@
+# CMVP-01 minimal production deployment blueprint for Render
+# (https://render.com/docs/blueprint-spec). Declares build/start commands
+# and the required environment shape only -- it does not provision a
+# database (DATABASE_URL is left for manual entry, `sync: false`, so no
+# Postgres instance is auto-created by importing this blueprint) and it
+# does not embed any secret value. Import this file from the Render
+# dashboard ("New +" -> "Blueprint") pointed at this repository; Render
+# will prompt for every `sync: false` value before the first deploy.
+#
+# Startup runs `alembic upgrade head` before `uvicorn` on every deploy,
+# matching this repo's documented convention that schema changes are
+# Alembic-managed only (see README.md "Local setup") -- appropriate for a
+# single-instance pilot deployment. If this service is ever scaled to
+# multiple concurrent instances, migrations should be moved to Render's
+# `preDeployCommand` (run once per deploy, not per instance) instead.
+services:
+  - type: web
+    name: intel4ops-core-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -e .
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://app.intel4ops.com
+      - key: OIDC_ISSUER
+        sync: false
+      - key: OIDC_AUDIENCE
+        sync: false
+      - key: OIDC_JWKS_URL
+        sync: false
+      - key: OIDC_ALLOWED_ALGORITHMS
+        value: RS256
