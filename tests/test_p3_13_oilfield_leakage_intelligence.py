@@ -74,7 +74,8 @@ def test_validation_status_classification_is_valid() -> None:
 
 def test_tier_1_patterns_are_appropriately_validated() -> None:
     tier_1 = [p for p in PATTERNS if p["content"]["validation_tier"] == "tier_1_validated"]
-    assert 12 <= len(tier_1) <= 15
+    # 12 original (P3.12) + up to 3 (P3.13) + up to 8 more (P3.15), each evidence-gated.
+    assert 12 <= len(tier_1) <= 23
     tier_1_keys = {p["pattern_key"] for p in tier_1}
     golden_covered_keys = {
         key
@@ -89,17 +90,18 @@ def test_tier_1_patterns_are_appropriately_validated() -> None:
             "every Tier 1 pattern must have at least one golden leakage case",
         )
     # The original 12 P3.12 patterns remain Tier 1 unless inspection gave a strong reason
-    # otherwise (none did); P3.13 promoted at most 3 additional patterns.
+    # otherwise (none did); P3.13 promoted at most 3 additional, P3.15 promoted at most 8 more,
+    # each gated on real validation evidence, never on quota.
     original_twelve = {f"J2C-OFS-{n:02d}" for n in range(1, 13)}
     assert original_twelve <= tier_1_keys
-    assert len(tier_1_keys - original_twelve) <= 3
+    assert len(tier_1_keys - original_twelve) <= 11
 
 
 def test_tier_2_patterns_never_report_validated() -> None:
     tier_2 = [
         p for p in PATTERNS if p["content"]["validation_tier"] == "tier_2_reference_specified"
     ]
-    assert 15 <= len(tier_2) <= 20
+    assert 12 <= len(tier_2) <= 20
     for pattern in tier_2:
         content = pattern["content"]
         assert content["validation_status"] != "validated", pattern["pattern_key"]

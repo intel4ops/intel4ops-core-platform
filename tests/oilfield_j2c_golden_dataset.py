@@ -86,6 +86,47 @@ CLEAN_BASE: dict[str, Any] = {
     "portal_resubmitted_successfully": True,
     "portal_rejection_is_duplicate": False,
     "portal_invoice_withdrawn_invalid": False,
+    # P3.15-promoted Tier 1 patterns
+    "min_charge_applicable": False,
+    "invoice_amount": 500.0,
+    "contractual_minimum": 250.0,
+    "minimum_waived_approved": False,
+    "job_canceled_before_threshold": False,
+    "ticket_billable_line_count": 3,
+    "invoice_line_count_for_ticket": 3,
+    "missing_lines_voided": False,
+    "missing_lines_cross_invoiced": False,
+    "lih_incident_exists": False,
+    "lih_invoice_or_claim_exists": True,
+    "lih_contract_assigns_risk_to_customer": False,
+    "lih_caused_by_servicer_negligence": False,
+    "lih_insurance_already_claimed": False,
+    "lih_fault_determined": True,
+    "asset_departure_after_ticket_stop": False,
+    "extended_dwell_contractually_non_billable": False,
+    "asset_redeployed_to_billed_job": False,
+    "asset_telemetry_unreliable": False,
+    "demob_departure_after_signoff": False,
+    "demob_invoice_reflects_standby_gap": True,
+    "demob_delay_customer_caused": False,
+    "demob_delay_within_grace_period": False,
+    "invoice_discount_tier_applied": False,
+    "cumulative_spend": 100000.0,
+    "tier_qualifying_threshold": 50000.0,
+    "tier_preapproved_exception": False,
+    "tier_commitment_based": False,
+    "simops_hold_exists": False,
+    "simops_hold_customer_attributable": False,
+    "simops_hold_billed_as_standby": True,
+    "simops_caused_by_servicer_violation": False,
+    "simops_below_standby_threshold": False,
+    "simops_within_noncompensable_window": False,
+    "remittance_amount": 1000.0,
+    "invoice_total": 1000.0,
+    "short_pay_dispute_record_exists": False,
+    "short_pay_aged_beyond_threshold": False,
+    "short_pay_matches_approved_credit": False,
+    "short_pay_rounding_only": False,
 }
 
 
@@ -792,6 +833,458 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
         "Clean portal submission, no rejection; an unrelated same-job invoice has a bad signature.",
         data_quality_defect="invalid_signature_on_unrelated_invoice",
     ),
+    # --- P3.15: Tier 2 -> Tier 1 promotions (evidence-supported readiness) ---
+    # J2C-OFS-14: Minimum Charge or Minimum Hour Not Applied
+    _case(
+        "LEAK-14-A",
+        "leakage",
+        ("J2C-OFS-14",),
+        "Job subject to contractual minimum, invoiced below it.",
+        min_charge_applicable=True,
+        invoice_amount=150.0,
+        contractual_minimum=250.0,
+    ),
+    _case(
+        "EDGE-14-A",
+        "edge",
+        (),
+        "Below minimum, but customer has an approved waiver.",
+        min_charge_applicable=True,
+        invoice_amount=150.0,
+        contractual_minimum=250.0,
+        minimum_waived_approved=True,
+    ),
+    _case(
+        "EDGE-14-B",
+        "edge",
+        (),
+        "Below minimum, but job was canceled before the threshold was reached.",
+        min_charge_applicable=True,
+        invoice_amount=150.0,
+        contractual_minimum=250.0,
+        job_canceled_before_threshold=True,
+    ),
+    _case(
+        "AMBIG-14-A",
+        "ambiguous",
+        (),
+        "Invoiced amount exactly at the minimum boundary; not clearly under.",
+        min_charge_applicable=True,
+        invoice_amount=250.0,
+        contractual_minimum=250.0,
+    ),
+    _case(
+        "CONTAM-14-A",
+        "contaminated",
+        ("J2C-OFS-14",),
+        "Genuine minimum-charge shortfall; rate-book feed has a duplicated row.",
+        min_charge_applicable=True,
+        invoice_amount=150.0,
+        contractual_minimum=250.0,
+        data_quality_defect="duplicated_rate_book_row",
+    ),
+    # J2C-OFS-15: Partial Ticket Billing
+    _case(
+        "LEAK-15-A",
+        "leakage",
+        ("J2C-OFS-15",),
+        "Billable ticket invoiced with fewer line items than it has.",
+        ticket_billable_line_count=5,
+        invoice_line_count_for_ticket=3,
+    ),
+    _case(
+        "EDGE-15-A",
+        "edge",
+        (),
+        "Missing lines were explicitly voided on the ticket itself.",
+        ticket_billable_line_count=5,
+        invoice_line_count_for_ticket=3,
+        missing_lines_voided=True,
+    ),
+    _case(
+        "EDGE-15-B",
+        "edge",
+        (),
+        "Missing lines are covered by a separate, cross-referenced invoice.",
+        ticket_billable_line_count=5,
+        invoice_line_count_for_ticket=3,
+        missing_lines_cross_invoiced=True,
+    ),
+    _case(
+        "AMBIG-15-A",
+        "ambiguous",
+        (),
+        "Line counts match exactly; not a partial-billing case.",
+        ticket_billable_line_count=5,
+        invoice_line_count_for_ticket=5,
+    ),
+    _case(
+        "CONTAM-15-A",
+        "contaminated",
+        ("J2C-OFS-15",),
+        "Genuine partial billing; ticket-line feed has a stale cached count.",
+        ticket_billable_line_count=5,
+        invoice_line_count_for_ticket=3,
+        data_quality_defect="stale_cached_line_count",
+    ),
+    # J2C-OFS-16: Loss-in-Hole / Tool Damage
+    _case(
+        "LEAK-16-A",
+        "leakage",
+        ("J2C-OFS-16",),
+        "Incident recorded, contract assigns risk to customer, fault determined.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=True,
+        lih_fault_determined=True,
+    ),
+    _case(
+        "EDGE-16-A",
+        "edge",
+        (),
+        "Incident recorded, but contract places the risk with the operator.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=False,
+        lih_fault_determined=True,
+    ),
+    _case(
+        "EDGE-16-B",
+        "edge",
+        (),
+        "Incident caused by servicer negligence, not an operational hazard.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=True,
+        lih_caused_by_servicer_negligence=True,
+        lih_fault_determined=True,
+    ),
+    _case(
+        "EDGE-16-C",
+        "edge",
+        (),
+        "Asset is fully covered by an insurance claim already made.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=True,
+        lih_insurance_already_claimed=True,
+        lih_fault_determined=True,
+    ),
+    _case(
+        "AMBIG-16-A",
+        "ambiguous",
+        (),
+        "Contract assigns customer risk, but fault/cause is not yet determined.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=True,
+        lih_fault_determined=False,
+    ),
+    _case(
+        "CONTAM-16-A",
+        "contaminated",
+        ("J2C-OFS-16",),
+        "Genuine customer-liable LIH; asset master record has a duplicated serial number.",
+        lih_incident_exists=True,
+        lih_invoice_or_claim_exists=False,
+        lih_contract_assigns_risk_to_customer=True,
+        lih_fault_determined=True,
+        data_quality_defect="duplicated_asset_serial",
+    ),
+    # J2C-OFS-18: Extended Idle Asset Rental
+    _case(
+        "LEAK-18-A",
+        "leakage",
+        ("J2C-OFS-18",),
+        "Asset stayed on site past ticketed stop time and was not billed for it.",
+        asset_departure_after_ticket_stop=True,
+    ),
+    _case(
+        "EDGE-18-A",
+        "edge",
+        (),
+        "Extended dwell is contractually non-billable customer-caused delay.",
+        asset_departure_after_ticket_stop=True,
+        extended_dwell_contractually_non_billable=True,
+    ),
+    _case(
+        "EDGE-18-B",
+        "edge",
+        (),
+        "Asset was redeployed to a different, already-billed job at the same location.",
+        asset_departure_after_ticket_stop=True,
+        asset_redeployed_to_billed_job=True,
+    ),
+    _case(
+        "AMBIG-18-A",
+        "ambiguous",
+        (),
+        "Telematics data for the dwell period is missing/unreliable -- must not assert certainty.",
+        asset_departure_after_ticket_stop=True,
+        asset_telemetry_unreliable=True,
+    ),
+    _case(
+        "CONTAM-18-A",
+        "contaminated",
+        ("J2C-OFS-18",),
+        "Genuine extended idle rental; GPS feed has a duplicated ping at the boundary.",
+        asset_departure_after_ticket_stop=True,
+        data_quality_defect="duplicated_gps_ping",
+    ),
+    # J2C-OFS-22: Unbilled Demobilization Delay
+    _case(
+        "LEAK-22-A",
+        "leakage",
+        ("J2C-OFS-22",),
+        "Customer-caused demob delay beyond grace period, not billed.",
+        demob_departure_after_signoff=True,
+        demob_invoice_reflects_standby_gap=False,
+        demob_delay_customer_caused=True,
+        demob_delay_within_grace_period=False,
+    ),
+    _case(
+        "EDGE-22-A",
+        "edge",
+        (),
+        "Delay is attributable to the servicer, not the customer.",
+        demob_departure_after_signoff=True,
+        demob_invoice_reflects_standby_gap=False,
+        demob_delay_customer_caused=False,
+    ),
+    _case(
+        "EDGE-22-B",
+        "edge",
+        (),
+        "Delay is within the contractual grace period.",
+        demob_departure_after_signoff=True,
+        demob_invoice_reflects_standby_gap=False,
+        demob_delay_customer_caused=True,
+        demob_delay_within_grace_period=True,
+    ),
+    _case(
+        "AMBIG-22-A",
+        "ambiguous",
+        (),
+        "Departure was delayed, but the cause of the delay is undocumented.",
+        demob_departure_after_signoff=True,
+        demob_invoice_reflects_standby_gap=False,
+        demob_delay_customer_caused=False,
+        demob_delay_within_grace_period=False,
+    ),
+    _case(
+        "CONTAM-22-A",
+        "contaminated",
+        ("J2C-OFS-22",),
+        "Genuine unbilled demob delay; telematics feed has an out-of-order departure event.",
+        demob_departure_after_signoff=True,
+        demob_invoice_reflects_standby_gap=False,
+        demob_delay_customer_caused=True,
+        demob_delay_within_grace_period=False,
+        data_quality_defect="out_of_order_departure_event",
+    ),
+    # J2C-OFS-25: Premature Tiered-Volume Discounting
+    _case(
+        "LEAK-25-A",
+        "leakage",
+        ("J2C-OFS-25",),
+        "Discount tier applied before cumulative spend qualifies for it.",
+        invoice_discount_tier_applied=True,
+        cumulative_spend=30000.0,
+        tier_qualifying_threshold=50000.0,
+    ),
+    _case(
+        "EDGE-25-A",
+        "edge",
+        (),
+        "Tier was pre-approved for early application by an authorized exception.",
+        invoice_discount_tier_applied=True,
+        cumulative_spend=30000.0,
+        tier_qualifying_threshold=50000.0,
+        tier_preapproved_exception=True,
+    ),
+    _case(
+        "EDGE-25-B",
+        "edge",
+        (),
+        "Contract defines the tier on a forward commitment basis, not trailing spend.",
+        invoice_discount_tier_applied=True,
+        cumulative_spend=30000.0,
+        tier_qualifying_threshold=50000.0,
+        tier_commitment_based=True,
+    ),
+    _case(
+        "AMBIG-25-A",
+        "ambiguous",
+        (),
+        "Cumulative spend exactly equals the tier threshold; not clearly premature.",
+        invoice_discount_tier_applied=True,
+        cumulative_spend=50000.0,
+        tier_qualifying_threshold=50000.0,
+    ),
+    _case(
+        "CONTAM-25-A",
+        "contaminated",
+        ("J2C-OFS-25",),
+        "Genuine premature discount; CRM cumulative-spend rollup has a rounded total.",
+        invoice_discount_tier_applied=True,
+        cumulative_spend=30000.0,
+        tier_qualifying_threshold=50000.0,
+        data_quality_defect="rounded_cumulative_spend_rollup",
+    ),
+    # J2C-OFS-28: SIMOPS / Site-Access Standdown
+    _case(
+        "LEAK-28-A",
+        "leakage",
+        ("J2C-OFS-28",),
+        "Customer-attributable access hold, above threshold, not billed as standby.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=True,
+        simops_hold_billed_as_standby=False,
+    ),
+    _case(
+        "EDGE-28-A",
+        "edge",
+        (),
+        "Hold was caused by the servicer's own safety violation.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=True,
+        simops_hold_billed_as_standby=False,
+        simops_caused_by_servicer_violation=True,
+    ),
+    _case(
+        "EDGE-28-B",
+        "edge",
+        (),
+        "Hold duration is below the contractual standby-trigger threshold.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=True,
+        simops_hold_billed_as_standby=False,
+        simops_below_standby_threshold=True,
+    ),
+    _case(
+        "EDGE-28-C",
+        "edge",
+        (),
+        "Hold is within a contractually non-billable standard access-control window.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=True,
+        simops_hold_billed_as_standby=False,
+        simops_within_noncompensable_window=True,
+    ),
+    _case(
+        "AMBIG-28-A",
+        "ambiguous",
+        (),
+        "Access hold occurred, but responsibility is not clearly documented.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=False,
+        simops_hold_billed_as_standby=False,
+    ),
+    _case(
+        "CONTAM-28-A",
+        "contaminated",
+        ("J2C-OFS-28",),
+        "Genuine customer-caused standdown; site-safety log has a duplicated hold entry.",
+        simops_hold_exists=True,
+        simops_hold_customer_attributable=True,
+        simops_hold_billed_as_standby=False,
+        data_quality_defect="duplicated_hold_log_entry",
+    ),
+    # J2C-OFS-32: Line-Item Short Pay
+    _case(
+        "LEAK-32-A",
+        "leakage",
+        ("J2C-OFS-32",),
+        "Remittance short of invoice total, no dispute record.",
+        remittance_amount=800.0,
+        invoice_total=1000.0,
+    ),
+    _case(
+        "EDGE-32-A",
+        "edge",
+        (),
+        "Deduction matches an approved credit memo.",
+        remittance_amount=800.0,
+        invoice_total=1000.0,
+        short_pay_matches_approved_credit=True,
+    ),
+    _case(
+        "EDGE-32-B",
+        "edge",
+        (),
+        "Deduction is a bank rounding difference below materiality.",
+        remittance_amount=999.50,
+        invoice_total=1000.0,
+        short_pay_rounding_only=True,
+    ),
+    _case(
+        "EDGE-32-C",
+        "edge",
+        (),
+        "Dispute record exists and has not yet aged past the review threshold.",
+        remittance_amount=800.0,
+        invoice_total=1000.0,
+        short_pay_dispute_record_exists=True,
+        short_pay_aged_beyond_threshold=False,
+    ),
+    _case(
+        "AMBIG-32-A",
+        "ambiguous",
+        (),
+        "Remittance advice states no reason for the deduction; resolution pending.",
+        remittance_amount=800.0,
+        invoice_total=1000.0,
+        short_pay_dispute_record_exists=True,
+        short_pay_aged_beyond_threshold=False,
+    ),
+    _case(
+        "CONTAM-32-A",
+        "contaminated",
+        ("J2C-OFS-32",),
+        "Genuine unresolved short pay, aged; remittance feed has a duplicated line entry.",
+        remittance_amount=800.0,
+        invoice_total=1000.0,
+        short_pay_dispute_record_exists=True,
+        short_pay_aged_beyond_threshold=True,
+        data_quality_defect="duplicated_remittance_line",
+    ),
+    # --- P3.15: expanded Failure Lab -- matching-key adversarial cases against
+    # already-certified Tier 1 patterns (identity/matching correlation-key stress) ---
+    _case(
+        "ADV-KEY-01-A",
+        "edge",
+        (),
+        "Duplicate PO number reused across two unrelated jobs; job is fully billed.",
+        invoice_exists=True,
+        data_quality_defect="duplicate_po_reused_across_jobs",
+    ),
+    _case(
+        "ADV-KEY-04-A",
+        "edge",
+        (),
+        "Asset alias/rename mid-job; equipment hours fully and correctly billed.",
+        equipment_hours_recorded=8.0,
+        equipment_hours_invoiced=8.0,
+        data_quality_defect="asset_alias_mid_job",
+    ),
+    _case(
+        "ADV-KEY-08-A",
+        "edge",
+        (),
+        "Customer alias/merged-account record; billed rate matches the authorized rate.",
+        billed_rate=100.0,
+        authorized_rate=100.0,
+        data_quality_defect="customer_alias_merged_account",
+    ),
+    _case(
+        "ADV-KEY-20-A",
+        "edge",
+        (),
+        "Vendor invoice references a superseded PO version; pass-through correctly at cost.",
+        vendor_pass_through_eligible=False,
+        vendor_pass_through_billed=True,
+        data_quality_defect="superseded_po_version_reference",
+    ),
 )
 
 
@@ -906,6 +1399,84 @@ def detect_einvoicing_portal_rejection(o: dict[str, Any]) -> bool:
     return not o["portal_resubmitted_successfully"]
 
 
+def detect_minimum_charge_not_applied(o: dict[str, Any]) -> bool:
+    if not o["min_charge_applicable"]:
+        return False
+    if o["minimum_waived_approved"] or o["job_canceled_before_threshold"]:
+        return False
+    return bool(o["invoice_amount"] < o["contractual_minimum"])
+
+
+def detect_partial_ticket_billing(o: dict[str, Any]) -> bool:
+    if o["invoice_line_count_for_ticket"] >= o["ticket_billable_line_count"]:
+        return False
+    if o["missing_lines_voided"] or o["missing_lines_cross_invoiced"]:
+        return False
+    return True
+
+
+def detect_loss_in_hole_tool_damage(o: dict[str, Any]) -> bool:
+    if not o["lih_incident_exists"] or o["lih_invoice_or_claim_exists"]:
+        return False
+    if not o["lih_contract_assigns_risk_to_customer"]:
+        return False
+    if o["lih_caused_by_servicer_negligence"] or o["lih_insurance_already_claimed"]:
+        return False
+    # Fault undetermined -> abstain. Asset value alone never establishes recoverability;
+    # this detector never reads an asset-value field at all.
+    return bool(o["lih_fault_determined"])
+
+
+def detect_extended_idle_asset_rental(o: dict[str, Any]) -> bool:
+    if not o["asset_departure_after_ticket_stop"]:
+        return False
+    if o["extended_dwell_contractually_non_billable"] or o["asset_redeployed_to_billed_job"]:
+        return False
+    if o["asset_telemetry_unreliable"]:
+        return False
+    return True
+
+
+def detect_unbilled_demob_delay(o: dict[str, Any]) -> bool:
+    if not o["demob_departure_after_signoff"] or o["demob_invoice_reflects_standby_gap"]:
+        return False
+    if not o["demob_delay_customer_caused"] or o["demob_delay_within_grace_period"]:
+        return False
+    return True
+
+
+def detect_premature_tiered_discounting(o: dict[str, Any]) -> bool:
+    if not o["invoice_discount_tier_applied"]:
+        return False
+    if o["tier_preapproved_exception"] or o["tier_commitment_based"]:
+        return False
+    return bool(o["cumulative_spend"] < o["tier_qualifying_threshold"])
+
+
+def detect_simops_access_standdown(o: dict[str, Any]) -> bool:
+    if not o["simops_hold_exists"] or o["simops_hold_billed_as_standby"]:
+        return False
+    if not o["simops_hold_customer_attributable"]:
+        return False
+    if (
+        o["simops_caused_by_servicer_violation"]
+        or o["simops_below_standby_threshold"]
+        or o["simops_within_noncompensable_window"]
+    ):
+        return False
+    return True
+
+
+def detect_line_item_short_pay(o: dict[str, Any]) -> bool:
+    if o["remittance_amount"] >= o["invoice_total"]:
+        return False
+    if o["short_pay_matches_approved_credit"] or o["short_pay_rounding_only"]:
+        return False
+    if o["short_pay_dispute_record_exists"] and not o["short_pay_aged_beyond_threshold"]:
+        return False
+    return True
+
+
 DETECTORS: dict[str, Any] = {
     "J2C-OFS-01": detect_completed_job_not_invoiced,
     "J2C-OFS-02": detect_field_ticket_not_invoiced,
@@ -922,6 +1493,14 @@ DETECTORS: dict[str, Any] = {
     "J2C-OFS-20": detect_third_party_pass_through_not_billed,
     "J2C-OFS-24": detect_npt_vs_standby_misclassification,
     "J2C-OFS-30": detect_einvoicing_portal_rejection,
+    "J2C-OFS-14": detect_minimum_charge_not_applied,
+    "J2C-OFS-15": detect_partial_ticket_billing,
+    "J2C-OFS-16": detect_loss_in_hole_tool_damage,
+    "J2C-OFS-18": detect_extended_idle_asset_rental,
+    "J2C-OFS-22": detect_unbilled_demob_delay,
+    "J2C-OFS-25": detect_premature_tiered_discounting,
+    "J2C-OFS-28": detect_simops_access_standdown,
+    "J2C-OFS-32": detect_line_item_short_pay,
 }
 
 

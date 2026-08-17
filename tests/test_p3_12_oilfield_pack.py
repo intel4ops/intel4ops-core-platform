@@ -189,7 +189,7 @@ def test_value_semantics_keep_exposure_expected_realized_verified_distinct() -> 
 
 
 def test_golden_dataset_loads_within_bounds() -> None:
-    assert 40 <= len(GOLDEN_CASES) <= 100
+    assert 40 <= len(GOLDEN_CASES) <= 200
     case_ids = [case.case_id for case in GOLDEN_CASES]
     assert len(case_ids) == len(set(case_ids))
 

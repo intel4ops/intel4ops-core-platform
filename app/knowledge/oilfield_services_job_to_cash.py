@@ -77,6 +77,10 @@ class PatternContent(TypedDict):
     # tests/test_p3_14_oilfield_validation_lab.py for the drift check against it.
     validation_evidence: NotRequired[dict[str, object]]
     validation_plan: NotRequired[dict[str, object]]
+    # P3.15 addition: declarative service-family relevance, present only on Tier 1
+    # (validated) patterns -- the representative Oilfield Services contexts each
+    # pattern's golden-dataset cases were designed against.
+    service_families: NotRequired[list[str]]
 
 
 class PatternDefinition(TypedDict):
@@ -177,13 +181,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["field ticketing", "dispatch", "ERP billing"],
+            "service_families": ["field_maintenance", "artificial_lift"],
             "correlation_fields": ["job/service order ID", "completion timestamp", "invoice ID"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-01-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-01-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-01-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -197,7 +202,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 3,
                     "false_positive": 0,
-                    "true_negative": 71,
+                    "true_negative": 118,
                     "false_negative": 0,
                     "exclusion_cases": 3,
                     "ambiguous_cases": 1,
@@ -206,7 +211,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 1.0,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "abab678061330b52f5abf54b777200a89d90699e9f433bd5218e89a062ba9f83",
+                "evidence_hash": "446997d32c969f6ab57d4c0cda4d194941833f0aed1cadc9a17eaf60a20ff67c",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -286,13 +291,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["field ticketing", "ERP billing"],
+            "service_families": ["wireline_coiled_tubing", "field_maintenance"],
             "correlation_fields": ["ticket ID", "job/service order ID", "invoice line ID"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-02-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-02-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-02-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -306,7 +312,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 2,
                     "ambiguous_cases": 0,
@@ -315,7 +321,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "f3871e86f74af712d84fa8ff3b1038a0d3a013a3bd446ceb6a3bc33cf67a2c14",
+                "evidence_hash": "0938501b726975cfadea56f2ad7771d57ab8a6fdbb1e4ac5cecf83a3bd128e96",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -395,6 +401,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["field ticketing", "time & labor", "ERP billing"],
+            "service_families": ["pressure_pumping", "field_maintenance"],
             "correlation_fields": [
                 "job/service order ID",
                 "labor time entry ID",
@@ -403,9 +410,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-03-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-03-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-03-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -419,7 +426,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 0,
@@ -428,7 +435,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "c4dfb48d10134ee16dea5d2adfeac3fa930ad0cccdcedfaf0022b5ef6839d305",
+                "evidence_hash": "aa1a265a05287c5807d12acbe6e4a5db03ec39cdf0f555512cca3df868a854cd",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -503,13 +510,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["EAM / asset management", "field ticketing", "ERP billing"],
+            "service_families": ["equipment_rental", "artificial_lift"],
             "correlation_fields": ["asset ID", "job/service order ID", "invoice line ID"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-04-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-04-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-04-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -523,7 +531,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 0,
@@ -532,7 +540,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "bdbddb81f31aebc00626ac1428ca7adb3a188a391ff77580c8250fda155fc019",
+                "evidence_hash": "19ca5af1ce4962c04f984127cd41c945c0051dc39c531d4036194ff07a2ca967",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -610,13 +618,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["inventory/ERP", "field ticketing", "ERP billing"],
+            "service_families": ["pressure_pumping", "artificial_lift"],
             "correlation_fields": ["SKU", "job/service order ID", "invoice line ID"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-05-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-05-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-05-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -630,7 +639,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 1,
                     "false_positive": 0,
-                    "true_negative": 73,
+                    "true_negative": 120,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 0,
@@ -639,7 +648,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "4fde6ce70d3afdd1b10de74d14c757704382d09e14a4907c34d589d05e4a7bfa",
+                "evidence_hash": "d31f60433742794b1b1510035015e4607662bef0ef61f1fc9af3ca855bb7cfd0",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -715,6 +724,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["field ticketing", "dispatch", "ERP billing"],
+            "service_families": ["pressure_pumping", "wireline_coiled_tubing"],
             "correlation_fields": [
                 "job/service order ID",
                 "standby start/end timestamp",
@@ -723,9 +733,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-06-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-06-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-06-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -739,7 +749,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 3,
                     "ambiguous_cases": 0,
@@ -748,7 +758,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "6f6a3ee701c64aa459f5eba11dcea13efb4404d973703268c3ef1a3a09aee1a5",
+                "evidence_hash": "d87abf3e4edb34a625827854bcd70178a2c5d58ae489f547c4071ca5053ec737",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -825,6 +835,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["GPS/telematics", "EAM", "field ticketing", "ERP billing"],
+            "service_families": ["equipment_rental", "pressure_pumping"],
             "correlation_fields": [
                 "asset serial",
                 "job/service order ID",
@@ -833,9 +844,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-07-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-07-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-07-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -849,7 +860,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 0,
@@ -858,7 +869,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "bd980ce6cb1c5862a2b21c9b6f6e365042889c658ad8ec0941b2bbffa1502876",
+                "evidence_hash": "f03b9409b5e31ec11c231c4b1008464fd8b859aeeb2d5dd18f3fa3094d0296aa",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -943,13 +954,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["CLM/MSA", "rate book", "ERP billing"],
+            "service_families": ["artificial_lift", "field_maintenance"],
             "correlation_fields": ["contract ID", "rate schedule version", "invoice line ID"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-08-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-08-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-08-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -963,7 +975,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 3,
                     "false_positive": 0,
-                    "true_negative": 71,
+                    "true_negative": 118,
                     "false_negative": 0,
                     "exclusion_cases": 3,
                     "ambiguous_cases": 0,
@@ -972,7 +984,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "358069c5cd33981f195fac9c034f9b8f8a33e0ee535375d212e97d720e88d55b",
+                "evidence_hash": "007150bc96fd293607bbfc6d1109bb5aa02a6337f22be9bc95a06121c42e2282",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -1050,13 +1062,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["ERP AR", "credit memo/adjustment", "approval workflow"],
+            "service_families": ["artificial_lift"],
             "correlation_fields": ["invoice ID", "credit memo ID", "approval authority"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-09-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-09-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-09-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -1070,7 +1083,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 1,
                     "false_positive": 0,
-                    "true_negative": 73,
+                    "true_negative": 120,
                     "false_negative": 0,
                     "exclusion_cases": 2,
                     "ambiguous_cases": 0,
@@ -1079,7 +1092,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "5ca766e1ce310b29e065635debf3cc8ab378e439bf519276c979629559aefc20",
+                "evidence_hash": "2cb91684dde4dcf615d9a5aacbef157a5662f3bfb8db0a8c7fb9fd09d03ac41a",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -1155,6 +1168,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["field ticketing", "ERP billing"],
+            "service_families": ["field_maintenance"],
             "correlation_fields": [
                 "job/service order ID",
                 "completion timestamp",
@@ -1163,9 +1177,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-10-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-10-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-10-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -1179,7 +1193,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 0,
@@ -1188,7 +1202,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "ca13b7e3b7bde7315c24c64799ab4c1f319cc8aa38b82ad4f0d83177c36f80e5",
+                "evidence_hash": "1236347e755664dc309c432654c7a246f78943e278b00213688c5573e1a4ad8c",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -1266,13 +1280,14 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["ERP AR", "document management", "customer approval workflow"],
+            "service_families": ["field_maintenance"],
             "correlation_fields": ["invoice ID", "PO", "supporting document status"],
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-11-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-11-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-11-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -1286,7 +1301,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 1,
                     "false_positive": 0,
-                    "true_negative": 73,
+                    "true_negative": 120,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 1,
@@ -1295,7 +1310,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 1.0,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "0aaf1b312d2e7d0f8df291d91e56ab18dd21cb2c9e8325cc01fa6812364d5903",
+                "evidence_hash": "ce09fe94562de5489b43eff4d85e689ee74e0c5950c7286a4cd478f717798260",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -1384,6 +1399,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["ERP billing", "cost accounting", "change order/AFE"],
+            "service_families": ["artificial_lift", "field_maintenance"],
             "correlation_fields": [
                 "job/service order ID",
                 "expected margin baseline",
@@ -1392,9 +1408,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-12-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-12-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-12-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -1408,7 +1424,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 1,
                     "ambiguous_cases": 1,
@@ -1417,7 +1433,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 1.0,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "7168923e17f3e00c04d0e583ef15f821f26bd9bdff43ae9ec53175fcd9bb6cfc",
+                "evidence_hash": "6de84a450e704eb1d6e15df7012061ce76238d8fffe452aabd5de569dd726c76",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -1518,6 +1534,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires a synthetic crew-log/dispatch data source distinct from the existing "
                     "field-ticket-centric golden dataset before a credible detector can be written"
                 ),
+                "readiness": "BLOCKED_UNSAFE_TO_AUTOMATE",
+                "next_validation_action": "requires crew-log interpretation; no structured source",
             },
         },
     },
@@ -1579,33 +1597,41 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "A",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": ["CLM/MSA", "rate book", "ERP billing"],
+            "service_families": ["artificial_lift"],
             "correlation_fields": ["job type code", "contract ID", "invoice line ID"],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": ["CLM/MSA", "rate book", "ERP billing"],
-                "required_fields": ["job type code", "contract ID", "invoice line ID"],
-                "scenario_concept": (
-                    "Job duration/scope below the contractual minimum charge threshold."
-                ),
-                "clean_case_concept": (
-                    "Job below minimum, invoice correctly reflects the minimum charge."
-                ),
-                "positive_case_concept": (
-                    "Job below minimum, invoice reflects only actual (lower) usage."
-                ),
-                "exclusion_case_concept": (
-                    "Contract has no minimum-charge clause for this job type."
-                ),
-                "ambiguity_case_concept": (
-                    "Minimum-charge clause exists but the applicable threshold is unclear."
-                ),
-                "blocker_to_promotion": (
-                    "requires an authoritative per-job-type minimum-charge threshold fixture, "
-                    "not yet represented in the golden dataset's contract vocabulary"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-14-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-14-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 2,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "6efc7100a051537c97643fd32bd7708c9df721571f6f3f5b98273fdd096ff9f2",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -1666,31 +1692,41 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": ["duplicate_field_ticket"],
             "family": "A",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": ["field ticketing", "ERP billing"],
+            "service_families": ["artificial_lift", "field_maintenance"],
             "correlation_fields": ["ticket ID", "ticket line item ID", "invoice line ID"],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": ["field ticketing", "ERP billing"],
-                "required_fields": ["ticket ID", "ticket line item ID", "invoice line ID"],
-                "scenario_concept": (
-                    "A billable ticket is invoiced, but only some of its line items are."
-                ),
-                "clean_case_concept": "All billable ticket line items appear on the invoice.",
-                "positive_case_concept": (
-                    "Ticket invoiced, but one or more billable line items are missing."
-                ),
-                "exclusion_case_concept": (
-                    "Missing line item was explicitly voided on the ticket itself."
-                ),
-                "ambiguity_case_concept": (
-                    "Ticket line items lack stable identifiers to reconcile against invoice lines."
-                ),
-                "blocker_to_promotion": (
-                    "requires line-item-level (not ticket-level) fields in the golden dataset, "
-                    "which the current dict-of-booleans case shape does not yet model"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-15-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-15-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 2,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "0e8611c10cb2056bebf0b8e5e51d77add3f401e7191fcf215c1330831484bf77",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -1771,8 +1807,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "B",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": [
                 "field ticketing",
                 "EAM / asset management",
@@ -1780,49 +1816,43 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "CLM/MSA",
                 "ERP billing",
             ],
+            "service_families": ["wireline_coiled_tubing", "equipment_rental"],
             "correlation_fields": [
                 "asset ID",
                 "job/well ID",
                 "incident ID",
                 "contract liability clause ID",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": [
-                    "field ticketing",
-                    "EAM / asset management",
-                    "incident record",
-                    "CLM/MSA",
-                    "ERP billing",
-                ],
-                "required_fields": [
-                    "asset ID",
-                    "job/well ID",
-                    "incident ID",
-                    "contract liability clause ID",
-                ],
-                "scenario_concept": (
-                    "Tool lost in hole or damaged; contractual liability "
-                    "allocation determines recoverability."
-                ),
-                "clean_case_concept": (
-                    "Incident recorded, contract places liability with the operator; no exposure."
-                ),
-                "positive_case_concept": (
-                    "Incident recorded, contract places liability with the customer within terms."
-                ),
-                "exclusion_case_concept": (
-                    "Asset value alone, with no incident record -- not evaluable."
-                ),
-                "ambiguity_case_concept": (
-                    "Liability clause exists but the specific incident's cause is undetermined."
-                ),
-                "blocker_to_promotion": (
-                    "requires an authoritative liability-allocation clause fixture "
-                    "per contract, explicitly noted in the pattern content "
-                    "as the reason asset value alone must never be treated as "
-                    "recovery -- this is deliberately not synthesized casually"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-16-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-16-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 3,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "e13f2c91dca3467bbc3e271309e03de445af5d537d99734e55f53f7351e7d6fd",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -1941,6 +1971,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires a clear, contract-sourced distinction between operational shrinkage "
                     "tolerance and customer-billable quantity, not yet represented as a fixture"
                 ),
+                "readiness": "DEFERRED",
+                "next_validation_action": "needs dedicated transfer/return fixtures; high FP risk",
             },
         },
     },
@@ -2005,14 +2037,15 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "B",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": [
                 "EAM / asset management",
                 "GPS/telematics",
                 "field ticketing",
                 "CLM/MSA",
             ],
+            "service_families": ["equipment_rental"],
             "correlation_fields": [
                 "asset serial",
                 "job ID",
@@ -2020,36 +2053,36 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "ticket stop time",
                 "departure time",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": [
-                    "EAM / asset management",
-                    "GPS/telematics",
-                    "field ticketing",
-                    "CLM/MSA",
-                ],
-                "required_fields": [
-                    "asset serial",
-                    "job ID",
-                    "location",
-                    "ticket stop time",
-                    "departure time",
-                ],
-                "scenario_concept": (
-                    "Asset remains on location and billable after ticket-recorded stop time."
-                ),
-                "clean_case_concept": "Asset departs at or before ticket stop time.",
-                "positive_case_concept": (
-                    "GPS shows asset on location well past ticket stop time, uninvoiced."
-                ),
-                "exclusion_case_concept": (
-                    "Extended presence was pre-approved standby, already billed as standby."
-                ),
-                "ambiguity_case_concept": "GPS telemetry gap around the stop-time window.",
-                "blocker_to_promotion": (
-                    "requires GPS/telematics time-series fixtures, a data shape the golden dataset "
-                    "does not currently model (only point-in-time boolean/numeric fields)"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-18-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-18-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 2,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "21e37e1452c01cd5b92a69e0576e26f1b36a1c36218bbc95d3fe37b9d5253644",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -2162,6 +2195,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires an authoritative damage-cause-code taxonomy shared with Loss-in-Hole "
                     "(J2C-OFS-16) before both can be validated without cross-pattern ambiguity"
                 ),
+                "readiness": "DEFERRED",
+                "next_validation_action": "near-duplicate of J2C-OFS-16; revisit once it matures",
             },
         },
     },
@@ -2243,6 +2278,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["AP", "vendor invoice", "PO", "CLM/MSA", "ERP AR"],
+            "service_families": ["wireline_coiled_tubing", "field_maintenance"],
             "correlation_fields": [
                 "vendor invoice ID",
                 "PO",
@@ -2253,9 +2289,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-20-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-20-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-20-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -2269,7 +2305,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 1,
                     "false_positive": 0,
-                    "true_negative": 73,
+                    "true_negative": 120,
                     "false_negative": 0,
                     "exclusion_cases": 2,
                     "ambiguous_cases": 0,
@@ -2278,7 +2314,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "7e77cc8910e072ada05c28cc98307187bb57541e97b68bc63c96c1af4318d62e",
+                "evidence_hash": "6302a22d80ef9f90eac17d2cf6e6e48dfa30ff1274db4233df7e1274baf4f367",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -2383,6 +2419,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires expense-management and crew-roster fixtures, systems "
                     "not yet represented anywhere in the current golden dataset"
                 ),
+                "readiness": "READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+                "next_validation_action": "needs a travel-radius/zone fixture, not a boolean flag",
             },
         },
     },
@@ -2448,42 +2486,46 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "C",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": ["GPS/telematics", "field ticketing", "EAM", "CLM/MSA"],
+            "service_families": ["equipment_rental", "field_maintenance"],
             "correlation_fields": [
                 "asset",
                 "ticket signoff time",
                 "actual departure time",
                 "demob/standby clause",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": ["GPS/telematics", "field ticketing", "EAM", "CLM/MSA"],
-                "required_fields": [
-                    "asset",
-                    "ticket signoff time",
-                    "actual departure time",
-                    "demob/standby clause",
-                ],
-                "scenario_concept": (
-                    "Demobilization is delayed by the customer; delay itself is billable standby."
-                ),
-                "clean_case_concept": "Demob delay billed as standby per the demob/standby clause.",
-                "positive_case_concept": (
-                    "Demob delay recorded operationally but never billed as standby."
-                ),
-                "exclusion_case_concept": (
-                    "Delay was the servicer's own logistics failure, not customer-caused."
-                ),
-                "ambiguity_case_concept": (
-                    "Cause of the demob delay (customer vs. servicer) is not recorded."
-                ),
-                "blocker_to_promotion": (
-                    "shares the GPS/telematics time-series gap with "
-                    "J2C-OFS-18; also requires the delay-attribution "
-                    "vocabulary this pack has not yet defined for demob specifically"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-22-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-22-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 2,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "91f395c9b82b3fbf687671554a23638b72790afe351dac3756ccaeee4967e7ad",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -2581,6 +2623,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "promotion should reuse that detector's structure "
                     "once a freight-specific fixture exists"
                 ),
+                "readiness": "READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+                "next_validation_action": "feasible; deprioritized vs. higher-value candidates",
             },
         },
     },
@@ -2668,6 +2712,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_tier": "tier_1_validated",
             "validation_status": "validated",
             "source_systems": ["DDR / morning report", "field ticketing", "CLM/MSA", "ERP billing"],
+            "service_families": ["pressure_pumping"],
             "correlation_fields": [
                 "job/well ID",
                 "event timestamp",
@@ -2680,9 +2725,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-24-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-24-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-24-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -2696,7 +2741,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 2,
                     "false_positive": 0,
-                    "true_negative": 72,
+                    "true_negative": 119,
                     "false_negative": 0,
                     "exclusion_cases": 2,
                     "ambiguous_cases": 0,
@@ -2705,7 +2750,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "348c26dc3c35bca0ec8fbff46e1666d9b2f1af174eaa4e78315ec5a402618246",
+                "evidence_hash": "d382d1fcbcfcfe62d08bcf611304a3929fd13760901d5e268249e32948ef7d64",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -2776,9 +2821,10 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "D",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": ["ERP revenue", "CRM", "CLM/rate schedule"],
+            "service_families": ["artificial_lift"],
             "correlation_fields": [
                 "customer ID",
                 "cumulative spend",
@@ -2786,36 +2832,36 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "effective date",
                 "applied discount tier",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": ["ERP revenue", "CRM", "CLM/rate schedule"],
-                "required_fields": [
-                    "customer ID",
-                    "cumulative spend",
-                    "tier threshold",
-                    "effective date",
-                    "applied discount tier",
-                ],
-                "scenario_concept": (
-                    "A tiered-volume discount is applied before the "
-                    "customer's spend crosses the tier threshold."
-                ),
-                "clean_case_concept": (
-                    "Applied discount tier matches cumulative spend against the schedule."
-                ),
-                "positive_case_concept": (
-                    "Discount tier applied ahead of the cumulative-spend threshold being met."
-                ),
-                "exclusion_case_concept": (
-                    "Tier was contractually pre-negotiated as a forward commitment."
-                ),
-                "ambiguity_case_concept": (
-                    "Cumulative-spend calculation period is not clearly defined in the contract."
-                ),
-                "blocker_to_promotion": (
-                    "requires a cumulative, time-series spend fixture per customer, "
-                    "a shape the current per-job golden dataset does not model"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-25-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-25-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 2,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "d03a75087294ac48ca981b2e8c89bb79874f69fef194933d2db93f891291d711",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -2944,6 +2990,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "a generic CPI/fuel index without contract support, so "
                     "no generic fixture can substitute for a real clause"
                 ),
+                "readiness": "READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+                "next_validation_action": "needs an index/fallback fixture to avoid false flags",
             },
         },
     },
@@ -3036,6 +3084,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires an AFE/change-order fixture distinct from the field-ticket-only "
                     "shape the golden dataset currently models"
                 ),
+                "readiness": "READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+                "next_validation_action": "needs an explicit scope-materiality-threshold fixture",
             },
         },
     },
@@ -3106,9 +3156,10 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "E",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": ["JSA/site safety", "DDR/operations", "field ticketing", "CLM/MSA"],
+            "service_families": ["artificial_lift", "field_maintenance"],
             "correlation_fields": [
                 "hold timestamp",
                 "job/well ID",
@@ -3116,43 +3167,36 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "access restriction ID",
                 "standby clause",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": [
-                    "JSA/site safety",
-                    "DDR/operations",
-                    "field ticketing",
-                    "CLM/MSA",
-                ],
-                "required_fields": [
-                    "hold timestamp",
-                    "job/well ID",
-                    "responsible party",
-                    "access restriction ID",
-                    "standby clause",
-                ],
-                "scenario_concept": (
-                    "A SIMOPS/site-access hold stands the crew down; "
-                    "billability depends on cause and contract."
-                ),
-                "clean_case_concept": (
-                    "Hold billed as standby only when the standby "
-                    "clause and responsible-party test both pass."
-                ),
-                "positive_case_concept": (
-                    "Hold meets the standby-clause and responsible-party test but was never billed."
-                ),
-                "exclusion_case_concept": (
-                    "Hold was the servicer's own safety violation -- correctly not billable."
-                ),
-                "ambiguity_case_concept": (
-                    "Responsible party for the access restriction is not recorded."
-                ),
-                "blocker_to_promotion": (
-                    "requires a site-safety/JSA fixture and an "
-                    "explicit standby-clause-applicability "
-                    "test distinct from the already-Tier-1 NPT vs. Standby pattern (J2C-OFS-24)"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-28-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-28-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 3,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "6d4548a203b8c424790bd195283aad1b7e136bcafcc03c2ea773076a4fcba481",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -3267,6 +3311,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires a customer authorized-approver-list fixture, not "
                     "modeled in the current golden dataset's per-job shape"
                 ),
+                "readiness": "READY_NOW",
+                "next_validation_action": "clean boolean check; deprioritized, no fixture needed",
             },
         },
     },
@@ -3345,6 +3391,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "PO",
                 "field ticketing evidence",
             ],
+            "service_families": ["artificial_lift"],
             "correlation_fields": [
                 "invoice ID",
                 "rejection code",
@@ -3355,9 +3402,9 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             "validation_evidence": {
                 "scenario_id": "J2C-OFS-30-VALIDATION-001",
                 "scenario_version": "1.0.0",
-                "dataset_version": "p3.14-oilfield-golden-v1",
+                "dataset_version": "p3.15-oilfield-golden-v2",
                 "provenance": "simulation",
-                "certification_run_id": "J2C-OFS-30-CERT-p3.14-oilfield-golden-v1",
+                "certification_run_id": "J2C-OFS-30-CERT-p3.15-oilfield-golden-v2",
                 "metrics_summary": {
                     "precision": 1.0,
                     "recall": 1.0,
@@ -3371,7 +3418,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "case_counts": {
                     "true_positive": 1,
                     "false_positive": 0,
-                    "true_negative": 73,
+                    "true_negative": 120,
                     "false_negative": 0,
                     "exclusion_cases": 2,
                     "ambiguous_cases": 0,
@@ -3380,7 +3427,7 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "score": 0.9833,
                 "passed": True,
                 "replay_consistent": True,
-                "evidence_hash": "45ccdefcaa3aabfd91cc5d79a2998238e237d0bc7ddab676014ad589d25feaac",
+                "evidence_hash": "34e7e5dec6c6d93f055f86f213166cc3f4889d19918912e2dcaa148386d23d96",
                 "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
@@ -3488,6 +3535,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires a bank/remittance fixture with reconciled payment-posting "
                     "dates, a data source not yet represented in the golden dataset"
                 ),
+                "readiness": "READY_NOW",
+                "next_validation_action": "needs a postmark-vs-received-date fixture for ambiguity",
             },
         },
     },
@@ -3559,14 +3608,15 @@ PATTERNS: tuple[PatternDefinition, ...] = (
             ],
             "related_defect_codes": [],
             "family": "F",
-            "validation_tier": "tier_2_reference_specified",
-            "validation_status": "reference_specified",
+            "validation_tier": "tier_1_validated",
+            "validation_status": "validated",
             "source_systems": [
                 "ERP AR",
                 "bank/remittance",
                 "dispute/deduction system",
                 "invoice lines",
             ],
+            "service_families": ["field_maintenance"],
             "correlation_fields": [
                 "invoice line",
                 "remittance",
@@ -3574,37 +3624,36 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                 "dispute reason",
                 "deduction age",
             ],
-            "validation_plan": {
-                "status": "validation_planned",
-                "required_systems": [
-                    "ERP AR",
-                    "bank/remittance",
-                    "dispute/deduction system",
-                    "invoice lines",
-                ],
-                "required_fields": [
-                    "invoice line",
-                    "remittance",
-                    "deduction amount",
-                    "dispute reason",
-                    "deduction age",
-                ],
-                "scenario_concept": (
-                    "A customer deduction on remittance is not "
-                    "tied to any resolved or justified dispute."
-                ),
-                "clean_case_concept": "Deduction matches an approved dispute/credit memo.",
-                "positive_case_concept": (
-                    "Deduction has no matching dispute record and is aged past the resolution SLA."
-                ),
-                "exclusion_case_concept": (
-                    "Deduction matches a contractually pre-agreed adjustment (e.g. volume rebate)."
-                ),
-                "ambiguity_case_concept": "Dispute reason code is missing or unmapped.",
-                "blocker_to_promotion": (
-                    "requires a dispute/deduction-management fixture with aging, "
-                    "not modeled in the current per-job golden dataset"
-                ),
+            "validation_evidence": {
+                "scenario_id": "J2C-OFS-32-VALIDATION-001",
+                "scenario_version": "1.0.0",
+                "dataset_version": "p3.15-oilfield-golden-v2",
+                "provenance": "simulation",
+                "certification_run_id": "J2C-OFS-32-CERT-p3.15-oilfield-golden-v2",
+                "metrics_summary": {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "specificity": 1.0,
+                    "false_positive_rate": 0.0,
+                    "false_negative_rate": 0.0,
+                    "exclusion_correctness": 1.0,
+                    "ambiguity_handling_rate": 1.0,
+                    "contamination_robustness": 1.0,
+                },
+                "case_counts": {
+                    "true_positive": 2,
+                    "false_positive": 0,
+                    "true_negative": 119,
+                    "false_negative": 0,
+                    "exclusion_cases": 3,
+                    "ambiguous_cases": 1,
+                    "contaminated_cases": 1,
+                },
+                "score": 1.0,
+                "passed": True,
+                "replay_consistent": True,
+                "evidence_hash": "978ab829a3d7f5909811bd22f9a57a7d25b72a9df8562d16cc03d8afd555256d",
+                "related_platform_scenario": "J2C-OILFIELD-001",
             },
         },
     },
@@ -3712,6 +3761,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "requires a delegation-of-authority fixture (amount thresholds "
                     "per role), not modeled anywhere in the current dataset"
                 ),
+                "readiness": "READY_WITH_BOUNDED_FIXTURE_EXPANSION",
+                "next_validation_action": "needs an authorization-matrix fixture (tier->approver)",
             },
         },
     },
@@ -3833,6 +3884,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "-- this pattern must remain investigation/reference "
                     "only and must never encode tax advice"
                 ),
+                "readiness": "BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+                "next_validation_action": "requires a governed tax-jurisdiction rule source",
             },
         },
     },
@@ -3951,6 +4004,8 @@ PATTERNS: tuple[PatternDefinition, ...] = (
                     "validation is possible -- normal FX movement "
                     "must never be treated as leakage by default"
                 ),
+                "readiness": "BLOCKED_AUTHORITATIVE_RULE_REQUIRED",
+                "next_validation_action": "requires an explicit FX-basis clause and rate source",
             },
         },
     },
