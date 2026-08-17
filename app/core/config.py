@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,6 +8,25 @@ class Settings(BaseSettings):
     app_name: str = "Intel4Ops Core Platform"
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://intel4ops:intel4ops@localhost:5432/intel4ops"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_postgres_driver(cls, value: str) -> str:
+        # A managed-Postgres host (e.g. Render) commonly hands out a bare
+        # postgres:// or postgresql:// connection string with no driver
+        # suffix. SQLAlchemy's default dialect for that bare scheme is
+        # psycopg2, which this project never installs -- it depends on
+        # psycopg (v3) exclusively (see pyproject.toml). Without this
+        # normalization, deployments fail at engine-creation time with
+        # ModuleNotFoundError: No module named 'psycopg2', even though the
+        # application and its migrations only ever use psycopg3. Any URL
+        # that already names a driver (postgresql+psycopg://, sqlite://,
+        # etc.) passes through unchanged.
+        for bare_prefix in ("postgresql://", "postgres://"):
+            if value.startswith(bare_prefix):
+                return "postgresql+psycopg://" + value[len(bare_prefix) :]
+        return value
+
     cors_origins: str = "http://localhost:5173"
     mapping_worker_id: str | None = Field(default=None, max_length=200)
     mapping_worker_poll_interval_seconds: float = Field(default=2.0, gt=0, le=60)
