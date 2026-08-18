@@ -132,6 +132,77 @@ def test_valid_rs256_jwt_authenticates(
 
     assert user.is_platform_admin is False
     assert user.user_id == _derive_user_id(ISSUER, "user-123")
+    assert user.email is None
+    assert user.email_verified is False
+
+
+# ---------------------------------------------------------------------------
+# 1b. namespaced email/email_verified claims (CMVP-01 recipient binding) are
+# extracted only under "<audience>/email" and "<audience>/email_verified" --
+# never a bare "email"/"email_verified" claim, which is ID-token-only under
+# standard OIDC and never present on the access token this provider verifies.
+# ---------------------------------------------------------------------------
+def test_namespaced_email_claims_extracted(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    key = _new_rsa_key()
+    url = _unique_jwks_url()
+    _configure(monkeypatch, jwks_url=url)
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        extra_claims={
+            f"{AUDIENCE}/email": "Pilot.User@Example.com",
+            f"{AUDIENCE}/email_verified": True,
+        },
+    )
+
+    user = provider.authenticate(f"Bearer {token}")
+
+    assert user.email == "Pilot.User@Example.com"
+    assert user.email_verified is True
+
+
+def test_bare_email_claim_ignored(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    key = _new_rsa_key()
+    url = _unique_jwks_url()
+    _configure(monkeypatch, jwks_url=url)
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key, "kid-1", extra_claims={"email": "not-namespaced@example.com", "email_verified": True}
+    )
+
+    user = provider.authenticate(f"Bearer {token}")
+
+    assert user.email is None
+    assert user.email_verified is False
+
+
+def test_email_verified_string_true_not_treated_as_verified(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    """Only the JSON boolean `true` counts -- a truthy-looking string must
+    not be accepted, since `bool("false")` is True in Python."""
+    key = _new_rsa_key()
+    url = _unique_jwks_url()
+    _configure(monkeypatch, jwks_url=url)
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        extra_claims={
+            f"{AUDIENCE}/email": "pilot@example.com",
+            f"{AUDIENCE}/email_verified": "false",
+        },
+    )
+
+    user = provider.authenticate(f"Bearer {token}")
+
+    assert user.email == "pilot@example.com"
+    assert user.email_verified is False
 
 
 # ---------------------------------------------------------------------------
