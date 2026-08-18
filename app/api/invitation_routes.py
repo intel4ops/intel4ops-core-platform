@@ -75,6 +75,12 @@ def accept_invitation(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> OrganizationMembership:
     try:
-        return invitation_service.accept(db, payload.token, current_user.user_id)
+        return invitation_service.accept(
+            db,
+            payload.token,
+            current_user.user_id,
+            current_user.email,
+            current_user.email_verified,
+        )
     except InvitationServiceError as exc:
         _raise(exc)

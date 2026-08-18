@@ -19,6 +19,8 @@ from app.main import app
 class IdentityState:
     user_id: UUID | None
     is_platform_admin: bool = False
+    email: str | None = None
+    email_verified: bool = False
 
     def authenticate(self) -> AuthenticatedUser:
         if self.user_id is None:
@@ -26,6 +28,8 @@ class IdentityState:
         return AuthenticatedUser(
             user_id=self.user_id,
             is_platform_admin=self.is_platform_admin,
+            email=self.email,
+            email_verified=self.email_verified,
         )
 
 

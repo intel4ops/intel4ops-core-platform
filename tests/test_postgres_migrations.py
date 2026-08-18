@@ -5462,7 +5462,9 @@ def test_concurrent_invitation_acceptance_by_same_user_is_idempotent(
     def accept() -> UUID:
         with Session(postgres_engine) as session:
             barrier.wait()
-            membership = invitation_service.accept(session, token, accepting_user)
+            membership = invitation_service.accept(
+                session, token, accepting_user, "race-accept@example.com", True
+            )
             return cast(UUID, membership.id)
 
     with ThreadPoolExecutor(max_workers=2) as executor:

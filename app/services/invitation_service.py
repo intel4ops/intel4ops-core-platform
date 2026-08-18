@@ -172,7 +172,14 @@ class InvitationService:
         db.refresh(invitation)
         return invitation
 
-    def accept(self, db: Session, token: str, accepting_user_id: UUID) -> OrganizationMembership:
+    def accept(
+        self,
+        db: Session,
+        token: str,
+        accepting_user_id: UUID,
+        accepting_email: str | None,
+        accepting_email_verified: bool,
+    ) -> OrganizationMembership:
         token_hash = _hash_token(token)
         invitation = db.scalar(
             select(OrganizationInvitation)
@@ -207,6 +214,27 @@ class InvitationService:
                 db.commit()
             raise InvitationServiceError(
                 "Invitation has expired", code="invitation_expired", status=409
+            )
+
+        # Recipient binding: an invitation is issued to a specific email
+        # recipient, and possession of the token alone is not sufficient
+        # authorization to redeem it. Checked only for a still-PENDING
+        # invitation with no matching branch above, so this never fires for
+        # the already-accepted/revoked/expired cases, and -- critically --
+        # does not mutate or consume the invitation: the intended recipient
+        # can still redeem the same token after a mismatched attempt. Does
+        # not distinguish "no email claim" / "unverified" / "wrong email" in
+        # the response, so a caller can't use this endpoint to probe which
+        # of those is true for a token they don't legitimately own.
+        if (
+            not accepting_email
+            or not accepting_email_verified
+            or _normalize_email(accepting_email) != invitation.email
+        ):
+            raise InvitationServiceError(
+                "This invitation is not available to your authenticated identity",
+                code="invitation_recipient_mismatch",
+                status=403,
             )
 
         organization_id = invitation.organization_id

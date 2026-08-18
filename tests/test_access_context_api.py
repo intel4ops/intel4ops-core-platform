@@ -144,6 +144,8 @@ def test_invitation_lifecycle_via_api(client: TestClient, identity: IdentityStat
 
     invitee_id = uuid4()
     identity.user_id = invitee_id
+    identity.email = "invitee@example.com"
+    identity.email_verified = True
     accepted = client.post("/api/v1/invitations/accept", json={"token": token})
     assert accepted.status_code == 200
     membership = accepted.json()
@@ -164,6 +166,36 @@ def test_invitation_lifecycle_via_api(client: TestClient, identity: IdentityStat
     )
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
+
+
+def test_invitation_accept_rejects_recipient_mismatch_via_api(
+    client: TestClient, identity: IdentityState
+) -> None:
+    identity.is_platform_admin = False
+    organization = create_organization_self_service(client, "invitation-api-mismatch")
+    organization_id = organization["id"]
+
+    created = client.post(
+        f"/api/v1/organizations/{organization_id}/invitations",
+        json={"email": "intended@example.com", "role": MembershipRole.ANALYST.value},
+    )
+    assert created.status_code == 201
+    token = created.json()["token"]
+
+    imposter = uuid4()
+    identity.user_id = imposter
+    identity.email = "imposter@example.com"
+    identity.email_verified = True
+    mismatched = client.post("/api/v1/invitations/accept", json={"token": token})
+    assert mismatched.status_code == 403
+    assert mismatched.json()["detail"]["code"] == "invitation_recipient_mismatch"
+
+    identity.user_id = uuid4()
+    identity.email = "intended@example.com"
+    identity.email_verified = True
+    accepted = client.post("/api/v1/invitations/accept", json={"token": token})
+    assert accepted.status_code == 200
+    assert accepted.json()["role"] == MembershipRole.ANALYST.value
 
 
 def test_invitation_creation_requires_organization_admin_role(
@@ -207,6 +239,8 @@ def test_invitation_accept_ignores_role_supplied_by_caller(
     token = created.json()["token"]
 
     identity.user_id = uuid4()
+    identity.email = "escalation@example.com"
+    identity.email_verified = True
     accepted = client.post(
         "/api/v1/invitations/accept",
         json={"token": token, "role": MembershipRole.ORGANIZATION_ADMIN.value},

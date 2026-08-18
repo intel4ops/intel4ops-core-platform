@@ -21,6 +21,14 @@ GOVERNED_INTEL4OPS_IDENTITY_NAMESPACE = UUID("6f6e5f4a-9b1d-4c3e-8a2f-2f7b6e1d5c
 class AuthenticatedUser:
     user_id: UUID
     is_platform_admin: bool = False
+    # Recipient-binding evidence only (CMVP-01 invitation acceptance) --
+    # never the durable identity key. user_id (derived from issuer+subject
+    # above) remains the only identifier membership rows are keyed on.
+    # Populated from the OIDC provider's namespaced access-token claims
+    # (see _EMAIL_CLAIM/_EMAIL_VERIFIED_CLAIM below); absent for any token
+    # that doesn't carry them.
+    email: str | None = None
+    email_verified: bool = False
 
 
 class IdentityProvider(Protocol):
@@ -140,11 +148,27 @@ class OIDCIdentityProvider:
         if not isinstance(issuer, str) or not issuer or not isinstance(subject, str) or not subject:
             raise _authentication_invalid()
 
+        # Namespaced under the configured API audience -- Auth0 (and OIDC
+        # generally) rejects non-namespaced custom claims on access tokens,
+        # so these are only ever read under "<audience>/email" and
+        # "<audience>/email_verified", exactly as provisioned by the
+        # deployment's Post-Login Action. Never a bare "email"/
+        # "email_verified" claim: those are ID-token-only under standard
+        # OIDC and are not present on the access token Core validates here.
+        email_claim = payload.get(f"{settings.oidc_audience}/email")
+        email = email_claim if isinstance(email_claim, str) and email_claim else None
+        email_verified = payload.get(f"{settings.oidc_audience}/email_verified") is True
+
         # is_platform_admin is unconditionally False for every OIDC customer
         # identity in this remediation. No claim is read for it. Platform-
         # admin authentication is deferred to a future, explicitly-governed
         # package.
-        return AuthenticatedUser(user_id=_derive_user_id(issuer, subject), is_platform_admin=False)
+        return AuthenticatedUser(
+            user_id=_derive_user_id(issuer, subject),
+            is_platform_admin=False,
+            email=email,
+            email_verified=email_verified,
+        )
 
 
 _identity_provider: IdentityProvider = OIDCIdentityProvider()

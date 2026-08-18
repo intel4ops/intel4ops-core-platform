@@ -2,6 +2,7 @@ from datetime import timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.access import AccessAuditEvent, InvitationStatus, OrganizationInvitation
@@ -131,7 +132,7 @@ def test_accept_invitation_creates_active_membership_with_invitation_role(db: Se
     )
     accepting_user = uuid4()
 
-    membership = service.accept(db, token, accepting_user)
+    membership = service.accept(db, token, accepting_user, "accept@example.com", True)
 
     assert membership.organization_id == organization.id
     assert membership.user_id == accepting_user
@@ -163,7 +164,7 @@ def test_accept_invitation_reactivates_existing_revoked_membership(db: Session) 
         invited_by_user_id=uuid4(),
     )
 
-    membership = service.accept(db, token, accepting_user)
+    membership = service.accept(db, token, accepting_user, "reactivate@example.com", True)
 
     assert membership.id == existing.id
     assert membership.role == MembershipRole.OPERATOR.value
@@ -173,7 +174,7 @@ def test_accept_invitation_reactivates_existing_revoked_membership(db: Session) 
 def test_accept_invalid_token_raises_not_found(db: Session) -> None:
     service = InvitationService()
     with pytest.raises(InvitationServiceError) as excinfo:
-        service.accept(db, "not-a-real-token", uuid4())
+        service.accept(db, "not-a-real-token", uuid4(), "someone@example.com", True)
     assert excinfo.value.code == "invitation_not_found_or_invalid"
     assert excinfo.value.status == 404
 
@@ -190,7 +191,7 @@ def test_accept_revoked_invitation_raises_conflict(db: Session) -> None:
     service.revoke(db, organization.id, invitation.id, uuid4())
 
     with pytest.raises(InvitationServiceError) as excinfo:
-        service.accept(db, token, uuid4())
+        service.accept(db, token, uuid4(), "revoked-accept@example.com", True)
     assert excinfo.value.code == "invitation_revoked"
     assert excinfo.value.status == 409
 
@@ -208,7 +209,7 @@ def test_accept_expired_invitation_flips_status_and_raises(db: Session) -> None:
     db.commit()
 
     with pytest.raises(InvitationServiceError) as excinfo:
-        service.accept(db, token, uuid4())
+        service.accept(db, token, uuid4(), "expired@example.com", True)
     assert excinfo.value.code == "invitation_expired"
     assert excinfo.value.status == 409
 
@@ -228,8 +229,27 @@ def test_accept_is_idempotent_for_same_accepting_user(db: Session) -> None:
     )
     accepting_user = uuid4()
 
-    first = service.accept(db, token, accepting_user)
-    second = service.accept(db, token, accepting_user)
+    first = service.accept(db, token, accepting_user, "idempotent@example.com", True)
+    second = service.accept(db, token, accepting_user, "idempotent@example.com", True)
+    assert first.id == second.id
+
+
+def test_accept_is_idempotent_for_same_user_without_re_presenting_email(db: Session) -> None:
+    """Once accepted by this exact identity, the early accepted-by-same-user
+    return path is reached before the recipient-binding check, so a second
+    call needn't re-supply a matching (or any) email claim."""
+    service = InvitationService()
+    organization = create_organization(db, "invitation-idempotent-no-email")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="idempotent-no-email@example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+    accepting_user = uuid4()
+
+    first = service.accept(db, token, accepting_user, "idempotent-no-email@example.com", True)
+    second = service.accept(db, token, accepting_user, None, False)
     assert first.id == second.id
 
 
@@ -242,12 +262,134 @@ def test_accept_already_accepted_by_different_user_raises_conflict(db: Session) 
         InvitationCreate(email="cross-user@example.com", role=MembershipRole.VIEWER),
         invited_by_user_id=uuid4(),
     )
-    service.accept(db, token, uuid4())
+    service.accept(db, token, uuid4(), "cross-user@example.com", True)
 
     with pytest.raises(InvitationServiceError) as excinfo:
-        service.accept(db, token, uuid4())
+        service.accept(db, token, uuid4(), "cross-user@example.com", True)
     assert excinfo.value.code == "invitation_conflict"
     assert excinfo.value.status == 409
+
+
+def test_accept_rejects_mismatched_recipient_email(db: Session) -> None:
+    service = InvitationService()
+    organization = create_organization(db, "invitation-recipient-mismatch")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="pilot.user@example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+    imposter = uuid4()
+
+    with pytest.raises(InvitationServiceError) as excinfo:
+        service.accept(db, token, imposter, "other.user@example.com", True)
+    assert excinfo.value.code == "invitation_recipient_mismatch"
+    assert excinfo.value.status == 403
+
+    refreshed = db.scalar(
+        select(OrganizationInvitation).where(
+            OrganizationInvitation.organization_id == organization.id
+        )
+    )
+    assert refreshed is not None
+    assert refreshed.status == InvitationStatus.PENDING.value
+    assert refreshed.accepted_by_user_id is None
+    assert (
+        db.scalar(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == organization.id,
+                OrganizationMembership.user_id == imposter,
+            )
+        )
+        is None
+    )
+
+
+def test_accept_recipient_email_match_is_case_insensitive(db: Session) -> None:
+    service = InvitationService()
+    organization = create_organization(db, "invitation-case-insensitive")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="Pilot.User@Example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+    accepting_user = uuid4()
+
+    membership = service.accept(db, token, accepting_user, "pilot.user@EXAMPLE.com", True)
+    assert membership.user_id == accepting_user
+
+
+def test_accept_rejects_missing_email_claim(db: Session) -> None:
+    service = InvitationService()
+    organization = create_organization(db, "invitation-missing-email")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="needs-email@example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+
+    with pytest.raises(InvitationServiceError) as excinfo:
+        service.accept(db, token, uuid4(), None, True)
+    assert excinfo.value.code == "invitation_recipient_mismatch"
+    assert excinfo.value.status == 403
+
+
+def test_accept_rejects_unverified_email(db: Session) -> None:
+    service = InvitationService()
+    organization = create_organization(db, "invitation-unverified-email")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="needs-verify@example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+
+    with pytest.raises(InvitationServiceError) as excinfo:
+        service.accept(db, token, uuid4(), "needs-verify@example.com", False)
+    assert excinfo.value.code == "invitation_recipient_mismatch"
+    assert excinfo.value.status == 403
+
+
+def test_accept_recipient_mismatch_does_not_block_intended_recipient(db: Session) -> None:
+    service = InvitationService()
+    organization = create_organization(db, "invitation-mismatch-then-real")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="real.recipient@example.com", role=MembershipRole.ANALYST),
+        invited_by_user_id=uuid4(),
+    )
+
+    with pytest.raises(InvitationServiceError) as excinfo:
+        service.accept(db, token, uuid4(), "imposter@example.com", True)
+    assert excinfo.value.code == "invitation_recipient_mismatch"
+
+    intended_recipient = uuid4()
+    membership = service.accept(db, token, intended_recipient, "real.recipient@example.com", True)
+    assert membership.user_id == intended_recipient
+    assert membership.role == MembershipRole.ANALYST.value
+    assert membership.status == MembershipStatus.ACTIVE.value
+
+
+def test_accept_durable_identity_remains_issuer_subject_derived_user_id(db: Session) -> None:
+    """Recipient-binding is redemption-time evidence only. The membership's
+    durable key is still exactly the accepting_user_id the caller passed in
+    (in production, uuid5(issuer, subject) from AuthenticatedUser.user_id),
+    never anything derived from the email claim."""
+    service = InvitationService()
+    organization = create_organization(db, "invitation-durable-identity")
+    _, token = service.create(
+        db,
+        organization.id,
+        InvitationCreate(email="durable@example.com", role=MembershipRole.VIEWER),
+        invited_by_user_id=uuid4(),
+    )
+    issuer_subject_derived_id = uuid4()
+
+    membership = service.accept(db, token, issuer_subject_derived_id, "durable@example.com", True)
+    assert membership.user_id == issuer_subject_derived_id
 
 
 def test_list_invitations_filters_by_status(db: Session) -> None:
