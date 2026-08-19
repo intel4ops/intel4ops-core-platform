@@ -30,11 +30,20 @@ services:
         # which this project has never been tested or certified against.
         value: 3.12.13
       - key: APP_ENV
-        value: production
+        # Prompted rather than hard-coded so the same blueprint can deploy
+        # either a real production instance (APP_ENV=production, pilot auth
+        # vars below left unset) or a temporary pilot instance
+        # (APP_ENV=pilot, or any non-"production" value, with the pilot
+        # auth vars below configured). Pilot auth is hard-disabled whenever
+        # this is exactly "production" -- see app/auth/pilot_bridge.py.
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGINS
-        value: https://app.intel4ops.com
+        # Comma-separated explicit origin allowlist (no wildcard). Includes
+        # the deployed IntelOps Navigator frontend (P3.xxA.2) alongside the
+        # existing intel4ops.com origin.
+        value: https://app.intel4ops.com,https://intelops-navigator.lovable.app
       - key: OIDC_ISSUER
         sync: false
       - key: OIDC_AUDIENCE
@@ -43,3 +52,28 @@ services:
         sync: false
       - key: OIDC_ALLOWED_ALGORITHMS
         value: RS256
+      # ------------------------------------------------------------------
+      # P3.xxA.2 pilot auth bridge -- temporary. Leave ALL four unset for a
+      # real production deployment (APP_ENV=production already disables
+      # this bridge unconditionally, but leaving these blank too avoids any
+      # ambiguity). Only set them for a non-production pilot instance:
+      #   PILOT_AUTH_ENABLED=true
+      #   PILOT_AUTH_TOKEN=<a generated secret, not a guessable string>
+      #   PILOT_USER_ID=<a fixed UUID for the pilot operator identity>
+      #   PILOT_PLATFORM_ADMIN=true   (only if the pilot identity needs to
+      #                                 create/list organizations)
+      # PILOT_AUTH_TOKEN is an operator-held bootstrap credential ONLY. It
+      # must never be placed in a VITE_* variable, the Navigator/Lovable
+      # frontend source, a JS bundle, localStorage, or any other
+      # browser-visible configuration. See README.md "Recommended pilot
+      # security model" for the bootstrap-once-then-normal-auth flow, and
+      # app/auth/pilot_bridge.py for full activation rules.
+      # ------------------------------------------------------------------
+      - key: PILOT_AUTH_ENABLED
+        sync: false
+      - key: PILOT_AUTH_TOKEN
+        sync: false
+      - key: PILOT_USER_ID
+        sync: false
+      - key: PILOT_PLATFORM_ADMIN
+        sync: false
