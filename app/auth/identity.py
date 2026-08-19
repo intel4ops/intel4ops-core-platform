@@ -24,8 +24,8 @@ class AuthenticatedUser:
     # Recipient-binding evidence only (CMVP-01 invitation acceptance) --
     # never the durable identity key. user_id (derived from issuer+subject
     # above) remains the only identifier membership rows are keyed on.
-    # Populated from the OIDC provider's namespaced access-token claims
-    # (see _EMAIL_CLAIM/_EMAIL_VERIFIED_CLAIM below); absent for any token
+    # Populated from the standard top-level "email"/"email_verified" OIDC
+    # access-token claims (see authenticate() below); absent for any token
     # that doesn't carry them.
     email: str | None = None
     email_verified: bool = False
@@ -148,16 +148,25 @@ class OIDCIdentityProvider:
         if not isinstance(issuer, str) or not issuer or not isinstance(subject, str) or not subject:
             raise _authentication_invalid()
 
-        # Namespaced under the configured API audience -- Auth0 (and OIDC
-        # generally) rejects non-namespaced custom claims on access tokens,
-        # so these are only ever read under "<audience>/email" and
-        # "<audience>/email_verified", exactly as provisioned by the
-        # deployment's Post-Login Action. Never a bare "email"/
-        # "email_verified" claim: those are ID-token-only under standard
-        # OIDC and are not present on the access token Core validates here.
-        email_claim = payload.get(f"{settings.oidc_audience}/email")
+        # Standard top-level OIDC claims. Supabase Auth (SBASE-03's live
+        # provider) puts "email" directly on the access token; the earlier
+        # Auth0 configuration this replaces required namespacing custom
+        # claims under the API audience instead, since Auth0 rejects
+        # non-namespaced custom claims on access tokens -- that constraint
+        # was provider-specific, not a general OIDC requirement, so reading
+        # the standard claim location is the more provider-neutral choice
+        # going forward. SBASE-01 empirically confirmed Supabase's access
+        # token carries no top-level "email_verified" claim at all -- only
+        # the client-editable, untrusted "user_metadata.email_verified" --
+        # so this deliberately never reads anywhere under "user_metadata".
+        # Reading the standard top-level claim location correctly yields
+        # email_verified=False today without a Supabase-specific special
+        # case, and will correctly pick up a real value the moment a
+        # trustworthy top-level claim exists (SBASE-04's job -- e.g. a
+        # Supabase Custom Access Token Hook asserting it server-side).
+        email_claim = payload.get("email")
         email = email_claim if isinstance(email_claim, str) and email_claim else None
-        email_verified = payload.get(f"{settings.oidc_audience}/email_verified") is True
+        email_verified = payload.get("email_verified") is True
 
         # is_platform_admin is unconditionally False for every OIDC customer
         # identity in this remediation. No claim is read for it. Platform-
