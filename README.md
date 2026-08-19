@@ -234,6 +234,12 @@ Production authentication intentionally fails closed until a real identity provi
 configured. The test identity dependency used by the test suite is not a production
 authentication implementation and must never be enabled in a deployed environment.
 
+`OIDCIdentityProvider` is provider-neutral and has been confirmed (no code changes) to
+verify IntelOps Navigator's Supabase Auth ES256/JWKS tokens as well as Auth0's RS256
+tokens — see
+[`docs/architecture/supabase-navigator-oidc.md`](docs/architecture/supabase-navigator-oidc.md)
+for the confirmed contract and required environment variables.
+
 ### Pilot auth bridge (temporary, P3.xxA.2)
 
 `app/auth/pilot_bridge.py` adds an optional, environment-gated bearer-token identity used
