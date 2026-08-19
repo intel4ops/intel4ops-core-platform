@@ -8,13 +8,14 @@ from uuid import uuid4
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from jwt import PyJWKClient
-from jwt.algorithms import RSAAlgorithm
+from jwt.algorithms import ECAlgorithm, RSAAlgorithm
 
 import app.auth.identity as identity_module
 from app.auth.identity import (
@@ -28,6 +29,11 @@ from app.core.config import Settings
 ISSUER = "https://issuer.test/"
 AUDIENCE = "intel4ops-test-audience"
 
+# Shape of the live SBASE-01 Supabase contract: a project-specific issuer
+# URL, the fixed "authenticated" role literal as audience, ES256 signing.
+SUPABASE_ISSUER = "https://valgxugrfkoaqlttigph.supabase.co/auth/v1"
+SUPABASE_AUDIENCE = "authenticated"
+
 
 def _unique_jwks_url() -> str:
     return f"https://idp.test/jwks/{uuid4().hex}.json"
@@ -37,18 +43,26 @@ def _new_rsa_key() -> RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def _jwk_for(key: RSAPrivateKey, kid: str) -> dict[str, Any]:
-    jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
-    jwk.update({"kid": kid, "use": "sig", "alg": "RS256"})
+def _new_ec_key() -> EllipticCurvePrivateKey:
+    return ec.generate_private_key(ec.SECP256R1())
+
+
+def _jwk_for(key: RSAPrivateKey | EllipticCurvePrivateKey, kid: str) -> dict[str, Any]:
+    if isinstance(key, RSAPrivateKey):
+        jwk = RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+        jwk.update({"kid": kid, "use": "sig", "alg": "RS256"})
+    else:
+        jwk = ECAlgorithm.to_jwk(key.public_key(), as_dict=True)
+        jwk.update({"kid": kid, "use": "sig", "alg": "ES256"})
     return jwk
 
 
-def _jwks_document(*keys: tuple[RSAPrivateKey, str]) -> dict[str, Any]:
+def _jwks_document(*keys: tuple[RSAPrivateKey | EllipticCurvePrivateKey, str]) -> dict[str, Any]:
     return {"keys": [_jwk_for(key, kid) for key, kid in keys]}
 
 
 def _sign(
-    key: RSAPrivateKey,
+    key: RSAPrivateKey | EllipticCurvePrivateKey,
     kid: str,
     *,
     issuer: str = ISSUER,
@@ -137,12 +151,12 @@ def test_valid_rs256_jwt_authenticates(
 
 
 # ---------------------------------------------------------------------------
-# 1b. namespaced email/email_verified claims (CMVP-01 recipient binding) are
-# extracted only under "<audience>/email" and "<audience>/email_verified" --
-# never a bare "email"/"email_verified" claim, which is ID-token-only under
-# standard OIDC and never present on the access token this provider verifies.
+# 1b. SBASE-03: email/email_verified are read from the standard top-level
+# "email"/"email_verified" claims (Supabase's actual shape), never from the
+# CMVP-01 Auth0 namespaced "<audience>/email" pattern, and never from
+# nested user_metadata -- Supabase's own client-editable, untrusted field.
 # ---------------------------------------------------------------------------
-def test_namespaced_email_claims_extracted(
+def test_top_level_email_claims_extracted(
     monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
 ) -> None:
     key = _new_rsa_key()
@@ -152,10 +166,7 @@ def test_namespaced_email_claims_extracted(
     token = _sign(
         key,
         "kid-1",
-        extra_claims={
-            f"{AUDIENCE}/email": "Pilot.User@Example.com",
-            f"{AUDIENCE}/email_verified": True,
-        },
+        extra_claims={"email": "Pilot.User@Example.com", "email_verified": True},
     )
 
     user = provider.authenticate(f"Bearer {token}")
@@ -164,20 +175,54 @@ def test_namespaced_email_claims_extracted(
     assert user.email_verified is True
 
 
-def test_bare_email_claim_ignored(
+def test_namespaced_email_claim_no_longer_read(
     monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
 ) -> None:
+    """Regression guard: the retired Auth0 namespaced-claim pattern must not
+    be silently reintroduced or accidentally still matched."""
     key = _new_rsa_key()
     url = _unique_jwks_url()
     _configure(monkeypatch, jwks_url=url)
     _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
     token = _sign(
-        key, "kid-1", extra_claims={"email": "not-namespaced@example.com", "email_verified": True}
+        key,
+        "kid-1",
+        extra_claims={
+            f"{AUDIENCE}/email": "namespaced@example.com",
+            f"{AUDIENCE}/email_verified": True,
+        },
     )
 
     user = provider.authenticate(f"Bearer {token}")
 
     assert user.email is None
+    assert user.email_verified is False
+
+
+def test_user_metadata_email_verified_never_trusted(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    """SBASE-01 finding: Supabase's access token carries no trustworthy
+    top-level email_verified claim, only the client-editable
+    user_metadata.email_verified. That field must never be read as
+    authorization-relevant evidence, no matter how it's nested -- doing so
+    would let an authenticated user assert their own verification status."""
+    key = _new_rsa_key()
+    url = _unique_jwks_url()
+    _configure(monkeypatch, jwks_url=url)
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        extra_claims={
+            "email": "pilot@example.com",
+            "user_metadata": {"email": "pilot@example.com", "email_verified": True},
+        },
+    )
+
+    user = provider.authenticate(f"Bearer {token}")
+
+    assert user.email == "pilot@example.com"
     assert user.email_verified is False
 
 
@@ -193,10 +238,7 @@ def test_email_verified_string_true_not_treated_as_verified(
     token = _sign(
         key,
         "kid-1",
-        extra_claims={
-            f"{AUDIENCE}/email": "pilot@example.com",
-            f"{AUDIENCE}/email_verified": "false",
-        },
+        extra_claims={"email": "pilot@example.com", "email_verified": "false"},
     )
 
     user = provider.authenticate(f"Bearer {token}")
@@ -710,3 +752,325 @@ def test_live_me_endpoint_accepts_valid_token(monkeypatch: pytest.MonkeyPatch) -
     unauthenticated = TestClient(app).get("/api/v1/me")
     assert unauthenticated.status_code == 401
     assert unauthenticated.json()["detail"]["code"] == "authentication_required"
+
+
+# ---------------------------------------------------------------------------
+# SBASE-03: Supabase JWT contract (ES256, project-specific issuer, aud
+# literal "authenticated"). These mirror the generic RS256 negative tests
+# above against the exact algorithm/issuer shape the live provider uses,
+# rather than assuming the generic mechanism transfers untested.
+# ---------------------------------------------------------------------------
+def test_valid_es256_supabase_shaped_jwt_authenticates(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="ES256",
+        subject=str(uuid4()),
+        extra_claims={"email": "pilot@example.com", "role": "authenticated"},
+    )
+
+    user = provider.authenticate(f"Bearer {token}")
+
+    assert user.email == "pilot@example.com"
+    # No top-level email_verified claim in the real Supabase contract (per
+    # SBASE-01) -- must resolve to False, never inferred from anything else.
+    assert user.email_verified is False
+    assert user.is_platform_admin is False
+
+
+def test_wrong_supabase_project_issuer_rejected(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    """A token from a *different* Supabase project must be rejected purely
+    on issuer mismatch -- proving issuer, not the literal "authenticated"
+    audience, is what actually binds Core to its configured project."""
+    key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    other_project_issuer = "https://someoneelsesproject.supabase.co/auth/v1"
+    token = _sign(
+        key,
+        "kid-1",
+        issuer=other_project_issuer,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="ES256",
+    )
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        provider.authenticate(f"Bearer {token}")
+    assert excinfo.value.detail["code"] == "authentication_invalid"
+    assert excinfo.value.status_code == 401
+
+
+def test_es256_tampered_signature_rejected(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key, "kid-1", issuer=SUPABASE_ISSUER, audience=SUPABASE_AUDIENCE, algorithm="ES256"
+    )
+    header, payload, signature = token.split(".")
+    tampered = f"{header}.{payload}.{signature[:-2]}{'AA' if signature[-2:] != 'AA' else 'BB'}"
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        provider.authenticate(f"Bearer {tampered}")
+    assert excinfo.value.detail["code"] == "authentication_invalid"
+
+
+def test_es256_wrong_signing_key_rejected(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    trusted_key = _new_ec_key()
+    attacker_key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((trusted_key, "kid-1")))
+    token = _sign(
+        attacker_key,
+        "kid-1",
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="ES256",
+    )
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        provider.authenticate(f"Bearer {token}")
+    assert excinfo.value.detail["code"] == "authentication_invalid"
+
+
+def test_rs256_token_rejected_when_only_es256_configured(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    """A deployment configured for Supabase's ES256 must not accidentally
+    still accept an RS256 (e.g. stale Auth0-shaped) token."""
+    key = _new_rsa_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="RS256",
+    )
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        provider.authenticate(f"Bearer {token}")
+    assert excinfo.value.detail["code"] == "authentication_invalid"
+
+
+def test_es256_expired_jwt_rejected(
+    monkeypatch: pytest.MonkeyPatch, provider: OIDCIdentityProvider
+) -> None:
+    key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    token = _sign(
+        key,
+        "kid-1",
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="ES256",
+        expires_in=-60,
+    )
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        provider.authenticate(f"Bearer {token}")
+    assert excinfo.value.detail["code"] == "authentication_invalid"
+
+
+# ---------------------------------------------------------------------------
+# SBASE-03 requirement 9 (A, B): a cryptographically valid, Supabase-shaped
+# token resolves through the REAL identity provider (not the IdentityState
+# test double used elsewhere in the suite) into Core's real membership/RBAC
+# model -- authenticated-but-no-workspace when no membership exists, and the
+# correct organization/role once one does. Tenant isolation and insufficient-
+# role 403 (C, D) are exercised extensively elsewhere in the suite against
+# the same AuthenticatedUser contract this real-JWT path also produces, so
+# they are not duplicated here with full JWT plumbing.
+# ---------------------------------------------------------------------------
+def _real_jwt_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any, str, Any]:
+    from collections.abc import Generator as _Generator
+
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.session import Base, get_db
+    from app.main import app
+
+    key = _new_ec_key()
+    url = _unique_jwks_url()
+    _configure(
+        monkeypatch,
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        jwks_url=url,
+        algorithms="ES256",
+    )
+    _patch_jwks_fetch(monkeypatch, _jwks_document((key, "kid-1")))
+    subject = str(uuid4())
+    token = _sign(
+        key,
+        "kid-1",
+        issuer=SUPABASE_ISSUER,
+        audience=SUPABASE_AUDIENCE,
+        algorithm="ES256",
+        subject=subject,
+        extra_claims={"email": "pilot@example.com"},
+    )
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _fk(dbapi_connection: object, _: object) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def override_get_db() -> _Generator[Any, None, None]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    return app, engine, token, factory
+
+
+def test_real_supabase_jwt_with_no_membership_yields_no_workspace_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.session import get_db
+
+    app, engine, token, _factory = _real_jwt_test_client(monkeypatch)
+    try:
+        with TestClient(app) as client:
+            me = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
+            context = client.get("/api/v1/me/context", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        from app.db.session import Base
+
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+    assert me.status_code == 200
+    assert me.json()["memberships"] == []
+    assert context.status_code == 200
+    assert context.json()["state"] == "no_membership"
+
+
+def test_real_supabase_jwt_with_membership_resolves_org_and_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from uuid import UUID
+
+    from app.db.session import get_db
+    from app.models.entities import MembershipRole, MembershipStatus
+    from app.schemas.contracts import OrganizationCreate
+    from app.schemas.memberships import MembershipCreate
+    from app.services.membership_service import OrganizationMembershipService
+    from app.services.organization_service import OrganizationService
+
+    app, engine, token, factory = _real_jwt_test_client(monkeypatch)
+    try:
+        header, payload_b64, _sig = token.split(".")
+        import base64 as _b64
+
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        claims = json.loads(_b64.urlsafe_b64decode(padded))
+        user_id = _derive_user_id(claims["iss"], claims["sub"])
+
+        with factory() as session:
+            org = OrganizationService().create(
+                session,
+                OrganizationCreate(
+                    name="Real JWT Org",
+                    slug="real-jwt-org",
+                    country_code="US",
+                    default_currency="USD",
+                    timezone="UTC",
+                ),
+            )
+            OrganizationMembershipService().create(
+                session,
+                org.id,
+                MembershipCreate(
+                    user_id=user_id,
+                    role=MembershipRole.ORGANIZATION_ADMIN,
+                    status=MembershipStatus.ACTIVE,
+                ),
+                invited_by_user_id=UUID(int=0),
+            )
+            session.commit()
+
+        with TestClient(app) as client:
+            context = client.get("/api/v1/me/context", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        from app.db.session import Base
+
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+    assert context.status_code == 200
+    body = context.json()
+    assert body["state"] == "active"
+    assert body["role"] == MembershipRole.ORGANIZATION_ADMIN.value
+    assert body["organization"]["slug"] == "real-jwt-org"
