@@ -234,6 +234,78 @@ Production authentication intentionally fails closed until a real identity provi
 configured. The test identity dependency used by the test suite is not a production
 authentication implementation and must never be enabled in a deployed environment.
 
+### Pilot auth bridge (temporary, P3.xxA.2)
+
+`app/auth/pilot_bridge.py` adds an optional, environment-gated bearer-token identity used
+only as a **one-time, operator-held bootstrap credential** to unblock a pilot deployment
+(e.g. SOTRA) before real platform-admin provisioning ships. It is disabled by default and
+**cannot activate when `APP_ENV=production`**, regardless of the `PILOT_AUTH_*` settings.
+See that module's docstring for the exact activation rules, and `app/core/config.py` for
+the four `PILOT_AUTH_*` / `pilot_*` settings. This bridge is temporary and should be
+removed once real platform-admin provisioning is implemented; do not build further
+features on top of it.
+
+**`PILOT_AUTH_TOKEN` must never reach the browser.** It is a bootstrap/testing credential
+for an operator to call the API directly (curl, Postman, an admin script) — never embed it
+in a `VITE_*` variable, Lovable/Navigator frontend source, a compiled JavaScript bundle,
+`localStorage`, or any other browser-visible configuration. The Navigator frontend must
+never hold or send this token. Normal Operator use of Navigator authenticates through the
+frontend's own real identity provider and never touches the pilot bridge at all (see the
+recommended flow below).
+
+### Recommended pilot security model (bootstrap once, then normal auth only)
+
+The platform already has a self-service organization/membership path that does **not**
+require platform-admin for normal operation — the pilot bridge is only needed for the
+one-time bootstrap step, and only if no real authenticated identity is available yet to
+perform it:
+
+1. **Bootstrap** (operator only, one time): an authenticated identity — either a real
+   Navigator/OIDC user if one is already available, or the pilot bridge token used
+   directly against the API (never through the browser) — calls
+   `POST /api/v1/me/organizations` (`app/api/access_routes.py`) with the SOTRA Pilot
+   payload. This creates the organization **and** atomically grants the caller an active
+   `organization_admin` membership on it (`create_organization_with_owner` in
+   `app/services/access_context_service.py`). No platform-admin role is required or
+   granted by this call.
+2. **Provision real users** (by that `organization_admin`, via the API): call
+   `POST /api/v1/organizations/{organization_id}/invitations` (`app/api/invitation_routes.py`)
+   with `{"email": "<operator's real email>", "role": "analyst"}` (or `"operator"` —
+   whichever is the minimum role the pilot needs; both satisfy
+   `MAINTENANCE_ANALYSIS_ROLES` and `ORGANIZATION_READ_ROLES`). This returns a one-time
+   invitation token, delivered out-of-band (never via the pilot bridge or the browser).
+3. **Real user accepts, under their own identity**: the invitee, authenticated as
+   themselves through Navigator's normal login, calls `POST /api/v1/invitations/accept`
+   with `{"token": "..."}`. `invitation_service.accept` binds the resulting
+   `OrganizationMembership` to *their own* OIDC-derived `user_id` — never the pilot
+   identity's. From this point on that user's normal Navigator session satisfies
+   `require_organization_roles(...)` for `POST /intelligence/maintenance/analyze` and
+   `GET /command/findings` with no elevated privilege and no pilot token involved.
+4. The pilot bridge is not touched again after step 1. It exists purely to get past the
+   "no real identity can self-bootstrap yet" chicken-and-egg problem once.
+
+This is the existing, unmodified membership/invitation contract — no new endpoints or
+membership behavior were added for this.
+
+### Frontend organization context
+
+Navigator needs to know which `organization_id` to send on org-scoped calls. Two existing
+mechanisms already cover this without a new endpoint:
+
+- `GET /api/v1/me` (`CurrentIdentityRead`) returns the caller's active memberships, each
+  with its `organization` (id/name/slug/status) and `role`.
+- `GET /api/v1/me/context[?organization_id=...]` (`AccessContextRead`) resolves a specific
+  membership's state (`active`, `no_membership`, `multiple_organizations`,
+  `suspended_organization`, `revoked_membership`, `pending_invitation`) plus
+  `permitted_actions` and `entitlement_summary` — the richer "am I set up correctly here"
+  check a frontend would want after login.
+
+For a single-tenant pilot with exactly one organization, an environment-configured
+`organization_id` (a non-secret UUID) in Navigator is an acceptable short-term
+simplification once step 1 above has run and the id is known — but `GET /api/v1/me` is
+the durable, self-describing mechanism and should be preferred as soon as it's practical,
+since it needs no redeploy if the organization or a user's membership changes.
+
 ## Findings and explainability
 
 WP-2.08 governed findings, immutable evidence, trace, review, lifecycle,

@@ -1,7 +1,14 @@
 from functools import lru_cache
+from uuid import UUID
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Local frontend dev origins used only when CORS_ORIGINS is unset AND
+# app_env != "production" -- see Settings.cors_origin_list. Never applied
+# in production, where an unset CORS_ORIGINS instead yields no allowed
+# origins (fail closed, not fail open).
+_DEFAULT_DEV_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 
 class Settings(BaseSettings):
@@ -27,7 +34,7 @@ class Settings(BaseSettings):
                 return "postgresql+psycopg://" + value[len(bare_prefix) :]
         return value
 
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = ""
     mapping_worker_id: str | None = Field(default=None, max_length=200)
     mapping_worker_poll_interval_seconds: float = Field(default=2.0, gt=0, le=60)
     mapping_worker_heartbeat_interval_seconds: float = Field(default=10.0, gt=0, le=60)
@@ -58,11 +65,30 @@ class Settings(BaseSettings):
     oidc_jwks_url: str | None = None
     oidc_allowed_algorithms: str = "RS256"
 
+    # ------------------------------------------------------------------
+    # P3.xxA.2 pilot auth bridge. Temporary, environment-gated bearer-token
+    # identity used only to unblock a pilot (e.g. SOTRA) before real
+    # platform-admin provisioning ships -- see app/auth/pilot_bridge.py for
+    # the activation rules. Disabled by default; cannot activate when
+    # app_env == "production" regardless of pilot_auth_enabled. No default
+    # is provided for pilot_auth_token or pilot_user_id -- both must be
+    # explicitly configured per deployment, never hard-coded.
+    # ------------------------------------------------------------------
+    pilot_auth_enabled: bool = False
+    pilot_auth_token: str | None = None
+    pilot_user_id: UUID | None = None
+    pilot_platform_admin: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+        configured = [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+        if configured:
+            return configured
+        if self.app_env == "production":
+            return []
+        return list(_DEFAULT_DEV_CORS_ORIGINS)
 
     @property
     def oidc_allowed_algorithm_list(self) -> list[str]:

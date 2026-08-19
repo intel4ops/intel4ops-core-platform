@@ -8,6 +8,7 @@ from fastapi import Header, HTTPException, status
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
+from app.auth.pilot_bridge import resolve_pilot_identity
 from app.core.config import get_settings
 
 # Governed namespace for deriving Intel4Ops user_id values from verified OIDC
@@ -184,4 +185,9 @@ _identity_provider: IdentityProvider = OIDCIdentityProvider()
 
 
 def get_current_user(authorization: str | None = Header(default=None)) -> AuthenticatedUser:
+    settings = get_settings()
+    pilot_match = resolve_pilot_identity(settings, authorization)
+    if pilot_match is not None:
+        pilot_user_id, pilot_is_platform_admin = pilot_match
+        return AuthenticatedUser(user_id=pilot_user_id, is_platform_admin=pilot_is_platform_admin)
     return _identity_provider.authenticate(authorization)
