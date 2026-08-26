@@ -51,7 +51,10 @@ services:
       - key: OIDC_JWKS_URL
         sync: false
       - key: OIDC_ALLOWED_ALGORITHMS
-        value: RS256
+        # Supabase Auth (the live provider as of SBASE-03) signs with
+        # ES256, not the Auth0-era RS256 this blueprint originally shipped
+        # with -- see docs/architecture/parking-lot/auth0-render-cmvp01.md.
+        value: ES256
       # ------------------------------------------------------------------
       # P3.xxA.2 pilot auth bridge -- temporary. Leave ALL four unset for a
       # real production deployment (APP_ENV=production already disables
