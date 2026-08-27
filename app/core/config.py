@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     mapping_worker_db_backoff_seconds: float = Field(default=5.0, gt=0, le=300)
     mapping_worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
 
+    # P3.xxC.1 Analysis Case storage/orchestration. storage_root is a local
+    # filesystem path (expected to sit on a Render persistent disk in
+    # production -- Core has no way to provision that disk itself). Never a
+    # secret. run_stale_after_seconds governs when a "running" AnalysisCaseRun
+    # whose heartbeat has gone stale (e.g. a process restart mid-run) is
+    # marked interrupted rather than left stuck forever.
+    storage_root: str = "./var/raw_storage"
+    max_artifact_size_bytes: int = Field(default=100_000_000, gt=0)
+    max_case_total_size_bytes: int = Field(default=1_000_000_000, gt=0)
+    run_stale_after_seconds: float = Field(default=300.0, gt=0, le=86_400)
+
     ai_enabled: bool = False
     ai_provider: str = "openai"
     ai_model: str = "gpt-5.6-terra"

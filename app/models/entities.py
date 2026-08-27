@@ -331,6 +331,16 @@ class Finding(Base):
     created_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     updated_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # P3.xxC.1: additive, nullable-only fields for Analysis Case findings.
+    # Never populated for pre-existing finding tracks; economic_status lets
+    # Command distinguish a directly observed value from one still pending
+    # governed economics without overloading measured_value/exposure_value.
+    economic_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    currency_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entities_json: Mapped[list[dict[str, object]] | None] = mapped_column(
+        portable_json, nullable=True
+    )
+    domains_json: Mapped[list[str] | None] = mapped_column(portable_json, nullable=True)
 
     organization: Mapped[Organization] = relationship(back_populates="findings")
     evidence: Mapped[list[FindingEvidence]] = relationship(

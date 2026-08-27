@@ -3,6 +3,21 @@ from app.models.access import (
     OrganizationInvitation,
 )
 from app.models.ai_profile import AIOperationalProfile, AIProfileInference
+from app.models.analysis_case import (
+    AnalysisCase,
+    AnalysisCaseAction,
+    AnalysisCaseActionFinding,
+    AnalysisCaseDataset,
+    AnalysisCaseEntityLink,
+    AnalysisCaseEvidenceObject,
+    AnalysisCaseFieldMapping,
+    AnalysisCaseFinding,
+    AnalysisCaseRecoveryRecord,
+    AnalysisCaseRun,
+    AnalysisCaseStageEvent,
+    FindingSourceDataset,
+    SourceArtifact,
+)
 from app.models.canonical_mapping import (
     CanonicalEntity,
     CanonicalEntityType,
@@ -462,6 +477,19 @@ __all__ = [
     "OrganizationChallenge",
     "OrganizationObjective",
     "OrganizationSystem",
+    "AnalysisCase",
+    "AnalysisCaseAction",
+    "AnalysisCaseActionFinding",
+    "AnalysisCaseDataset",
+    "AnalysisCaseEntityLink",
+    "AnalysisCaseEvidenceObject",
+    "AnalysisCaseFieldMapping",
+    "AnalysisCaseFinding",
+    "AnalysisCaseRecoveryRecord",
+    "AnalysisCaseRun",
+    "AnalysisCaseStageEvent",
+    "FindingSourceDataset",
+    "SourceArtifact",
 ]
 from app.models.actions import (
     ActionDependency,

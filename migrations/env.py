@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.db.session import Base
 from app.models import (
     access,  # noqa: F401
+    analysis_case,  # noqa: F401
     canonical_mapping,  # noqa: F401
     causal_intelligence,  # noqa: F401
     decision_intelligence,  # noqa: F401

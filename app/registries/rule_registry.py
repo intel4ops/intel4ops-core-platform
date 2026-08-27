@@ -139,5 +139,47 @@ def default_rule_registry() -> RuleRegistry:
                 RuleOperator.LESS_THAN,
                 ("value", "threshold"),
             ),
+            # P3.xxC.1 Analysis Case domain and cross-domain intelligence
+            # rules. Registered here (not a parallel registry) so governed
+            # finding publication can resolve definition_code/version to an
+            # active definition exactly like every other rule-based finding.
+            RuleDefinition(
+                "MAINT-001-REPEATED-FAILURE",
+                "1.0",
+                "Repeated asset failure",
+                "An asset has multiple recorded failure events within the analysis window.",
+                RuleOperator.GREATER_THAN,
+                ("failure_count", "threshold"),
+                analytical_level="arithmetic",
+            ),
+            RuleDefinition(
+                "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
+                "1.0",
+                "Asset failure interrupted operational activity",
+                "A maintenance downtime window overlaps one or more operational events "
+                "for the same resolved asset.",
+                RuleOperator.GREATER_THAN,
+                ("affected_event_count", "threshold"),
+                analytical_level="arithmetic",
+            ),
+            RuleDefinition(
+                "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
+                "1.0",
+                "Completed activity without linked revenue",
+                "A completed operational event has no matching transaction/revenue record.",
+                RuleOperator.GREATER_THAN,
+                ("unmatched_event_count", "threshold"),
+                analytical_level="arithmetic",
+            ),
+            RuleDefinition(
+                "XDOM-DATA-LINKAGE-ISSUE",
+                "1.0",
+                "Cross-domain data linkage issue",
+                "Operational activity could not be reliably matched to a related domain "
+                "record -- a data/semantic reconciliation issue, not a leakage claim.",
+                RuleOperator.GREATER_THAN,
+                ("unmatched_event_count", "threshold"),
+                analytical_level="arithmetic",
+            ),
         ]
     )
