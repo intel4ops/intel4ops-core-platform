@@ -56,6 +56,8 @@ class AnalysisCaseRead(BaseModel):
     created_by_user_id: UUID
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None
+    archived_by_user_id: UUID | None
 
 
 class AnalysisCaseRunRead(BaseModel):

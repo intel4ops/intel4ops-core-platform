@@ -18,7 +18,7 @@ from app.models.analysis_case import (
     ArtifactParserStatus,
     SourceArtifact,
 )
-from app.models.entities import Organization
+from app.models.entities import Organization, utc_now
 from app.models.ingestion import (
     Dataset,
     DatasetStatus,
@@ -115,14 +115,29 @@ class AnalysisCaseService:
             raise AnalysisCaseServiceError("Case not found", code="case_not_found", status=404)
         return case
 
-    def list_cases(self, db: Session, organization_id: UUID) -> list[AnalysisCase]:
-        return list(
-            db.scalars(
-                select(AnalysisCase)
-                .where(AnalysisCase.organization_id == organization_id)
-                .order_by(AnalysisCase.created_at.desc())
-            ).all()
-        )
+    def list_cases(
+        self, db: Session, organization_id: UUID, include_archived: bool = False
+    ) -> list[AnalysisCase]:
+        stmt = select(AnalysisCase).where(AnalysisCase.organization_id == organization_id)
+        if not include_archived:
+            stmt = stmt.where(AnalysisCase.archived_at.is_(None))
+        return list(db.scalars(stmt.order_by(AnalysisCase.created_at.desc())).all())
+
+    def archive(
+        self, db: Session, organization_id: UUID, analysis_case_id: UUID, actor_user_id: UUID
+    ) -> AnalysisCase:
+        """Soft-archive only -- never deletes the case or any artifact,
+        dataset, run, finding, action, or recovery record it produced.
+        Idempotent: archiving an already-archived case is a no-op that
+        returns its existing archived_at/archived_by_user_id unchanged."""
+        case = self.get(db, organization_id, analysis_case_id)
+        if case.archived_at is None:
+            case.archived_at = utc_now()
+            case.archived_by_user_id = actor_user_id
+            db.add(case)
+            db.commit()
+            db.refresh(case)
+        return case
 
     def _ensure_source_system(
         self, db: Session, organization_id: UUID, actor_user_id: UUID

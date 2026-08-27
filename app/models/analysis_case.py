@@ -188,6 +188,14 @@ class AnalysisCase(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
+    # P3.xxC.1E: soft-archive only, mirroring Finding.archived_at -- never a
+    # delete. Archiving hides a case from the default list view; every
+    # artifact, dataset, run, finding, action, and recovery record remains
+    # fully intact and directly retrievable by id, preserving the audit
+    # trail this feature is built around.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+
     runs: Mapped[list[AnalysisCaseRun]] = relationship(
         back_populates="analysis_case", cascade="all, delete-orphan"
     )

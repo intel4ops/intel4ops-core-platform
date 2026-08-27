@@ -80,10 +80,11 @@ def create_case(
 @router.get("", response_model=list[AnalysisCaseRead])
 def list_cases(
     organization_id: UUID,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     _: OrganizationAccess = Depends(require_organization_roles(*ANALYSIS_CASE_READ_ROLES)),
 ) -> object:
-    return analysis_case_service.list_cases(db, organization_id)
+    return analysis_case_service.list_cases(db, organization_id, include_archived=include_archived)
 
 
 @router.get("/{case_id}", response_model=AnalysisCaseRead)
@@ -95,6 +96,22 @@ def get_case(
 ) -> object:
     try:
         return analysis_case_service.get(db, organization_id, case_id)
+    except AnalysisCaseServiceError as exc:
+        _raise(exc)
+
+
+@router.post("/{case_id}/archive", response_model=AnalysisCaseRead)
+def archive_case(
+    organization_id: UUID,
+    case_id: UUID,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(require_organization_roles(*ANALYSIS_CASE_ADMIN_ROLES)),
+) -> object:
+    """Soft-archive only -- hides the case from the default list view.
+    Never deletes it or anything it produced; GET /{case_id} and every
+    nested route keep working unchanged for an archived case."""
+    try:
+        return analysis_case_service.archive(db, organization_id, case_id, access.user.user_id)
     except AnalysisCaseServiceError as exc:
         _raise(exc)
 
