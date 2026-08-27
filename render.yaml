@@ -21,7 +21,23 @@ services:
     buildCommand: pip install -e .
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/v1/health
+    # P3.xxC.1D: persistent disk backing StorageBackend/LocalFileStorage
+    # (app/storage/local_storage.py). Without this, SourceArtifact bytes
+    # written under STORAGE_ROOT live on Render's ephemeral instance
+    # filesystem and are lost on every redeploy/restart. sizeGB=10 is a
+    # pilot-scale starting point (config.py caps a single case at 1GB via
+    # max_case_total_size_bytes) -- resize in the Render dashboard as real
+    # case volume is observed.
+    disk:
+      name: intel4ops-storage
+      mountPath: /var/data/intel4ops
+      sizeGB: 10
     envVars:
+      - key: STORAGE_ROOT
+        # Must equal disk.mountPath above -- LocalFileStorage creates this
+        # directory on startup if missing, but it only survives redeploys
+        # when it is the mounted disk path, not a container-local default.
+        value: /var/data/intel4ops
       - key: PYTHON_VERSION
         # Pinned to the exact Python line this repo is certified against
         # (999+/1121+ passing tests, mypy, Ruff all run under CPython
