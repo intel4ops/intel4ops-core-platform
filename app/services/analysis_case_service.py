@@ -252,11 +252,25 @@ class AnalysisCaseService:
                 created.append(artifact)
                 continue
 
-            artifact.parser_status = (
-                ArtifactParserStatus.PARSED.value
-                if result.status != "failed"
-                else ArtifactParserStatus.FAILED.value
+            # "unavailable" covers two structurally different situations:
+            # a sub-feature is unavailable but the artifact was still
+            # genuinely processed (e.g. an image decodes fine and is
+            # preserved as evidence, only OCR text extraction is
+            # unavailable -- real content exists, parser_status stays
+            # PARSED), versus a parser whose runtime dependency itself
+            # could not load, so nothing was or could be attempted at all
+            # (e.g. PPTX/DOCX when lxml is blocked -- no content exists,
+            # so this is the same honest signal as no parser being
+            # registered for the format at all: UNSUPPORTED).
+            produced_content = bool(
+                result.datasets or result.evidence_objects or result.child_artifacts
             )
+            if result.status == "failed":
+                artifact.parser_status = ArtifactParserStatus.FAILED.value
+            elif result.status == "unavailable" and not produced_content:
+                artifact.parser_status = ArtifactParserStatus.UNSUPPORTED.value
+            else:
+                artifact.parser_status = ArtifactParserStatus.PARSED.value
             artifact.parser_code = result.parser_code
             artifact.parser_version = result.parser_version
             artifact.extraction_status = result.status
