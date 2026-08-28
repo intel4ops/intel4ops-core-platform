@@ -6425,7 +6425,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260827_0051"]
+    assert heads == ["20260828_0052"]
 
 
 @pytest.mark.postgres
@@ -6978,7 +6978,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260827_0051"]
+    assert heads == ["20260828_0052"]
 
 
 @pytest.mark.postgres
@@ -7011,7 +7011,7 @@ def test_p3_11_knowledge_pack_migration_round_trip_and_tenant_links(
     assert "knowledge_packs" not in inspect(postgres_engine).get_table_names()
     command.upgrade(config, "head")
     assert "knowledge_packs" in inspect(postgres_engine).get_table_names()
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260827_0051"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260828_0052"]
 
 
 @pytest.mark.postgres

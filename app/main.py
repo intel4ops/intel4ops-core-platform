@@ -56,6 +56,7 @@ from app.api.workspace_routes import catalog_router as workspace_catalog_router
 from app.api.workspace_routes import tenant_router as workspace_tenant_router
 from app.auth.request_context import RequestContextMiddleware
 from app.core.config import get_settings
+from app.ground_truth_validation.routes import router as validation_router
 
 settings = get_settings()
 
@@ -175,3 +176,4 @@ app.include_router(executive_narrative_router)
 app.include_router(workspace_catalog_router)
 app.include_router(workspace_tenant_router)
 app.include_router(analysis_case_router)
+app.include_router(validation_router)

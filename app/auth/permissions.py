@@ -187,3 +187,12 @@ DECISION_AUTHOR_ROLES = (
     MembershipRole.RECOVERY_MANAGER,
 )
 DECISION_APPROVE_ROLES = ORGANIZATION_ADMIN_ROLES
+
+# P3.xxD.1B Validation Plane -- deliberately mirrors ANALYSIS_CASE_* rather
+# than introducing new role semantics.
+VALIDATION_READ_ROLES = ORGANIZATION_READ_ROLES
+VALIDATION_WRITE_ROLES = (
+    MembershipRole.ORGANIZATION_ADMIN,
+    MembershipRole.ANALYST,
+    MembershipRole.OPERATOR,
+)
