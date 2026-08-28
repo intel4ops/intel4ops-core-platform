@@ -6,7 +6,7 @@ proven by literally re-running the same case before and after ground
 truth is uploaded and diffing everything production actually produced."""
 
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -54,7 +54,7 @@ def _organization(db: Session, slug: str) -> Organization:
     )
 
 
-def _snapshot(db: Session, org_id, case_id, run_id) -> dict[str, object]:
+def _snapshot(db: Session, org_id: UUID, case_id: UUID, run_id: UUID) -> dict[str, object]:
     """Everything production actually produced for one run, excluding
     fields that are *expected* to differ between two runs of the same
     input (run id, run_number, timestamps)."""

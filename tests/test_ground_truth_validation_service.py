@@ -124,7 +124,7 @@ def test_ground_truth_uploads_are_versioned_and_immutable(db: Session, tmp_path:
     simulation = validation_service.create_simulation(
         db, org.id, "SIM-VERSION-001", "Versioning", case.id, actor
     )
-    payload = {
+    payload: dict[str, object] = {
         "expected_findings": [
             {"expected_finding_code": "EXP-001", "domain": "maintenance", "severity": "high"}
         ]
