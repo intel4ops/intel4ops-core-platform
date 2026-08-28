@@ -8,7 +8,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.domain_registry import DOMAIN_SIGNATURES, canonicalize_field
-from app.models.analysis_case import AnalysisCaseFieldMapping, MappingStatus
+from app.models.analysis_case import AnalysisCaseFieldMapping, DetectionStatus, MappingStatus
 
 
 @dataclass(frozen=True)
@@ -31,12 +31,25 @@ class AnalysisCaseMappingService:
         analysis_case_dataset_id: object,
         dataframe: pd.DataFrame,
         domain: str | None,
+        detection_status: str | None = None,
     ) -> MappingBridgeResult:
+        # P3.xxC.2E: a domain's required canonical fields are only ever
+        # enforced once domain detection is itself CONFIRMED. A
+        # NEEDS_REVIEW or UNKNOWN detection is, by construction, already
+        # missing fields the signature requires (see
+        # domain_detection_service.detect_domain) -- re-enforcing that
+        # same requirement here would just relabel an unresolved domain
+        # guess as a "missing required field" mapping problem, which is
+        # exactly the false-positive review_required this correction
+        # removes. Domain uncertainty is surfaced separately as
+        # DOMAIN_REVIEW_REQUIRED (see analysis_case_orchestration_service
+        # .review_reasons), from the dataset's own detection_status.
         required_fields: frozenset[str] = frozenset()
-        for signature in DOMAIN_SIGNATURES:
-            if signature.domain == domain:
-                required_fields = signature.required_canonical_fields
-                break
+        if detection_status == DetectionStatus.CONFIRMED.value:
+            for signature in DOMAIN_SIGNATURES:
+                if signature.domain == domain:
+                    required_fields = signature.required_canonical_fields
+                    break
 
         rename_map: dict[str, str] = {}
         mappings: list[AnalysisCaseFieldMapping] = []

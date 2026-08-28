@@ -23,6 +23,7 @@ from app.schemas.analysis_case import (
     AnalysisCaseRecoveryRead,
     AnalysisCaseRecoveryUpsert,
     AnalysisCaseRunRead,
+    AnalysisCaseRunStatusRead,
 )
 from app.services.analysis_case_action_service import (
     AnalysisCaseActionServiceError,
@@ -219,7 +220,7 @@ def list_runs(
     )
 
 
-@router.get("/{case_id}/runs/{run_id}/status", response_model=AnalysisCaseRunRead)
+@router.get("/{case_id}/runs/{run_id}/status", response_model=AnalysisCaseRunStatusRead)
 def get_run_status(
     organization_id: UUID,
     case_id: UUID,
@@ -240,7 +241,17 @@ def get_run_status(
         analysis_case_orchestration_service.mark_stale_if_needed(
             db, run, get_settings().run_stale_after_seconds
         )
-    return run
+    reasons = analysis_case_orchestration_service.review_reasons(db, organization_id, case_id)
+    findings_available, findings_note = analysis_case_orchestration_service.findings_availability(
+        db, organization_id, case_id, run_id, run.status, reasons
+    )
+    return AnalysisCaseRunStatusRead(
+        **AnalysisCaseRunRead.model_validate(run).model_dump(),
+        review_reasons=reasons,
+        review_target=reasons[0].review_target if reasons else None,
+        findings_available=findings_available,
+        findings_note=findings_note,
+    )
 
 
 @router.get("/{case_id}/findings", response_model=list[AnalysisCaseFindingRead])

@@ -3,13 +3,21 @@ from __future__ import annotations
 from io import BytesIO
 
 import pandas as pd
-from docx import Document
 
 from app.ingestion.extraction_contract import (
     ArtifactExtractionResult,
     ExtractedDataset,
     ExtractedEvidence,
 )
+
+# See powerpoint_parser.py's module docstring comment: python-docx (and its
+# lxml dependency) is optional at runtime -- its unavailability must never
+# prevent the app from starting or unrelated parsers from working.
+_IMPORT_ERROR: str | None = None
+try:
+    from docx import Document
+except ImportError as exc:  # pragma: no cover -- environment dependent
+    _IMPORT_ERROR = str(exc)
 
 
 class WordParser:
@@ -21,7 +29,21 @@ class WordParser:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
+    def is_available(self) -> bool:
+        return _IMPORT_ERROR is None
+
     def extract(self, raw_bytes: bytes, filename: str) -> ArtifactExtractionResult:
+        if _IMPORT_ERROR is not None:
+            return ArtifactExtractionResult(
+                parser_code=self.code,
+                parser_version=self.version,
+                status="unavailable",
+                warnings=[
+                    "DOCX parsing dependency (python-docx/lxml) is unavailable in this "
+                    f"environment: {_IMPORT_ERROR}"
+                ],
+                extraction_metadata={"reason": "dependency_unavailable"},
+            )
         try:
             document = Document(BytesIO(raw_bytes))
         except Exception as exc:  # noqa: BLE001

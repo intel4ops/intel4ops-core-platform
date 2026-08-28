@@ -76,6 +76,35 @@ class AnalysisCaseRunRead(BaseModel):
     created_at: datetime
 
 
+class AnalysisCaseReviewReasonSchema(BaseModel):
+    """One concrete, actionable cause of a review_required run. Sourced
+    directly from AnalysisCaseFieldMapping rows with mapping_status
+    MISSING_REQUIRED_FIELD -- the same structure the mapping bridge already
+    persists on every run -- never a parallel issue-tracking table."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    stage: str
+    review_target: str
+    dataset_id: UUID
+    source_label: str
+    domain: str | None
+    missing_fields: list[str]
+    message: str
+
+
+class AnalysisCaseRunStatusRead(AnalysisCaseRunRead):
+    """Status-endpoint response: AnalysisCaseRunRead plus enough structure
+    for Navigator to explain review_required without inferring it from
+    unrelated endpoints."""
+
+    review_reasons: list[AnalysisCaseReviewReasonSchema] = Field(default_factory=list)
+    review_target: str | None = None
+    findings_available: bool
+    findings_note: str | None = None
+
+
 class AnalysisCaseDatasetRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pandas as pd
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.analysis_case import (
     AnalysisCase,
     AnalysisCaseDataset,
     AnalysisCaseEntityLink,
+    AnalysisCaseFieldMapping,
     AnalysisCaseFinding,
     AnalysisCaseRun,
     AnalysisCaseRunStatus,
     AnalysisCaseStageEvent,
     AnalysisCaseStatus,
+    DetectionStatus,
     EntityLinkStatus,
+    MappingStatus,
     SourceArtifact,
     StageEventStatus,
 )
@@ -57,6 +61,55 @@ _DOMAIN_TRUST_RULES: dict[str, dict[str, dict[str, object]]] = {
         },
     },
 }
+
+# The only domains any wired intelligence path actually consumes (see
+# run_maintenance_pack / run_asset_failure_to_lost_activity /
+# run_lost_activity_to_revenue_gap below, all keyed on these same three
+# domain strings). An uncertain (NEEDS_REVIEW) classification into a
+# domain outside this set has no intelligence path to block, so it must
+# not force the run into review_required -- reused, not duplicated, from
+# _DOMAIN_TRUST_RULES's own key set.
+_INTELLIGENCE_RELEVANT_DOMAINS = frozenset(_DOMAIN_TRUST_RULES.keys())
+
+
+# ---------------------------------------------------------------------------
+# P3.xxC.2E: review_required actionability. Two conditions set
+# any_review_required (see execute() below):
+#   1. A CONFIRMED-domain dataset whose mapping bridge still could not
+#      resolve every required field (MAPPING_REVIEW_REQUIRED) -- kept as
+#      a safety net; structurally unreachable in ordinary operation since
+#      P3.xxC.2E now only enforces required fields once detection is
+#      itself CONFIRMED (see analysis_case_mapping_service.apply).
+#   2. A dataset whose domain detection is NEEDS_REVIEW (plausible but
+#      unconfirmed evidence) in a domain that actually feeds a wired
+#      intelligence path (DOMAIN_REVIEW_REQUIRED) -- this is the
+#      corrected replacement for the old false-positive trigger, where a
+#      dataset with only generic fields (e.g. asset_id alone) was
+#      wrongly coerced into a specific domain and then flagged for
+#      "missing" fields it was never plausibly going to have.
+# review_reasons() reuses the exact same persisted signals
+# (AnalysisCaseDataset.mapping_status / detection_status,
+# AnalysisCaseFieldMapping rows), never a parallel issue subsystem. Only
+# the review-reason codes the backend genuinely produces are represented
+# -- new codes must come with a new any_review_required trigger in
+# execute(), not be added speculatively here.
+# ---------------------------------------------------------------------------
+_REVIEW_TARGET_BY_CODE = {
+    "MAPPING_REVIEW_REQUIRED": "mapping",
+    "DOMAIN_REVIEW_REQUIRED": "sources",
+}
+
+
+@dataclass(frozen=True)
+class ReviewReason:
+    code: str
+    stage: str
+    review_target: str
+    dataset_id: UUID
+    source_label: str
+    domain: str | None
+    missing_fields: list[str]
+    message: str
 
 
 class AnalysisCaseOrchestrationError(ValueError):
@@ -273,11 +326,27 @@ class AnalysisCaseOrchestrationService:
             case_dataset.trust_assessment_id = trust_assessment_id
 
             mapping_result = analysis_case_mapping_service.apply(
-                organization_id, case_dataset.id, raw_df, case_dataset.detected_domain
+                organization_id,
+                case_dataset.id,
+                raw_df,
+                case_dataset.detected_domain,
+                case_dataset.detection_status,
             )
             analysis_case_mapping_service.persist(db, case_dataset.id, mapping_result)
             case_dataset.mapping_status = mapping_result.overall_status
             if mapping_result.overall_status == "needs_review":
+                # Kept as a safety net for a genuine mapping-level problem
+                # on an already-CONFIRMED domain -- structurally distinct
+                # from (and, since P3.xxC.2E, no longer triggered by) an
+                # uncertain domain classification, which is handled below.
+                any_review_required = True
+            if (
+                case_dataset.detection_status == DetectionStatus.NEEDS_REVIEW.value
+                and case_dataset.detected_domain in _INTELLIGENCE_RELEVANT_DOMAINS
+            ):
+                # Only a domain that actually feeds a wired intelligence
+                # path warrants operator review -- an uncertain guess in a
+                # domain nothing downstream consumes has no path to block.
                 any_review_required = True
             db.add(case_dataset)
             db.commit()
@@ -462,6 +531,132 @@ class AnalysisCaseOrchestrationService:
             StageEventStatus.COMPLETED.value,
             {"run_status": run.status, "findings_published": len(published_finding_ids)},
         )
+
+    def review_reasons(
+        self, db: Session, organization_id: UUID, analysis_case_id: UUID
+    ) -> list[ReviewReason]:
+        """Every AnalysisCaseDataset currently in mapping_status
+        NEEDS_REVIEW, one reason per dataset, each carrying the exact
+        missing canonical fields recorded by the mapping bridge. Dataset
+        mapping_status reflects the case's most recent run (see
+        analysis_case_mapping_service.persist's docstring: recomputed
+        fresh on every run, never accumulated) -- the same latest-state
+        semantics the existing /datasets endpoint already exposes, not a
+        new inconsistency introduced here."""
+        needs_review_datasets = list(
+            db.scalars(
+                select(AnalysisCaseDataset).where(
+                    AnalysisCaseDataset.organization_id == organization_id,
+                    AnalysisCaseDataset.analysis_case_id == analysis_case_id,
+                    AnalysisCaseDataset.mapping_status == MappingStatus.NEEDS_REVIEW.value,
+                )
+            ).all()
+        )
+        reasons: list[ReviewReason] = []
+        for case_dataset in needs_review_datasets:
+            missing_fields = sorted(
+                canonical_field
+                for canonical_field in db.scalars(
+                    select(AnalysisCaseFieldMapping.canonical_field).where(
+                        AnalysisCaseFieldMapping.analysis_case_dataset_id == case_dataset.id,
+                        AnalysisCaseFieldMapping.mapping_status
+                        == MappingStatus.MISSING_REQUIRED_FIELD.value,
+                    )
+                ).all()
+                if canonical_field is not None
+            )
+            domain_clause = (
+                f"detected as {case_dataset.detected_domain!r}"
+                if (case_dataset.detected_domain)
+                else "detected domain could not be confirmed"
+            )
+            reasons.append(
+                ReviewReason(
+                    code="MAPPING_REVIEW_REQUIRED",
+                    stage="mapping",
+                    review_target=_REVIEW_TARGET_BY_CODE["MAPPING_REVIEW_REQUIRED"],
+                    dataset_id=case_dataset.dataset_id,
+                    source_label=case_dataset.source_label,
+                    domain=case_dataset.detected_domain,
+                    missing_fields=missing_fields,
+                    message=(
+                        f"Dataset {case_dataset.source_label!r} ({domain_clause}) is missing "
+                        f"required field(s): {', '.join(missing_fields) or 'unknown'}."
+                    ),
+                )
+            )
+
+        # DOMAIN_REVIEW_REQUIRED: a NEEDS_REVIEW domain classification in a
+        # domain a wired intelligence path actually consumes -- the exact
+        # same condition execute() uses to set any_review_required, so
+        # this list can never disagree with why the run actually ended
+        # review_required.
+        ambiguous_datasets = list(
+            db.scalars(
+                select(AnalysisCaseDataset).where(
+                    AnalysisCaseDataset.organization_id == organization_id,
+                    AnalysisCaseDataset.analysis_case_id == analysis_case_id,
+                    AnalysisCaseDataset.detection_status == DetectionStatus.NEEDS_REVIEW.value,
+                    AnalysisCaseDataset.detected_domain.in_(_INTELLIGENCE_RELEVANT_DOMAINS),
+                )
+            ).all()
+        )
+        for case_dataset in ambiguous_datasets:
+            basis = ", ".join(case_dataset.detection_basis) or "no domain-specific fields"
+            reasons.append(
+                ReviewReason(
+                    code="DOMAIN_REVIEW_REQUIRED",
+                    stage="domain_detection",
+                    review_target=_REVIEW_TARGET_BY_CODE["DOMAIN_REVIEW_REQUIRED"],
+                    dataset_id=case_dataset.dataset_id,
+                    source_label=case_dataset.source_label,
+                    domain=case_dataset.detected_domain,
+                    missing_fields=[],
+                    message=(
+                        f"Dataset {case_dataset.source_label!r} looks like it might be "
+                        f"{case_dataset.detected_domain!r} (matched: {basis}) but not enough "
+                        "domain-specific evidence was found to confirm it. Confirm or correct "
+                        "the source classification before this dataset's intelligence can run."
+                    ),
+                )
+            )
+        return reasons
+
+    def findings_availability(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        run_status: str,
+        reasons: list[ReviewReason],
+    ) -> tuple[bool, str | None]:
+        """Makes explicit whether an empty findings list means 'nothing
+        was found' vs. 'processing didn't get far enough to find
+        anything' -- never leave Navigator inferring this itself."""
+        finding_count = db.scalar(
+            select(func.count())
+            .select_from(AnalysisCaseFinding)
+            .where(
+                AnalysisCaseFinding.organization_id == organization_id,
+                AnalysisCaseFinding.analysis_case_id == analysis_case_id,
+                AnalysisCaseFinding.run_id == run_id,
+            )
+        )
+        if finding_count:
+            return True, None
+        if run_status == AnalysisCaseRunStatus.REVIEW_REQUIRED.value and reasons:
+            stages = sorted({reason.stage for reason in reasons})
+            labels = sorted({reason.source_label for reason in reasons})
+            return False, (
+                f"Findings not produced because {', '.join(stages)} review is required "
+                f"for {len(labels)} dataset(s): {', '.join(labels)}."
+            )
+        if run_status == AnalysisCaseRunStatus.PARTIAL.value:
+            return False, (
+                "Findings not produced because processing failed for one or more datasets."
+            )
+        return False, None
 
     def mark_stale_if_needed(
         self, db: Session, run: AnalysisCaseRun, stale_after_seconds: float

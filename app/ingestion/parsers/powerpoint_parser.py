@@ -3,13 +3,26 @@ from __future__ import annotations
 from io import BytesIO
 
 import pandas as pd
-from pptx import Presentation
 
 from app.ingestion.extraction_contract import (
     ArtifactExtractionResult,
     ExtractedDataset,
     ExtractedEvidence,
 )
+
+# python-pptx (and its lxml dependency) is optional at runtime: some
+# deployment environments block lxml's compiled extension outright (e.g. an
+# Application Control / EDR policy). That must never prevent the app from
+# starting or prevent unrelated CSV/JSON/XLSX artifacts from being
+# processed -- this parser stays registered and its class stays
+# importable/instantiable either way; only extract() is gated, and it
+# reports an honest ArtifactExtractionResult(status="unavailable") instead
+# of raising ImportError/NameError at call time.
+_IMPORT_ERROR: str | None = None
+try:
+    from pptx import Presentation
+except ImportError as exc:  # pragma: no cover -- environment dependent
+    _IMPORT_ERROR = str(exc)
 
 
 class PowerPointParser:
@@ -21,7 +34,21 @@ class PowerPointParser:
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
 
+    def is_available(self) -> bool:
+        return _IMPORT_ERROR is None
+
     def extract(self, raw_bytes: bytes, filename: str) -> ArtifactExtractionResult:
+        if _IMPORT_ERROR is not None:
+            return ArtifactExtractionResult(
+                parser_code=self.code,
+                parser_version=self.version,
+                status="unavailable",
+                warnings=[
+                    "PPTX parsing dependency (python-pptx/lxml) is unavailable in this "
+                    f"environment: {_IMPORT_ERROR}"
+                ],
+                extraction_metadata={"reason": "dependency_unavailable"},
+            )
         try:
             presentation = Presentation(BytesIO(raw_bytes))
         except Exception as exc:  # noqa: BLE001

@@ -108,6 +108,17 @@ def canonicalize_field(source_field: str) -> str | None:
     return None
 
 
+# P3.xxC.2E: canonical concepts that are generic entity/context signals
+# shared across virtually every domain (asset_id also covers its aliases
+# equipment_id/vehicle_id/etc via CANONICAL_FIELD_ALIASES; event_date
+# covers date/timestamp; depot_id covers location_id). None of these may
+# independently CONFIRM a specialized domain -- a dataset carrying only
+# generic fields is UNKNOWN, not a false-positive match on whichever
+# domain signature happens to require that field. Drawn from the existing
+# alias registry above, not a new vocabulary.
+GENERIC_CANONICAL_FIELDS: frozenset[str] = frozenset({"asset_id", "event_date", "depot_id"})
+
+
 @dataclass(frozen=True)
 class DomainSignature:
     domain: str
