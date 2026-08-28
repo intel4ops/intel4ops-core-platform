@@ -22,7 +22,15 @@ class NestedTestAdapter:
     supported_schema_version = ADAPTER_CODE
 
     def can_handle(self, package_metadata: dict[str, object]) -> bool:
-        return package_metadata.get("schema_version") == self.adapter_code
+        # Pure shape detection (P3.xxD.1E.1): documents.expected_findings
+        # is an object keyed by "case_findings", never a bare list -- that
+        # alone distinguishes it from simulation_truth_v1's shape (a list)
+        # and simple_v1's shape (no "documents" envelope at all).
+        documents = package_metadata.get("documents")
+        if not isinstance(documents, dict):
+            return False
+        container = documents.get("expected_findings")
+        return isinstance(container, dict) and "case_findings" in container
 
     def normalize(self, package_documents: dict[str, object]) -> NormalizedPackage:
         documents = package_documents.get("documents")

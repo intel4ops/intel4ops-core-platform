@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.ground_truth_validation.adapters.base import GroundTruthFormatError
 from app.ground_truth_validation.adapters.registry import (
+    AdapterSelectionError,
     default_ground_truth_package_adapter_registry,
 )
 from app.ground_truth_validation.causal_matcher import score_causal
@@ -148,18 +149,36 @@ class ValidationService:
                 "Simulation not found", code="simulation_not_found", status=404
             )
 
+        source_schema_version = payload.get("schema_version")
         package_metadata = {
-            "schema_version": payload.get("schema_version"),
+            "schema_version": source_schema_version,
             "manifest": payload.get("manifest"),
             "documents": payload.get("documents"),
             "expected_findings": payload.get("expected_findings"),
         }
-        adapter = default_ground_truth_package_adapter_registry.select(package_metadata)
-        if adapter is None:
+        selection = default_ground_truth_package_adapter_registry.select_for_package(
+            package_metadata
+        )
+        if selection.adapter is None:
+            if selection.error == AdapterSelectionError.UNKNOWN_SCHEMA_VERSION:
+                supported = ", ".join(selection.supported_schema_versions)
+                raise ValidationServiceError(
+                    f"schema_version {source_schema_version!r} is not a recognized ground-truth "
+                    f"package schema. Supported: {supported}",
+                    code="unknown_package_schema_version",
+                )
+            if selection.error == AdapterSelectionError.AMBIGUOUS:
+                candidates = ", ".join(selection.candidate_codes)
+                raise ValidationServiceError(
+                    "More than one ground-truth package adapter recognizes this payload shape "
+                    f"({candidates}). Declare an explicit schema_version to disambiguate.",
+                    code="ambiguous_package_schema",
+                )
             raise ValidationServiceError(
                 "No registered ground-truth package adapter recognizes this payload shape",
                 code="unrecognized_package_schema",
             )
+        adapter = selection.adapter
         try:
             normalized = adapter.normalize(payload)
         except GroundTruthFormatError as exc:
@@ -200,6 +219,9 @@ class ValidationService:
             adapter_code=normalized.adapter_code,
             adapter_version=normalized.adapter_version,
             schema_version=normalized.schema_version,
+            source_schema_version=(
+                source_schema_version if isinstance(source_schema_version, str) else None
+            ),
             manifest_summary=manifest_summary,
             uploaded_by_user_id=actor_user_id,
         )

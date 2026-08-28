@@ -19,10 +19,15 @@ from decimal import Decimal
 
 from fixtures.nested_test_adapter import nested_test_adapter
 
-from app.ground_truth_validation.adapters.registry import default_adapter_registry
+from app.ground_truth_validation.adapters.registry import (
+    AdapterSelectionError,
+    GroundTruthPackageAdapterRegistry,
+    default_adapter_registry,
+)
 from app.ground_truth_validation.adapters.simple_v1 import simple_v1_adapter
 from app.ground_truth_validation.adapters.simulation_truth_v1 import simulation_truth_v1_adapter
 from app.ground_truth_validation.integrity import validate_package_integrity
+from app.ground_truth_validation.ontology import NormalizedPackage
 
 SCENARIO_FAMILIES = (
     "preventive_maintenance_missed",
@@ -131,7 +136,8 @@ def _build_sim_005_scale_package(finding_count: int = 387, dq_count: int = 60) -
     }
 
 
-def test_registry_selects_simulation_truth_v1_for_sim_005_shaped_package() -> None:
+def test_registry_selects_simulation_truth_v1_for_explicit_recognized_schema() -> None:
+    """Section 8 test 1: known explicit schema -> correct adapter."""
     registry = default_adapter_registry()
     package = _build_sim_005_scale_package(finding_count=3, dq_count=1)
     metadata: dict[str, object] = {
@@ -139,26 +145,96 @@ def test_registry_selects_simulation_truth_v1_for_sim_005_shaped_package() -> No
         "manifest": package["manifest"],
         "documents": package["documents"],
     }
-    adapter = registry.select(metadata)
-    assert adapter is not None
-    assert adapter.adapter_code == "intel4ops_simulation_truth_v1"
+    selection = registry.select_for_package(metadata)
+    assert selection.error is None
+    assert selection.adapter is not None
+    assert selection.adapter.adapter_code == "intel4ops_simulation_truth_v1"
+
+
+def test_registry_selects_simulation_truth_v1_by_shape_when_schema_version_absent() -> None:
+    """Section 7/8 test 2 -- the actual live defect (P3.xxD.1E.1): the real
+    SIM-OFS-FIELDMAINT-005 truth_manifest.json has no schema_version field
+    at all. Selection must work from can_handle() shape-detection alone,
+    never require the caller to invent a placeholder value."""
+    registry = default_adapter_registry()
+    package = _build_sim_005_scale_package(finding_count=3, dq_count=1)
+    metadata: dict[str, object] = {
+        "schema_version": None,
+        "manifest": package["manifest"],
+        "documents": package["documents"],
+    }
+    selection = registry.select_for_package(metadata)
+    assert selection.error is None
+    assert selection.adapter is not None
+    assert selection.adapter.adapter_code == "intel4ops_simulation_truth_v1"
 
 
 def test_registry_selects_simple_v1_for_flat_v1_payload() -> None:
+    """Section 8 test 6: simple V1 backward compatibility unchanged."""
     registry = default_adapter_registry()
     metadata: dict[str, object] = {
         "expected_findings": [
             {"expected_finding_code": "EXP-1", "domain": "maintenance", "severity": "high"}
         ]
     }
-    adapter = registry.select(metadata)
-    assert adapter is not None
-    assert adapter.adapter_code == "intel4ops_simple_v1"
+    selection = registry.select_for_package(metadata)
+    assert selection.error is None
+    assert selection.adapter is not None
+    assert selection.adapter.adapter_code == "intel4ops_simple_v1"
 
 
-def test_registry_returns_none_for_unrecognized_shape() -> None:
+def test_registry_reports_unrecognized_for_unmatched_shape() -> None:
+    """Section 8 test 3: absent schema + no adapter -> unrecognized_package_schema."""
     registry = default_adapter_registry()
-    assert registry.select({"nope": True}) is None
+    selection = registry.select_for_package({"nope": True})
+    assert selection.adapter is None
+    assert selection.error == AdapterSelectionError.UNRECOGNIZED
+
+
+def test_registry_reports_ambiguous_when_multiple_adapters_match() -> None:
+    """Section 8 test 4: absent schema + multiple matches ->
+    ambiguous_package_schema, never a silent first-match pick."""
+    registry = GroundTruthPackageAdapterRegistry()
+
+    class _AlwaysMatches:
+        adapter_code = "test_always_a"
+        adapter_version = "1.0"
+        supported_schema_version = "test_always_a"
+
+        def can_handle(self, package_metadata: dict[str, object]) -> bool:
+            return True
+
+        def normalize(self, package_documents: dict[str, object]) -> NormalizedPackage:
+            raise NotImplementedError
+
+    class _AlsoAlwaysMatches(_AlwaysMatches):
+        adapter_code = "test_always_b"
+        supported_schema_version = "test_always_b"
+
+    registry.register(_AlwaysMatches())
+    registry.register(_AlsoAlwaysMatches())
+    selection = registry.select_for_package({"anything": True})
+    assert selection.adapter is None
+    assert selection.error == AdapterSelectionError.AMBIGUOUS
+    assert set(selection.candidate_codes) == {"test_always_a", "test_always_b"}
+
+
+def test_registry_reports_unknown_for_unrecognized_explicit_schema_version() -> None:
+    """Section 8 test 5: unknown explicit schema -> explicit schema-version
+    error, never a silent fall-through to shape-detection (a typo must not
+    trigger a guess)."""
+    registry = default_adapter_registry()
+    package = _build_sim_005_scale_package(finding_count=3, dq_count=1)
+    metadata: dict[str, object] = {
+        "schema_version": "v2",
+        "manifest": package["manifest"],
+        "documents": package["documents"],
+    }
+    selection = registry.select_for_package(metadata)
+    assert selection.adapter is None
+    assert selection.error == AdapterSelectionError.UNKNOWN_SCHEMA_VERSION
+    assert "intel4ops_simulation_truth_v1" in selection.supported_schema_versions
+    assert "intel4ops_simple_v1" in selection.supported_schema_versions
 
 
 def test_sim_005_scale_package_normalizes_to_exact_authored_counts() -> None:
@@ -265,7 +341,10 @@ def test_fixture_b_nested_records_and_different_field_names() -> None:
             }
         },
     }
-    assert nested_test_adapter.can_handle({"schema_version": "test_nested_v1"})
+    # Pure shape detection (P3.xxD.1E.1) -- recognized by its nested
+    # case_findings container, not by the schema_version string.
+    assert nested_test_adapter.can_handle(package)
+    assert not nested_test_adapter.can_handle({"documents": {"expected_findings": []}})
     normalized = nested_test_adapter.normalize(package)
     assert len(normalized.expected_findings) == 2
     assert normalized.expected_findings[0].truth_finding_id == "F-1"
@@ -369,8 +448,9 @@ def test_simple_v1_adapter_still_matches_original_flat_shape() -> None:
         "expected_clean_areas": ["revenue"],
         "tolerance": {"economic_variance_pct": 10},
     }
-    adapter = registry.select(payload)
-    assert adapter is simple_v1_adapter
+    selection = registry.select_for_package(payload)
+    assert selection.adapter is simple_v1_adapter
+    adapter = selection.adapter
     normalized = adapter.normalize(payload)
     assert len(normalized.expected_findings) == 1
     assert normalized.expected_findings[0].domain == "maintenance"

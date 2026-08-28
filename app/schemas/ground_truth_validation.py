@@ -55,17 +55,24 @@ class GroundTruthUpload(BaseModel):
 
 
 class GroundTruthPackageUploadV2(BaseModel):
-    """V2 (section 15): a versioned, multi-document package. schema_version
-    selects (or hints at) the GroundTruthPackageAdapter
-    (app/ground_truth_validation/adapters/) that interprets `manifest` and
-    `documents`; document roles and their field names are owned entirely
-    by that adapter, not by this schema -- Core normalizes the whole
-    package server-side, so the frontend never derives matching/scores/
-    domains itself (section 16)."""
+    """V2 (section 15): a versioned, multi-document package envelope.
+    GroundTruthPackageUploadV2 is the API envelope version -- it is NOT the
+    authored ground-truth schema identifier (P3.xxD.1E.1). `schema_version`
+    is optional: if the authored manifest declares a recognized schema
+    identifier, pass it through verbatim and Core selects that exact
+    GroundTruthPackageAdapter (app/ground_truth_validation/adapters/); if
+    it's omitted (e.g. the real SIM-OFS-FIELDMAINT-005 truth_manifest.json
+    has no schema_version field at all), Core selects an adapter by
+    shape-detection instead (adapter.can_handle()). Never invent a
+    placeholder value like "v2" -- an unrecognized non-null schema_version
+    is a hard error, not a hint. Document roles and their field names are
+    owned entirely by whichever adapter is selected, not by this schema --
+    Core normalizes the whole package server-side, so the frontend never
+    derives matching/scores/domains itself (section 16)."""
 
     model_config = ConfigDict(extra="allow")
 
-    schema_version: str
+    schema_version: str | None = None
     manifest: dict[str, object] | None = None
     documents: dict[str, object]
 
@@ -140,6 +147,12 @@ class GroundTruthRead(BaseModel):
     version: int
     checksum: str
     schema_version: str
+    # P3.xxD.1E.1: the raw schema_version the caller declared, exactly as
+    # sent -- None means the caller genuinely omitted it and `schema_version`
+    # above (the selected adapter's own identifier) was resolved via
+    # can_handle() shape-detection instead. Never rewritten to look like it
+    # was declared.
+    source_schema_version: str | None
     adapter_code: str | None
     adapter_version: str | None
     manifest_summary: dict[str, object] | None

@@ -18,11 +18,10 @@ class SimpleV1Adapter:
     supported_schema_version = ADAPTER_CODE
 
     def can_handle(self, package_metadata: dict[str, object]) -> bool:
-        declared = package_metadata.get("schema_version")
-        if declared:
-            return declared == self.adapter_code
-        # No manifest, no declared schema, no document-role envelope at
-        # all -- just a top-level expected_findings list. That is
+        # Pure shape detection -- schema_version routing (explicit lookup
+        # vs. shape-detection fallback) is the registry's job, not this
+        # adapter's (P3.xxD.1E.1). No manifest, no document-role envelope
+        # at all -- just a top-level expected_findings list. That is
         # unambiguously the V1 shape.
         return isinstance(package_metadata.get("expected_findings"), list) and not isinstance(
             package_metadata.get("documents"), dict
