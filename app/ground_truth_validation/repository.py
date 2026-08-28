@@ -7,8 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ground_truth_validation import (
+    ValidationCausalTruth,
+    ValidationDataQualityTruth,
     ValidationExpectedFinding,
     ValidationGroundTruth,
+    ValidationGroundTruthDocument,
+    ValidationLeakageTruth,
+    ValidationPackageIntegrityIssue,
     ValidationSimulation,
 )
 
@@ -89,6 +94,66 @@ class ValidationGroundTruthRepository:
                 select(ValidationExpectedFinding).where(
                     ValidationExpectedFinding.organization_id == organization_id,
                     ValidationExpectedFinding.ground_truth_id == ground_truth_id,
+                )
+            ).all()
+        )
+
+    def list_leakage_truth(
+        self, db: Session, organization_id: UUID, ground_truth_id: UUID
+    ) -> list[ValidationLeakageTruth]:
+        return list(
+            db.scalars(
+                select(ValidationLeakageTruth).where(
+                    ValidationLeakageTruth.organization_id == organization_id,
+                    ValidationLeakageTruth.ground_truth_id == ground_truth_id,
+                )
+            ).all()
+        )
+
+    def list_causal_truth(
+        self, db: Session, organization_id: UUID, ground_truth_id: UUID
+    ) -> list[ValidationCausalTruth]:
+        return list(
+            db.scalars(
+                select(ValidationCausalTruth).where(
+                    ValidationCausalTruth.organization_id == organization_id,
+                    ValidationCausalTruth.ground_truth_id == ground_truth_id,
+                )
+            ).all()
+        )
+
+    def list_data_quality_truth(
+        self, db: Session, organization_id: UUID, ground_truth_id: UUID
+    ) -> list[ValidationDataQualityTruth]:
+        return list(
+            db.scalars(
+                select(ValidationDataQualityTruth).where(
+                    ValidationDataQualityTruth.organization_id == organization_id,
+                    ValidationDataQualityTruth.ground_truth_id == ground_truth_id,
+                )
+            ).all()
+        )
+
+    def list_documents(
+        self, db: Session, organization_id: UUID, ground_truth_id: UUID
+    ) -> list[ValidationGroundTruthDocument]:
+        return list(
+            db.scalars(
+                select(ValidationGroundTruthDocument).where(
+                    ValidationGroundTruthDocument.organization_id == organization_id,
+                    ValidationGroundTruthDocument.ground_truth_id == ground_truth_id,
+                )
+            ).all()
+        )
+
+    def list_integrity_issues(
+        self, db: Session, organization_id: UUID, ground_truth_id: UUID
+    ) -> list[ValidationPackageIntegrityIssue]:
+        return list(
+            db.scalars(
+                select(ValidationPackageIntegrityIssue).where(
+                    ValidationPackageIntegrityIssue.organization_id == organization_id,
+                    ValidationPackageIntegrityIssue.ground_truth_id == ground_truth_id,
                 )
             ).all()
         )

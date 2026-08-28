@@ -9,9 +9,13 @@ from app.auth.permissions import VALIDATION_READ_ROLES, VALIDATION_WRITE_ROLES
 from app.db.session import get_db
 from app.ground_truth_validation.repository import validation_ground_truth_repository
 from app.ground_truth_validation.service import ValidationServiceError, validation_service
+from app.models.ground_truth_validation import ValidationGroundTruth
 from app.schemas.ground_truth_validation import (
+    ExpectedFindingRead,
+    GroundTruthPackageUploadV2,
     GroundTruthRead,
     GroundTruthUpload,
+    IntegrityIssueRead,
     ValidationResultRead,
     ValidationResultsHistoryRead,
     ValidationSimulationCreate,
@@ -27,6 +31,36 @@ def _raise(exc: Exception, default_status: int = 400) -> NoReturn:
     code = getattr(exc, "code", "validation_error")
     detail = {"code": code, "message": str(exc)}
     raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _ground_truth_read(
+    db: Session, organization_id: UUID, ground_truth: ValidationGroundTruth
+) -> GroundTruthRead:
+    expected = validation_ground_truth_repository.list_expected_findings(
+        db, organization_id, ground_truth.id
+    )
+    leakage = validation_ground_truth_repository.list_leakage_truth(
+        db, organization_id, ground_truth.id
+    )
+    causal = validation_ground_truth_repository.list_causal_truth(
+        db, organization_id, ground_truth.id
+    )
+    dq = validation_ground_truth_repository.list_data_quality_truth(
+        db, organization_id, ground_truth.id
+    )
+    issues = validation_ground_truth_repository.list_integrity_issues(
+        db, organization_id, ground_truth.id
+    )
+    return GroundTruthRead.model_validate(ground_truth).model_copy(
+        update={
+            "expected_finding_count": len(expected),
+            "leakage_truth_count": len(leakage),
+            "causal_truth_count": len(causal),
+            "data_quality_truth_count": len(dq),
+            "integrity_issues": [IntegrityIssueRead.model_validate(i) for i in issues],
+            "expected_findings": [ExpectedFindingRead.model_validate(f) for f in expected],
+        }
+    )
 
 
 @router.post(
@@ -59,12 +93,12 @@ def create_simulation(
 def upload_ground_truth(
     organization_id: UUID,
     simulation_id: UUID,
-    payload: GroundTruthUpload,
+    payload: GroundTruthUpload | GroundTruthPackageUploadV2,
     db: Session = Depends(get_db),
     access: OrganizationAccess = Depends(require_organization_roles(*VALIDATION_WRITE_ROLES)),
 ) -> object:
     try:
-        return validation_service.upload_ground_truth(
+        ground_truth = validation_service.upload_ground_truth(
             db,
             organization_id,
             simulation_id,
@@ -73,6 +107,7 @@ def upload_ground_truth(
         )
     except ValidationServiceError as exc:
         _raise(exc)
+    return _ground_truth_read(db, organization_id, ground_truth)
 
 
 @router.get("/simulations/{simulation_id}", response_model=ValidationSimulationDetail)
@@ -87,16 +122,7 @@ def get_simulation(
     except ValidationServiceError as exc:
         _raise(exc)
     versions = validation_service.list_ground_truth_versions(db, organization_id, simulation_id)
-    ground_truth_versions = []
-    for version in versions:
-        expected = validation_ground_truth_repository.list_expected_findings(
-            db, organization_id, version.id
-        )
-        ground_truth_versions.append(
-            GroundTruthRead.model_validate(version).model_copy(
-                update={"expected_findings": expected}
-            )
-        )
+    ground_truth_versions = [_ground_truth_read(db, organization_id, v) for v in versions]
     return ValidationSimulationDetail(
         **ValidationSimulationRead.model_validate(simulation).model_dump(),
         ground_truth_versions=ground_truth_versions,
@@ -116,12 +142,12 @@ def validate_run(
     access: OrganizationAccess = Depends(require_organization_roles(*VALIDATION_WRITE_ROLES)),
 ) -> object:
     try:
-        run, score, matches = validation_service.validate_run(
+        run, score, dimensions, matches = validation_service.validate_run(
             db, organization_id, simulation_id, analysis_run_id, access.user.user_id
         )
     except ValidationServiceError as exc:
         _raise(exc)
-    return ValidationResultRead(run=run, score=score, matches=matches)
+    return ValidationResultRead(run=run, score=score, dimensions=dimensions, matches=matches)
 
 
 @router.get("/simulations/{simulation_id}/results", response_model=ValidationResultsHistoryRead)
@@ -137,5 +163,7 @@ def get_results(
         _raise(exc)
     return ValidationResultsHistoryRead(
         simulation_id=simulation_id,
-        results=[ValidationResultRead(run=r, score=s, matches=m) for r, s, m in results],
+        results=[
+            ValidationResultRead(run=r, score=s, dimensions=d, matches=m) for r, s, d, m in results
+        ],
     )
