@@ -27,7 +27,7 @@ MAINT_CSV = (
     b"V1,brake,6,12000,2026-08-10T08:00:00\n"
 )
 
-GROUND_TRUTH_PAYLOAD = {
+GROUND_TRUTH_PAYLOAD: dict[str, object] = {
     "expected_findings": [
         {
             "expected_finding_code": "EXP-001",
@@ -140,6 +140,91 @@ def test_ground_truth_never_changes_production_orchestration_output(
     # Ground truth existing changed nothing about how the case runs -- run
     # numbering incrementing is the ONLY expected difference, proving these
     # genuinely are two independent executions, not a no-op.
+    assert run_after.run_number == run_before.run_number + 1
+
+
+V2_GROUND_TRUTH_PAYLOAD: dict[str, object] = {
+    "schema_version": "intel4ops_simulation_truth_v1",
+    "manifest": {
+        "simulation_id": "SIM-OFS-FIELDMAINT-004",
+        "sealed_at": "2026-08-01T00:00:00Z",
+        "summary": {"total_true_leakage_value": 33000, "recoverable_value": 10000},
+        "files": [],
+    },
+    "documents": {
+        "expected_findings": [
+            {
+                "finding_id": "EF-LK-1",
+                "scenario_id": "preventive_maintenance_missed",
+                "affected_records": ["R1"],
+                "expected_severity": "high",
+                "expected_value": 33000,
+                "expected_detection_family": "MAINTENANCE_ECONOMICS",
+                "asset_id": "V1",
+            }
+        ],
+        "leakage_truth": [
+            {
+                "leakage_id": "LK-1",
+                "scenario_id": "preventive_maintenance_missed",
+                "business_type": "field_maintenance",
+                "affected_records": ["R1"],
+                "root_cause": "missed preventive maintenance",
+                "causal_chain": ["missed_pm", "repeat_failure"],
+                "severity": "high",
+                "recoverable": True,
+                "expected_detection_family": "MAINTENANCE_ECONOMICS",
+                "expected_evidence": ["maintenance_events.csv"],
+                "true_leakage_value": 33000,
+                "recoverable_value": 10000,
+                "currency": "USD",
+                "asset_id": "V1",
+            }
+        ],
+    },
+}
+
+
+def test_ground_truth_v2_package_never_changes_production_orchestration_output(
+    db: Session, tmp_path: Path
+) -> None:
+    """The same isolation invariant as above, but for a V2 multi-document
+    package (section 22: "Run this for: simple V1 truth, new V2 package
+    truth")."""
+    service = AnalysisCaseService(storage=LocalFileStorage(str(tmp_path)))
+    org = _organization(db, "isolation-invariant-v2")
+    actor = uuid4()
+
+    case = service.create(db, org.id, "Isolation Invariant V2 Case", "single", actor)
+    service.register_artifacts(
+        db, org.id, case.id, [UploadedFile("maintenance_events.csv", MAINT_CSV)], actor
+    )
+
+    run_before = analysis_case_orchestration_service.start_run(db, org.id, case.id, actor)
+    analysis_case_orchestration_service.execute(
+        db, service.storage, org.id, case.id, run_before.id, actor
+    )
+    db.refresh(run_before)
+    snapshot_before = _snapshot(db, org.id, case.id, run_before.id)
+    assert snapshot_before["findings"], "fixture must produce at least one finding to be meaningful"
+
+    simulation = validation_service.create_simulation(
+        db, org.id, "SIM-OFS-FIELDMAINT-004", "Isolation Invariant V2 Simulation", case.id, actor
+    )
+    ground_truth = validation_service.upload_ground_truth(
+        db, org.id, simulation.id, V2_GROUND_TRUTH_PAYLOAD, actor
+    )
+    assert ground_truth.schema_version == "intel4ops_simulation_truth_v1"
+
+    run_after = analysis_case_orchestration_service.start_run(db, org.id, case.id, actor)
+    analysis_case_orchestration_service.execute(
+        db, service.storage, org.id, case.id, run_after.id, actor
+    )
+    db.refresh(run_after)
+    snapshot_after = _snapshot(db, org.id, case.id, run_after.id)
+
+    assert snapshot_after["findings"] == snapshot_before["findings"]
+    assert snapshot_after["datasets"] == snapshot_before["datasets"]
     assert run_after.run_number == run_before.run_number + 1
 
 

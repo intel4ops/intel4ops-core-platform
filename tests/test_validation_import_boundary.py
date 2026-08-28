@@ -68,6 +68,31 @@ def test_production_execution_modules_never_import_validation_plane() -> None:
     )
 
 
+def test_intelligence_execution_never_imports_adapters_or_family_registry() -> None:
+    """P3.xxD.1E section 23: package adapters and the detection-family
+    mapping registry are as forbidden to Intelligence as any other part of
+    the Validation Plane -- named explicitly here (on top of the blanket
+    prefix check above) because section 23 calls them out by name."""
+    forbidden_specific = (
+        "app.ground_truth_validation.adapters",
+        "app.ground_truth_validation.family_registry",
+    )
+    violations: dict[str, set[str]] = {}
+    for relative_path in PRODUCTION_EXECUTION_MODULES:
+        imported = _imported_module_names(REPO_ROOT / relative_path)
+        found = {
+            name
+            for name in imported
+            if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden_specific)
+        }
+        if found:
+            violations[relative_path] = found
+    assert not violations, (
+        f"Intelligence/production modules must never import adapters or the "
+        f"family registry: {violations}"
+    )
+
+
 def test_validation_plane_is_free_to_import_production_read_paths() -> None:
     """The allowed direction: Validation reading persisted operational
     results is fine and expected -- this is not a blanket ban on

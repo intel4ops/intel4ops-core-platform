@@ -140,13 +140,36 @@ def test_ground_truth_uploads_are_versioned_and_immutable(db: Session, tmp_path:
     db.rollback()
 
 
+def test_upload_ground_truth_rejects_unrecognized_payload_shape(
+    db: Session, tmp_path: Path
+) -> None:
+    """A payload matching no adapter's can_handle() at all -- not a V1
+    format error, since no adapter ever accepted it to validate further."""
+    org, actor, case, _run = _completed_run(db, tmp_path, "gtv-unrecognized")
+    simulation = validation_service.create_simulation(
+        db, org.id, "SIM-UNRECOGNIZED-001", "Unrecognized", case.id, actor
+    )
+    with pytest.raises(ValidationServiceError) as excinfo:
+        validation_service.upload_ground_truth(db, org.id, simulation.id, {"nope": True}, actor)
+    assert excinfo.value.code == "unrecognized_package_schema"
+
+
 def test_upload_ground_truth_rejects_malformed_payload(db: Session, tmp_path: Path) -> None:
+    """A payload the simple_v1 adapter DOES recognize (a real
+    expected_findings list) but that is malformed once actually parsed --
+    the genuine ground_truth_format_error path."""
     org, actor, case, _run = _completed_run(db, tmp_path, "gtv-malformed")
     simulation = validation_service.create_simulation(
         db, org.id, "SIM-MALFORMED-001", "Malformed", case.id, actor
     )
     with pytest.raises(ValidationServiceError) as excinfo:
-        validation_service.upload_ground_truth(db, org.id, simulation.id, {"nope": True}, actor)
+        validation_service.upload_ground_truth(
+            db,
+            org.id,
+            simulation.id,
+            {"expected_findings": [{"expected_finding_code": "EXP-001", "severity": "high"}]},
+            actor,
+        )
     assert excinfo.value.code == "ground_truth_format_error"
 
 
@@ -189,7 +212,7 @@ def test_validate_run_scores_a_true_positive_with_matching_ground_truth(
         },
         actor,
     )
-    _validation_run, score, matches = validation_service.validate_run(
+    _validation_run, score, _dimensions, matches = validation_service.validate_run(
         db, org.id, simulation.id, run.id, actor
     )
     assert score.true_positive_count == 1
@@ -236,7 +259,7 @@ def test_validate_run_scores_a_false_negative_when_expected_finding_missing(
         },
         actor,
     )
-    _validation_run, score, _matches = validation_service.validate_run(
+    _validation_run, score, _dimensions, _matches = validation_service.validate_run(
         db, org.id, simulation.id, run.id, actor
     )
     assert score.true_positive_count == 1
@@ -267,7 +290,7 @@ def test_validate_run_scores_a_false_positive_for_unexpected_finding(
         },
         actor,
     )
-    _validation_run, score, matches = validation_service.validate_run(
+    _validation_run, score, _dimensions, matches = validation_service.validate_run(
         db, org.id, simulation.id, run.id, actor
     )
     assert score.false_positive_count == 1
@@ -305,7 +328,7 @@ def test_matcher_uses_semantic_matching_not_literal_text_equality(
         },
         actor,
     )
-    _validation_run, score, _matches = validation_service.validate_run(
+    _validation_run, score, _dimensions, _matches = validation_service.validate_run(
         db, org.id, simulation.id, run.id, actor
     )
     assert score.true_positive_count == 1
@@ -339,7 +362,7 @@ def test_get_results_returns_full_history_across_multiple_validation_runs(
 
     results = validation_service.get_results(db, org.id, simulation.id)
     assert len(results) == 2
-    for _run_row, score_row, matches in results:
+    for _run_row, score_row, _dimensions, matches in results:
         assert score_row is not None
         assert score_row.true_positive_count == 1
         assert matches

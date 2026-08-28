@@ -4,13 +4,23 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
+from app.ground_truth_validation.family_registry import (
+    ValidationFindingFamilyMappingRegistry,
+    default_validation_finding_family_mapping_registry,
+)
 from app.models.ground_truth_validation import ValidationExpectedFinding, ValidationMatchType
 from app.services.analysis_case_command_service import PrioritizedFinding
 
-# Semantic matching only -- domain + entity overlap, never literal title/
-# summary text equality. An expected finding with no entities specified
-# degrades to a domain-only match (deliberately permissive: ground truth
-# authors are not required to enumerate every entity).
+# Semantic matching only -- domain/family + entity overlap, never literal
+# title/summary text equality. An expected finding with no entities
+# specified degrades to a family/domain-only match (deliberately
+# permissive: ground truth authors are not required to enumerate every
+# entity). Domain is optional (section 7): when absent, the expected
+# finding's expected_detection_family is resolved through the
+# validation-only family registry to the production rule_ids/domains that
+# could plausibly satisfy it -- domain is used directly only when the
+# ground truth author supplied it (V1 packages, or a V2 author choosing
+# to be explicit).
 
 
 @dataclass(frozen=True)
@@ -22,6 +32,9 @@ class MatchedPair:
     entity_match: bool | None
     evidence_match: bool | None
     economic_variance_pct: float | None
+    matched_dimensions: list[str]
+    unmatched_dimensions: list[str]
+    reason: str
 
 
 def _entity_keys(entities: list[dict[str, object]] | None) -> set[tuple[object, object]]:
@@ -58,12 +71,33 @@ def _economic_variance_pct(
     return abs(actual_value - expected_value) / abs(expected_value) * 100.0
 
 
+def _candidate_matches_family_or_domain(
+    expected: ValidationExpectedFinding,
+    actual: PrioritizedFinding,
+    family_registry: ValidationFindingFamilyMappingRegistry,
+) -> bool:
+    if expected.domain:
+        return expected.domain in actual.impacted_domains
+    mapping = family_registry.lookup(expected.expected_detection_family)
+    if mapping is None:
+        # No domain and no resolvable family -- cannot plausibly match
+        # anything, by design (never a wildcard match).
+        return False
+    if actual.finding.rule_id in mapping.production_rule_families:
+        return True
+    if mapping.production_domains and (mapping.production_domains & set(actual.impacted_domains)):
+        return True
+    return False
+
+
 def match_findings(
     expected_findings: list[ValidationExpectedFinding],
     actual_findings: list[PrioritizedFinding],
     source_labels_by_finding_id: dict[UUID, list[str]] | None = None,
+    family_registry: ValidationFindingFamilyMappingRegistry | None = None,
 ) -> list[MatchedPair]:
     source_labels_by_finding_id = source_labels_by_finding_id or {}
+    family_registry = family_registry or default_validation_finding_family_mapping_registry
     unmatched_actual = list(actual_findings)
     pairs: list[MatchedPair] = []
 
@@ -71,7 +105,7 @@ def match_findings(
         expected_entity_keys = _entity_keys(expected.entities)
         found: PrioritizedFinding | None = None
         for actual in unmatched_actual:
-            if expected.domain not in actual.impacted_domains:
+            if not _candidate_matches_family_or_domain(expected, actual, family_registry):
                 continue
             actual_entity_keys = _entity_keys(actual.finding.entities_json)
             if expected_entity_keys and not (expected_entity_keys & actual_entity_keys):
@@ -89,31 +123,55 @@ def match_findings(
                     entity_match=None,
                     evidence_match=None,
                     economic_variance_pct=None,
+                    matched_dimensions=[],
+                    unmatched_dimensions=["presence"],
+                    reason=(
+                        f"No production finding matched family/domain "
+                        f"{expected.expected_detection_family or expected.domain!r} "
+                        f"with overlapping entities {sorted(expected_entity_keys)}"
+                    ),
                 )
             )
             continue
 
         unmatched_actual.remove(found)
         actual_entity_keys = _entity_keys(found.finding.entities_json)
+        severity_match = (found.finding.severity or "").lower() == (expected.severity or "").lower()
+        entity_match = (
+            (bool(expected_entity_keys) and expected_entity_keys <= actual_entity_keys)
+            if expected_entity_keys
+            else None
+        )
+        evidence_match = _evidence_overlap(
+            expected.evidence_refs, source_labels_by_finding_id.get(found.finding.id, [])
+        )
+        matched_dims = ["presence"]
+        unmatched_dims = []
+        for label, value in (
+            ("severity", severity_match),
+            ("entity", entity_match),
+            ("evidence", evidence_match),
+        ):
+            if value is True:
+                matched_dims.append(label)
+            elif value is False:
+                unmatched_dims.append(label)
         pairs.append(
             MatchedPair(
                 match_type=ValidationMatchType.TRUE_POSITIVE.value,
                 expected=expected,
                 actual=found,
-                severity_match=(
-                    (found.finding.severity or "").lower() == (expected.severity or "").lower()
-                ),
-                entity_match=(
-                    bool(expected_entity_keys) and expected_entity_keys <= actual_entity_keys
-                )
-                if expected_entity_keys
-                else None,
-                evidence_match=_evidence_overlap(
-                    expected.evidence_refs,
-                    source_labels_by_finding_id.get(found.finding.id, []),
-                ),
+                severity_match=severity_match,
+                entity_match=entity_match,
+                evidence_match=evidence_match,
                 economic_variance_pct=_economic_variance_pct(
                     expected.expected_economic_impact, found
+                ),
+                matched_dimensions=matched_dims,
+                unmatched_dimensions=unmatched_dims,
+                reason=(
+                    f"Matched production finding {found.finding.rule_id!r} on "
+                    f"family/domain + entity overlap"
                 ),
             )
         )
@@ -128,6 +186,9 @@ def match_findings(
                 entity_match=None,
                 evidence_match=None,
                 economic_variance_pct=None,
+                matched_dimensions=[],
+                unmatched_dimensions=["presence"],
+                reason=f"Production finding {actual.finding.rule_id!r} matched no expected finding",
             )
         )
     return pairs
