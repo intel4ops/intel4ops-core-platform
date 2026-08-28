@@ -13,6 +13,10 @@ __pycache__/
 
 .venv/
 venv/
+
+# Default local STORAGE_ROOT (app/core/config.py) -- never committed,
+# points to a Render persistent disk in production.
+var/
 env/
 
 *.egg-info/

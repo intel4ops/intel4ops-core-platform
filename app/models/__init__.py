@@ -137,6 +137,14 @@ from app.models.gateway import (
     JobToCashRecord,
     JobToCashRun,
 )
+from app.models.ground_truth_validation import (
+    SimulationValidationRun,
+    ValidationExpectedFinding,
+    ValidationFindingMatch,
+    ValidationGroundTruth,
+    ValidationScore,
+    ValidationSimulation,
+)
 from app.models.industry_packs import (
     IndustryPackAssignmentState,
     IndustryPackComponent,
@@ -490,6 +498,12 @@ __all__ = [
     "AnalysisCaseStageEvent",
     "FindingSourceDataset",
     "SourceArtifact",
+    "SimulationValidationRun",
+    "ValidationExpectedFinding",
+    "ValidationFindingMatch",
+    "ValidationGroundTruth",
+    "ValidationScore",
+    "ValidationSimulation",
 ]
 from app.models.actions import (
     ActionDependency,
