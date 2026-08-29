@@ -18,7 +18,7 @@ jobs:
   quality:
     name: Ruff, Mypy, Pytest, and Alembic
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     services:
       postgres:
