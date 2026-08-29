@@ -227,6 +227,11 @@ from app.models.reliability import (
     ReliabilityModelResult,
     ReliabilityReviewFeedback,
 )
+from app.models.semantic import (
+    SemanticDatasetProfile,
+    SemanticInterpretationDecision,
+    SemanticRoleInterpretation,
+)
 from app.models.signatures import (
     OperationalFeatureDefinition,
     OperationalFeatureVersion,
@@ -504,6 +509,9 @@ __all__ = [
     "ValidationGroundTruth",
     "ValidationScore",
     "ValidationSimulation",
+    "SemanticDatasetProfile",
+    "SemanticInterpretationDecision",
+    "SemanticRoleInterpretation",
 ]
 from app.models.actions import (
     ActionDependency,
