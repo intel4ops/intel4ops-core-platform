@@ -150,13 +150,24 @@ class ValidationGroundTruth(Base):
     expected_clean_areas: Mapped[list[str]] = mapped_column(portable_json, default=list)
     tolerance: Mapped[dict[str, object]] = mapped_column(portable_json, default=dict)
     raw_format_version: Mapped[str] = mapped_column(String(20), default="1.0")
-    # P3.xxD.1E: which GroundTruthPackageAdapter normalized this upload, and
-    # the schema_version the caller declared (or the adapter detected). Never
-    # a simulation identifier -- an adapter is schema-shaped, not
+    # P3.xxD.1E.1: which GroundTruthPackageAdapter normalized this upload.
+    # Never a simulation identifier -- an adapter is schema-shaped, not
     # simulation-specific (see app/ground_truth_validation/adapters/).
     adapter_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     adapter_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # The SELECTED adapter's own schema_version (== adapter_code today, but
+    # kept as a distinct field since an adapter could in principle support
+    # more than one schema_version in the future). Always populated once an
+    # adapter has been selected.
     schema_version: Mapped[str] = mapped_column(String(50), default="intel4ops_simple_v1")
+    # P3.xxD.1E.1: the RAW schema_version the caller declared in the
+    # request, exactly as sent -- None if the caller omitted it and
+    # selection went through can_handle() shape-detection instead. Never
+    # conflated with `schema_version` above (the resolved adapter's own
+    # identifier): the whole point of this column is to preserve "the
+    # caller declared nothing" as a real, distinguishable fact rather than
+    # silently rewriting it to whatever got selected.
+    source_schema_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # The authored manifest document's own declared metadata (simulation_id,
     # sealed_at, summary totals, file/checksum inventory) -- kept verbatim,
     # never reshaped into engine-specific fields.

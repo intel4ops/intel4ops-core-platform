@@ -97,9 +97,10 @@ class SimulationTruthV1Adapter:
     supported_schema_version = ADAPTER_CODE
 
     def can_handle(self, package_metadata: dict[str, object]) -> bool:
-        declared = package_metadata.get("schema_version")
-        if declared:
-            return declared == self.adapter_code
+        # Pure shape detection -- schema_version routing is the registry's
+        # job, not this adapter's (P3.xxD.1E.1). This is exactly what the
+        # real SIM-OFS-FIELDMAINT-005 truth_manifest.json needs: it has no
+        # schema_version at all, so selection must work from shape alone.
         documents = package_metadata.get("documents")
         if not isinstance(documents, dict):
             return False

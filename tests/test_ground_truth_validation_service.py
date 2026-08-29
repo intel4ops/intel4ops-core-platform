@@ -173,6 +173,94 @@ def test_upload_ground_truth_rejects_malformed_payload(db: Session, tmp_path: Pa
     assert excinfo.value.code == "ground_truth_format_error"
 
 
+def test_upload_sim_005_shaped_package_without_schema_version(db: Session, tmp_path: Path) -> None:
+    """P3.xxD.1E.1 live-defect regression / section 7 acceptance: the real
+    SIM-OFS-FIELDMAINT-005 truth_manifest.json has no schema_version field.
+    Core must select intel4ops_simulation_truth_v1 by shape alone, and must
+    never require (or silently invent) a schema_version like "v2"."""
+    org, actor, case, _run = _completed_run(db, tmp_path, "gtv-sim005-no-schema")
+    simulation = validation_service.create_simulation(
+        db, org.id, "SIM-005-NO-SCHEMA", "SIM-005 shaped, no schema_version", case.id, actor
+    )
+    payload: dict[str, object] = {
+        "schema_version": None,
+        "manifest": {"simulation_id": "SIM-005-NO-SCHEMA", "sealed_at": "2026-08-01T00:00:00Z"},
+        "documents": {
+            "expected_findings": [
+                {
+                    "finding_id": "EF-LK-1",
+                    "scenario_id": "overtime_leakage",
+                    "expected_severity": "high",
+                    "expected_value": 500,
+                    "expected_detection_family": "WORKFORCE_PRODUCTIVITY",
+                }
+            ],
+            "leakage_truth": [
+                {
+                    "leakage_id": "LK-1",
+                    "scenario_id": "overtime_leakage",
+                    "severity": "high",
+                    "true_leakage_value": 500,
+                }
+            ],
+        },
+    }
+    ground_truth = validation_service.upload_ground_truth(db, org.id, simulation.id, payload, actor)
+    assert ground_truth.adapter_code == "intel4ops_simulation_truth_v1"
+    assert ground_truth.schema_version == "intel4ops_simulation_truth_v1"
+    # The caller genuinely declared nothing -- that fact is preserved, not
+    # rewritten to look like a real declaration.
+    assert ground_truth.source_schema_version is None
+
+
+def test_upload_rejects_unknown_explicit_schema_version(db: Session, tmp_path: Path) -> None:
+    """Section 4/8 test 5: an explicit-but-unrecognized schema_version
+    (e.g. the frontend's invented "v2") is a hard, explicit error -- never
+    a silent fall-through to shape-detection."""
+    org, actor, case, _run = _completed_run(db, tmp_path, "gtv-unknown-schema")
+    simulation = validation_service.create_simulation(
+        db, org.id, "SIM-UNKNOWN-SCHEMA-001", "Unknown schema", case.id, actor
+    )
+    payload: dict[str, object] = {
+        "schema_version": "v2",
+        "documents": {
+            "expected_findings": [
+                {"finding_id": "EF-LK-1", "expected_severity": "high"},
+            ]
+        },
+    }
+    with pytest.raises(ValidationServiceError) as excinfo:
+        validation_service.upload_ground_truth(db, org.id, simulation.id, payload, actor)
+    assert excinfo.value.code == "unknown_package_schema_version"
+    assert "intel4ops_simulation_truth_v1" in str(excinfo.value)
+    assert "intel4ops_simple_v1" in str(excinfo.value)
+
+
+def test_upload_preserves_explicit_schema_version_when_declared(
+    db: Session, tmp_path: Path
+) -> None:
+    """The complementary case: when a caller DOES declare a real,
+    recognized schema_version, it is preserved verbatim in
+    source_schema_version -- distinct from (though equal in value to,
+    for this adapter) the resolved `schema_version` field."""
+    org, actor, case, _run = _completed_run(db, tmp_path, "gtv-explicit-schema")
+    simulation = validation_service.create_simulation(
+        db, org.id, "SIM-EXPLICIT-SCHEMA-001", "Explicit schema", case.id, actor
+    )
+    payload: dict[str, object] = {
+        "schema_version": "intel4ops_simulation_truth_v1",
+        "documents": {
+            "expected_findings": [
+                {"finding_id": "EF-LK-1", "expected_severity": "high"},
+            ],
+            "leakage_truth": [{"leakage_id": "LK-1"}],
+        },
+    }
+    ground_truth = validation_service.upload_ground_truth(db, org.id, simulation.id, payload, actor)
+    assert ground_truth.source_schema_version == "intel4ops_simulation_truth_v1"
+    assert ground_truth.adapter_code == "intel4ops_simulation_truth_v1"
+
+
 def test_validate_run_requires_ground_truth_to_exist(db: Session, tmp_path: Path) -> None:
     org, actor, case, run = _completed_run(db, tmp_path, "gtv-no-ground-truth")
     simulation = validation_service.create_simulation(
