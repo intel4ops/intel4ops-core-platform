@@ -46,6 +46,7 @@ from app.api.recovery_portfolio_routes import router as recovery_portfolio_route
 from app.api.recovery_workspace_routes import router as recovery_workspace_router
 from app.api.reliability_routes import router as reliability_router
 from app.api.routes import router
+from app.api.semantic_routes import router as semantic_router
 from app.api.signature_routes import catalog_router as signature_catalog_router
 from app.api.signature_routes import tenant_router as signature_tenant_router
 from app.api.source_system_routes import router as source_system_router
@@ -177,3 +178,4 @@ app.include_router(workspace_catalog_router)
 app.include_router(workspace_tenant_router)
 app.include_router(analysis_case_router)
 app.include_router(validation_router)
+app.include_router(semantic_router)

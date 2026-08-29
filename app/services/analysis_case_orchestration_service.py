@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from uuid import UUID, uuid4
 
 import pandas as pd
@@ -24,7 +24,15 @@ from app.models.analysis_case import (
     StageEventStatus,
 )
 from app.models.entities import utc_now
+from app.models.semantic import (
+    SemanticDatasetProfile,
+    SemanticInterpretationDecision,
+    SemanticRoleInterpretation,
+)
 from app.schemas.trust import TrustAssessmentCreate
+from app.semantic.candidate import SemanticCandidate
+from app.semantic.interpreter import interpret_dataset
+from app.semantic.profiler import FieldProfile
 from app.services.analysis_case_intelligence_service import run_maintenance_pack
 from app.services.analysis_case_mapping_service import analysis_case_mapping_service
 from app.services.cross_domain_intelligence_service import (
@@ -142,6 +150,27 @@ def _reload_canonical_dataframe(
     return None
 
 
+def _field_profile_to_dict(profile: FieldProfile) -> dict[str, object]:
+    return asdict(profile)
+
+
+def _candidate_to_dict(candidate: SemanticCandidate) -> dict[str, object]:
+    return {
+        "candidate_concept": candidate.candidate_concept,
+        "confidence": candidate.confidence,
+        "candidate_rank": candidate.candidate_rank,
+        "generated_by": candidate.generated_by,
+        "evidence_components": [
+            {
+                "component_type": e.component_type,
+                "weight": e.weight,
+                "description": e.description,
+            }
+            for e in candidate.evidence_components
+        ],
+    }
+
+
 class AnalysisCaseOrchestrationService:
     def _record_stage(
         self,
@@ -166,6 +195,90 @@ class AnalysisCaseOrchestrationService:
             )
         )
         db.commit()
+
+    def _run_semantic_interpretation(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        case_dataset: AnalysisCaseDataset,
+        raw_df: pd.DataFrame,
+    ) -> None:
+        """P3.xxE.1: deterministic dataset profiling + role classification
+        + per-field candidate/confidence reconciliation (app/semantic/).
+        Read-only with respect to everything downstream -- results are
+        persisted for Navigator inspection and future milestones, but
+        mapping/Trust/Intelligence below never read these rows in this
+        milestone (see the P3.xxE.1 report's migration-path note)."""
+        result = interpret_dataset(str(case_dataset.dataset_id), case_dataset.source_label, raw_df)
+
+        db.add(
+            SemanticDatasetProfile(
+                organization_id=organization_id,
+                analysis_case_dataset_id=case_dataset.id,
+                run_id=run_id,
+                dataset_label=result.dataset_profile.dataset_label,
+                row_count=result.dataset_profile.row_count,
+                column_count=result.dataset_profile.column_count,
+                field_profiles=[_field_profile_to_dict(fp) for fp in result.dataset_profile.fields],
+            )
+        )
+        db.add(
+            SemanticRoleInterpretation(
+                organization_id=organization_id,
+                analysis_case_dataset_id=case_dataset.id,
+                run_id=run_id,
+                primary_role=result.role_interpretation.primary_role,
+                confidence=result.role_interpretation.confidence,
+                evidence=result.role_interpretation.evidence,
+                secondary_roles=result.role_interpretation.secondary_roles,
+                alternative_roles=[
+                    {"role": s.role, "confidence": s.confidence, "evidence": s.evidence}
+                    for s in result.role_interpretation.alternative_roles
+                ],
+            )
+        )
+        for decision in result.field_decisions:
+            db.add(
+                SemanticInterpretationDecision(
+                    organization_id=organization_id,
+                    analysis_case_dataset_id=case_dataset.id,
+                    run_id=run_id,
+                    source_field=decision.source_field,
+                    selected_concept=decision.selected_concept,
+                    confidence=decision.confidence,
+                    status=decision.status,
+                    evidence_summary=decision.evidence_summary,
+                    alternative_candidates=[
+                        _candidate_to_dict(c) for c in decision.alternative_candidates
+                    ],
+                    decision_source=decision.decision_source,
+                    decision_version=decision.decision_version,
+                )
+            )
+        db.commit()
+        self._record_stage(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            "semantic_interpretation",
+            StageEventStatus.COMPLETED.value,
+            {
+                "dataset_id": str(case_dataset.dataset_id),
+                "primary_role": result.role_interpretation.primary_role,
+                "role_confidence": result.role_interpretation.confidence,
+                "fields_interpreted": len(result.field_decisions),
+                "auto_accepted": sum(
+                    1 for d in result.field_decisions if d.status == "auto_accepted"
+                ),
+                "review_required": sum(
+                    1 for d in result.field_decisions if d.status == "review_required"
+                ),
+                "unresolved": sum(1 for d in result.field_decisions if d.status == "unresolved"),
+            },
+        )
 
     def start_run(
         self, db: Session, organization_id: UUID, analysis_case_id: UUID, actor_user_id: UUID
@@ -270,6 +383,27 @@ class AnalysisCaseOrchestrationService:
                     {"reason": "could not reload dataset from persisted source"},
                 )
                 continue
+
+            # P3.xxE.1: additive semantic interpretation, running alongside
+            # (never replacing) the existing mapping bridge below -- see
+            # app/semantic/__init__.py. Operates on the RAW dataframe (not
+            # yet canonically mapped) since it interprets what the client's
+            # own field names mean. Never blocking: a semantic-layer
+            # failure is recorded and skipped, never a run failure.
+            try:
+                self._run_semantic_interpretation(
+                    db, organization_id, analysis_case_id, run_id, case_dataset, raw_df
+                )
+            except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
+                self._record_stage(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    "semantic_interpretation",
+                    StageEventStatus.FAILED.value,
+                    {"dataset_id": str(case_dataset.dataset_id), "error": str(exc)},
+                )
 
             rule_config = _DOMAIN_TRUST_RULES.get(case_dataset.detected_domain or "", {})
             trust_status = "not_assessed"

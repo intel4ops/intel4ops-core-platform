@@ -32,6 +32,18 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/domain_registry.py",  # Semantic
     "app/api/analysis_case_routes.py",
     "app/models/analysis_case.py",
+    "app/semantic/profiler.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/role_classifier.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/concept_registry.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/candidate.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/candidate_generator.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/confidence_engine.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/provider.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/sampling.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/interpreter.py",  # P3.xxE.1 Semantic Understanding
+    "app/models/semantic.py",  # P3.xxE.1 Semantic Understanding
+    "app/services/analysis_case_semantic_service.py",  # P3.xxE.1 Semantic Understanding
+    "app/api/semantic_routes.py",  # P3.xxE.1 Semantic Understanding
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")
