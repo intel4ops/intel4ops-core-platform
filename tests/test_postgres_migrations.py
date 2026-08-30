@@ -6425,7 +6425,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260830_0055"]
+    assert heads == ["20260831_0056"]
 
 
 @pytest.mark.postgres
@@ -6978,7 +6978,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260830_0055"]
+    assert heads == ["20260831_0056"]
 
 
 @pytest.mark.postgres
@@ -7011,7 +7011,7 @@ def test_p3_11_knowledge_pack_migration_round_trip_and_tenant_links(
     assert "knowledge_packs" not in inspect(postgres_engine).get_table_names()
     command.upgrade(config, "head")
     assert "knowledge_packs" in inspect(postgres_engine).get_table_names()
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260830_0055"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260831_0056"]
 
 
 @pytest.mark.postgres
@@ -7066,7 +7066,35 @@ def test_p3xxe1a_semantic_review_governance_migration_round_trip(
         "semantic_decision_audit_events",
     } <= reupgraded_tables
 
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260830_0055"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260831_0056"]
+
+
+@pytest.mark.postgres
+def test_p3xxe2_ai_provenance_column_migration_round_trip(postgres_engine: Engine) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    columns = {
+        column["name"]: column
+        for column in inspect(postgres_engine).get_columns("semantic_interpretation_decisions")
+    }
+    assert "ai_provenance" in columns
+    assert columns["ai_provenance"]["nullable"] is True
+
+    command.downgrade(config, "20260830_0055")
+    downgraded_columns = {
+        column["name"]
+        for column in inspect(postgres_engine).get_columns("semantic_interpretation_decisions")
+    }
+    assert "ai_provenance" not in downgraded_columns
+
+    command.upgrade(config, "head")
+    reupgraded_columns = {
+        column["name"]
+        for column in inspect(postgres_engine).get_columns("semantic_interpretation_decisions")
+    }
+    assert "ai_provenance" in reupgraded_columns
+
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260831_0056"]
 
 
 @pytest.mark.postgres

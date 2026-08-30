@@ -74,3 +74,9 @@ class InterpretationDecision:
     decision_version: str
     review_actor_user_id: str | None = None
     review_timestamp: datetime | None = None
+    # P3.xxE.2: structured AI provenance ({"ai_used": True, "provider_code":
+    # ..., "model_version": ...}), populated only when AI evidence
+    # contributed to the winning candidate -- None for purely deterministic
+    # decisions. Deliberately NOT encoded into decision_version (kept to
+    # algorithm/config identity only); see app/semantic/confidence_engine.py.
+    ai_provenance: dict[str, object] | None = None

@@ -95,8 +95,21 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="work_order_id",
             concept_type=CanonicalConceptType.IDENTIFIER.value,
             description="Identifier of a unit of scheduled or performed work.",
+            # P3.xxE.2 section 16: a few French/German equivalents included
+            # directly as registry data (not a runtime language branch) --
+            # proves the deterministic alias mechanism generalizes beyond
+            # English without any code change; see tests/test_semantic_multilingual.py.
             aliases=frozenset(
-                {"work_order_id", "order_id", "job_id", "ticket_id", "wo_id", "service_order_id"}
+                {
+                    "work_order_id",
+                    "order_id",
+                    "job_id",
+                    "ticket_id",
+                    "wo_id",
+                    "service_order_id",
+                    "numero_commande",
+                    "bestellnummer",
+                }
             ),
             compatible_dataset_roles=frozenset({"work_order", "transaction", "event"}),
             compatible_entity_types=frozenset({"WORK_ORDER"}),
@@ -107,7 +120,16 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="customer_id",
             concept_type=CanonicalConceptType.IDENTIFIER.value,
             description="Identifier of the customer/client party in a transaction.",
-            aliases=frozenset({"customer_id", "client_id", "account_id", "buyer_id"}),
+            aliases=frozenset(
+                {
+                    "customer_id",
+                    "client_id",
+                    "account_id",
+                    "buyer_id",
+                    "numero_client",
+                    "kundennummer",
+                }
+            ),
             compatible_dataset_roles=frozenset({"master", "invoice", "contract"}),
             compatible_entity_types=frozenset({"CUSTOMER"}),
         )
@@ -185,7 +207,14 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="unit_price",
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Price per unit of a good or service, in a specific currency.",
-            aliases=frozenset({"unit_price", "price", "rate"}),
+            # P3.xxE.2 section 8: "amount" deliberately shared with
+            # invoice_amount/cost_amount below -- a bare "amount" column is
+            # genuinely ambiguous without more context, matching the
+            # spec's own worked example. This is real, data-only ambiguity
+            # (never resolved here), letting the ambiguity engine actually
+            # exercise ACCEPTED_WITH_FLAG/REVIEW_REQUIRED on a tied score
+            # rather than never seeing a multi-candidate field at all.
+            aliases=frozenset({"unit_price", "price", "rate", "amount"}),
             compatible_dataset_roles=frozenset({"invoice", "inventory"}),
         )
     )
@@ -194,7 +223,9 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="invoice_amount",
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Total monetary amount billed on a document, in a specific currency.",
-            aliases=frozenset({"invoice_amount", "total_amount", "amount_due", "bill_amount"}),
+            aliases=frozenset(
+                {"invoice_amount", "total_amount", "amount_due", "bill_amount", "amount"}
+            ),
             compatible_dataset_roles=frozenset({"invoice", "ledger"}),
         )
     )
@@ -203,7 +234,7 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="cost_amount",
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Monetary cost incurred, in a specific currency.",
-            aliases=frozenset({"cost_amount", "cost", "expense_amount"}),
+            aliases=frozenset({"cost_amount", "cost", "expense_amount", "amount"}),
             compatible_dataset_roles=frozenset({"invoice", "ledger", "work_order"}),
         )
     )

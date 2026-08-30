@@ -11,18 +11,23 @@ from app.semantic.candidate import (
     SemanticCandidate,
 )
 from app.semantic.candidate_generator import generate_candidates
+from app.semantic.case_context import CaseSemanticContext
 from app.semantic.concept_registry import (
     CanonicalConceptRegistry,
     default_canonical_concept_registry,
 )
 from app.semantic.confidence_engine import ConfidenceThresholds, reconcile
+from app.semantic.cross_dataset_context import generate_cross_dataset_evidence
+from app.semantic.neighbor_context import generate_neighbor_context_evidence
 from app.semantic.profiler import DatasetProfile, DatasetProfiler, dataset_profiler
 from app.semantic.provider import (
     FieldInterpretationContext,
     SemanticInterpretationRequest,
+    SemanticInterpretationResponse,
     SemanticReasoningProvider,
     default_semantic_reasoning_provider,
 )
+from app.semantic.provider_factory import SemanticAIBudget
 from app.semantic.role_classifier import (
     DatasetRoleClassifier,
     DatasetRoleInterpretation,
@@ -39,6 +44,14 @@ from app.semantic.sampling import representative_sample
 # migration story. No branch here on a simulation identifier, industry, or
 # specific client field name -- every domain-specific step is either
 # generic profiling/classification or a CanonicalConceptRegistry lookup.
+#
+# P3.xxE.2: case_context (app/semantic/case_context.py) carries every
+# dataset's Pass-1 profile/role for the whole case, built once before any
+# dataset's field interpretation runs -- this is what makes cross-dataset
+# evidence order-independent (see the orchestration service's two-pass
+# semantic stage). A provider failure (timeout/malformed output/anything)
+# is caught here, never propagated -- deterministic interpretation always
+# completes regardless of AI availability.
 # ---------------------------------------------------------------------------
 
 
@@ -47,6 +60,59 @@ class DatasetInterpretationResult:
     dataset_profile: DatasetProfile
     role_interpretation: DatasetRoleInterpretation
     field_decisions: list[InterpretationDecision]
+
+
+def profile_and_classify(
+    dataset_label: str,
+    dataframe: pd.DataFrame,
+    *,
+    profiler: DatasetProfiler | None = None,
+    role_classifier: DatasetRoleClassifier | None = None,
+) -> tuple[DatasetProfile, DatasetRoleInterpretation]:
+    """Pass 1 of the two-pass semantic stage -- profiling + role
+    classification only, no candidate generation, no AI call, no
+    persistence. Exposed as a standalone function so orchestration can
+    build a CaseSemanticContext covering every dataset in a case before
+    any dataset's Pass 2 (field interpretation) begins."""
+    profiler = profiler or dataset_profiler
+    role_classifier = role_classifier or dataset_role_classifier
+    profile = profiler.profile(dataset_label, dataframe)
+    role = role_classifier.classify(profile)
+    return profile, role
+
+
+def _request_ai_proposals(
+    provider: SemanticReasoningProvider,
+    budget: SemanticAIBudget | None,
+    dataset_label: str,
+    role: DatasetRoleInterpretation,
+    concept_registry: CanonicalConceptRegistry,
+    field_contexts: list[FieldInterpretationContext],
+) -> SemanticInterpretationResponse:
+    """Never raises -- a provider failure or an exhausted budget both
+    degrade to zero proposals (deterministic-only), matching
+    NullSemanticReasoningProvider's own honest-default behavior."""
+    if budget is not None and not budget.try_consume():
+        return SemanticInterpretationResponse(
+            proposals=[],
+            provider_name=provider.provider_name,
+            provider_version=provider.provider_version,
+        )
+    try:
+        return provider.propose(
+            SemanticInterpretationRequest(
+                dataset_label=dataset_label,
+                dataset_role_hint=role.primary_role,
+                known_concept_codes=[c.concept_code for c in concept_registry.active()],
+                fields=field_contexts,
+            )
+        )
+    except Exception:  # noqa: BLE001 -- a provider failure must never block interpretation
+        return SemanticInterpretationResponse(
+            proposals=[],
+            provider_name=provider.provider_name,
+            provider_version=provider.provider_version,
+        )
 
 
 def interpret_dataset(
@@ -59,14 +125,15 @@ def interpret_dataset(
     concept_registry: CanonicalConceptRegistry | None = None,
     provider: SemanticReasoningProvider | None = None,
     thresholds: ConfidenceThresholds | None = None,
+    case_context: CaseSemanticContext | None = None,
+    budget: SemanticAIBudget | None = None,
 ) -> DatasetInterpretationResult:
-    profiler = profiler or dataset_profiler
-    role_classifier = role_classifier or dataset_role_classifier
     concept_registry = concept_registry or default_canonical_concept_registry
     provider = provider or default_semantic_reasoning_provider
 
-    profile = profiler.profile(dataset_label, dataframe)
-    role = role_classifier.classify(profile)
+    profile, role = profile_and_classify(
+        dataset_label, dataframe, profiler=profiler, role_classifier=role_classifier
+    )
 
     # One compact AI request per dataset (never per field, never per row) --
     # section 28's "never send every row to an LLM" / "compact
@@ -81,19 +148,25 @@ def interpret_dataset(
             value_patterns=fp.value_patterns,
             null_rate=fp.null_rate,
             uniqueness_ratio=fp.uniqueness_ratio,
+            neighbor_field_names=[
+                other.source_field
+                for other in profile.fields
+                if other.source_field != fp.source_field
+            ],
         )
         for fp in profile.fields
     ]
-    ai_response = provider.propose(
-        SemanticInterpretationRequest(
-            dataset_label=dataset_label,
-            dataset_role_hint=role.primary_role,
-            known_concept_codes=[c.concept_code for c in concept_registry.active()],
-            fields=field_contexts,
-        )
+    ai_response = _request_ai_proposals(
+        provider, budget, dataset_label, role, concept_registry, field_contexts
     )
     ai_proposals_by_field: dict[str, list[SemanticCandidate]] = {}
     for proposal in ai_response.proposals:
+        # P3.xxE.2 section 9: every returned concept_code must exist in
+        # CanonicalConceptRegistry before it can enter candidate
+        # reconciliation -- a hallucinated/unknown concept is dropped here,
+        # never silently trusted into the candidate list.
+        if concept_registry.get(proposal.proposed_concept) is None:
+            continue
         ai_proposals_by_field.setdefault(proposal.source_field, []).append(
             SemanticCandidate(
                 source_dataset_id=dataset_id,
@@ -121,7 +194,19 @@ def interpret_dataset(
         deterministic_candidates = generate_candidates(
             dataset_id, profile, role, fp, concept_registry
         )
-        candidates = deterministic_candidates + ai_proposals_by_field.get(fp.source_field, [])
+        candidate_concepts = {c.candidate_concept for c in deterministic_candidates}
+        neighbor_candidates = generate_neighbor_context_evidence(
+            dataset_id, profile, fp, candidate_concepts, concept_registry
+        )
+        cross_dataset_candidates = generate_cross_dataset_evidence(
+            dataset_id, fp, candidate_concepts, case_context, concept_registry
+        )
+        candidates = (
+            deterministic_candidates
+            + neighbor_candidates
+            + cross_dataset_candidates
+            + ai_proposals_by_field.get(fp.source_field, [])
+        )
         # AI proposals never bypass reconciliation (section 8/10): they are
         # additional candidates the SAME confidence engine scores, never a
         # shortcut straight to AUTO_ACCEPTED.
