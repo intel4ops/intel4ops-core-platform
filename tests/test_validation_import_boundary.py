@@ -48,6 +48,11 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/models/semantic_review.py",  # P3.xxE.1A Semantic Review & Governance
     "app/services/semantic_review_service.py",  # P3.xxE.1A Semantic Review & Governance
     "app/api/semantic_review_routes.py",  # P3.xxE.1A Semantic Review & Governance
+    "app/semantic/openai_provider.py",  # P3.xxE.2 Adaptive Field Interpretation
+    "app/semantic/provider_factory.py",  # P3.xxE.2 Adaptive Field Interpretation
+    "app/semantic/neighbor_context.py",  # P3.xxE.2 Adaptive Field Interpretation
+    "app/semantic/cross_dataset_context.py",  # P3.xxE.2 Adaptive Field Interpretation
+    "app/semantic/case_context.py",  # P3.xxE.2 Adaptive Field Interpretation
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")

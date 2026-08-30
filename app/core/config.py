@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     ai_max_clarification_questions: int = Field(default=10, ge=0, le=10)
     ai_retry_ceiling: int = Field(default=1, ge=0, le=2)
 
+    # P3.xxE.2: semantic-interpretation AI is deliberately gated by its own
+    # flag, separate from ai_enabled -- semantic interpretation fires on
+    # every dataset in every AnalysisCase run (a very different call-volume
+    # profile from the deliberately-triggered operational-profile feature
+    # above), so enabling one must never silently enable the other.
+    semantic_ai_enabled: bool = False
+    semantic_ai_max_calls_per_case: int = Field(default=50, ge=1, le=500)
+    semantic_ai_max_output_tokens: int = Field(default=2_000, ge=100, le=8_000)
+
     # Provider-neutral OIDC resource-server configuration. All three of
     # issuer/audience/jwks_url must be set for authentication to function;
     # if any is missing, get_current_user() fails closed (401/503) rather

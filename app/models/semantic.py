@@ -119,6 +119,11 @@ class SemanticInterpretationDecision(Base):
     )
     decision_source: Mapped[str] = mapped_column(String(100), nullable=False)
     decision_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    # P3.xxE.2: structured AI provenance ({"ai_used": true, "provider_code":
+    # ..., "model_version": ...}), null for purely deterministic decisions.
+    # Deliberately separate from decision_version -- see
+    # app/semantic/confidence_engine.py's module docstring.
+    ai_provenance: Mapped[dict[str, object] | None] = mapped_column(portable_json, nullable=True)
     review_actor_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     review_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
