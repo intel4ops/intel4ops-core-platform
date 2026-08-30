@@ -71,6 +71,35 @@ def _decision_id(db: Session, run_id: UUID, source_field: str) -> UUID:
     return decision.id
 
 
+def test_ai_provenance_round_trips_through_the_read_apis(
+    client: TestClient, db: Session, tmp_path: Path
+) -> None:
+    """P3.xxE.2: ai_provenance must actually be visible through the API,
+    not just persisted in the DB -- this is the exact gap a live-cert
+    poll caught (the column existed but neither read schema exposed it)."""
+    org_id = create_organization(client, "sr-ai-provenance")
+    case_id, run_id = _run_case(db, tmp_path, org_id)
+    decision_id = _decision_id(db, run_id, "asset_id")
+
+    semantic_view = client.get(
+        f"/api/v1/organizations/{org_id}/analysis-cases/{case_id}/semantic",
+        params={"run_id": str(run_id)},
+    )
+    assert semantic_view.status_code == 200, semantic_view.text
+    body = semantic_view.json()
+    field_decisions = body["datasets"][0]["field_decisions"]
+    assert all("ai_provenance" in fd for fd in field_decisions)
+    asset_id_decision = next(fd for fd in field_decisions if fd["source_field"] == "asset_id")
+    assert asset_id_decision["ai_provenance"] is None
+
+    review_item = client.get(
+        f"/api/v1/organizations/{org_id}/analysis-cases/{case_id}"
+        f"/semantic/decisions/{decision_id}/review"
+    )
+    assert review_item.status_code == 200, review_item.text
+    assert "ai_provenance" in review_item.json()["machine_proposal"]
+
+
 def test_review_queue_lists_pending_items(client: TestClient, db: Session, tmp_path: Path) -> None:
     org_id = create_organization(client, "sr-queue")
     case_id, run_id = _run_case(db, tmp_path, org_id)
