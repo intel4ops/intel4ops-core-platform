@@ -6425,7 +6425,7 @@ def test_cm01_migration_round_trip_enforces_expected_schema(postgres_engine: Eng
     assert "schema_fingerprint_snapshot" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260829_0054"]
+    assert heads == ["20260830_0055"]
 
 
 @pytest.mark.postgres
@@ -6978,7 +6978,7 @@ def test_field_mapping_origin_lineage_migration_round_trip_enforces_expected_sch
     assert "origin_memory_version_id" in reupgraded_columns
 
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["20260829_0054"]
+    assert heads == ["20260830_0055"]
 
 
 @pytest.mark.postgres
@@ -7011,7 +7011,59 @@ def test_p3_11_knowledge_pack_migration_round_trip_and_tenant_links(
     assert "knowledge_packs" not in inspect(postgres_engine).get_table_names()
     command.upgrade(config, "head")
     assert "knowledge_packs" in inspect(postgres_engine).get_table_names()
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260829_0054"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260830_0055"]
+
+
+@pytest.mark.postgres
+def test_p3xxe1a_semantic_review_governance_migration_round_trip(
+    postgres_engine: Engine,
+) -> None:
+    config = alembic_config(require_disposable_postgres_url())
+    command.upgrade(config, "head")
+    inspector = inspect(postgres_engine)
+    assert {
+        "semantic_reviews",
+        "semantic_decision_versions",
+        "semantic_decision_audit_events",
+    } <= set(inspector.get_table_names())
+
+    version_foreign_keys = {
+        fk["name"]: fk for fk in inspector.get_foreign_keys("semantic_decision_versions")
+    }
+    assert set(
+        version_foreign_keys["semantic_decision_versions_decision_id_fkey"]["constrained_columns"]
+    ) == {"decision_id"}
+    assert set(
+        version_foreign_keys["semantic_decision_versions_supersedes_version_id_fkey"][
+            "constrained_columns"
+        ]
+    ) == {"supersedes_version_id"}
+    assert version_foreign_keys["semantic_decision_versions_supersedes_version_id_fkey"][
+        "referred_table"
+    ] == "semantic_decision_versions"
+
+    version_uniques = {
+        uq["name"] for uq in inspector.get_unique_constraints("semantic_decision_versions")
+    }
+    assert "uq_semantic_decision_versions_org_decision_version" in version_uniques
+
+    review_foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("semantic_reviews")}
+    assert "semantic_reviews_decision_id_fkey" in review_foreign_keys
+
+    command.downgrade(config, "20260829_0054")
+    assert "semantic_reviews" not in inspect(postgres_engine).get_table_names()
+    assert "semantic_decision_versions" not in inspect(postgres_engine).get_table_names()
+    assert "semantic_decision_audit_events" not in inspect(postgres_engine).get_table_names()
+
+    command.upgrade(config, "head")
+    reupgraded_tables = set(inspect(postgres_engine).get_table_names())
+    assert {
+        "semantic_reviews",
+        "semantic_decision_versions",
+        "semantic_decision_audit_events",
+    } <= reupgraded_tables
+
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260830_0055"]
 
 
 @pytest.mark.postgres

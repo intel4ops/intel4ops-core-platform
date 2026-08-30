@@ -44,6 +44,10 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/models/semantic.py",  # P3.xxE.1 Semantic Understanding
     "app/services/analysis_case_semantic_service.py",  # P3.xxE.1 Semantic Understanding
     "app/api/semantic_routes.py",  # P3.xxE.1 Semantic Understanding
+    "app/semantic/review.py",  # P3.xxE.1A Semantic Review & Governance
+    "app/models/semantic_review.py",  # P3.xxE.1A Semantic Review & Governance
+    "app/services/semantic_review_service.py",  # P3.xxE.1A Semantic Review & Governance
+    "app/api/semantic_review_routes.py",  # P3.xxE.1A Semantic Review & Governance
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")

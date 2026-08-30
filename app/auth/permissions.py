@@ -196,3 +196,12 @@ VALIDATION_WRITE_ROLES = (
     MembershipRole.ANALYST,
     MembershipRole.OPERATOR,
 )
+
+# P3.xxE.1A Semantic Review & Governance -- mirrors CAUSAL_REVIEW_ROLES /
+# VALIDATION_WRITE_ROLES membership rather than introducing new role
+# semantics.
+SEMANTIC_REVIEW_ROLES = (
+    MembershipRole.ORGANIZATION_ADMIN,
+    MembershipRole.ANALYST,
+    MembershipRole.OPERATOR,
+)
