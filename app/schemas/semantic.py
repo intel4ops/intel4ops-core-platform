@@ -63,6 +63,9 @@ class FieldInterpretationDecisionRead(BaseModel):
     alternative_candidates: list[dict[str, object]]
     decision_source: str
     decision_version: str
+    # P3.xxE.2: structured AI provenance ({"ai_used": true, "provider_code":
+    # ..., "model_version": ...}), null for purely deterministic decisions.
+    ai_provenance: dict[str, object] | None
     review_actor_user_id: UUID | None
     review_timestamp: datetime | None
 

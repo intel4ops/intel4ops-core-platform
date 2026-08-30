@@ -19,6 +19,9 @@ class MachineProposalRead(BaseModel):
     alternative_candidates: list[dict[str, object]]
     decision_source: str
     decision_version: str
+    # P3.xxE.2: structured AI provenance, null for purely deterministic
+    # decisions -- see app/models/semantic.py's ai_provenance column.
+    ai_provenance: dict[str, object] | None = None
 
 
 class EffectiveDecisionRead(BaseModel):
