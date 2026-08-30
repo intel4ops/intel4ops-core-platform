@@ -88,7 +88,9 @@ class SemanticDecisionVersion(Base):
     __tablename__ = "semantic_decision_versions"
     __table_args__ = (
         UniqueConstraint(
-            "organization_id", "decision_id", "version_number",
+            "organization_id",
+            "decision_id",
+            "version_number",
             name="uq_semantic_decision_versions_org_decision_version",
         ),
         CheckConstraint(

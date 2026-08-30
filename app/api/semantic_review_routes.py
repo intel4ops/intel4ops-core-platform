@@ -73,9 +73,7 @@ def list_review_queue(
                 machine_status=item.decision.status,
                 alternative_candidates=item.decision.alternative_candidates,
                 evidence_summary=item.decision.evidence_summary,
-                current_version=item.latest_version.version_number
-                if item.latest_version
-                else None,
+                current_version=item.latest_version.version_number if item.latest_version else None,
                 effective_state=item.latest_version.effective_status
                 if item.latest_version
                 else item.decision.status,

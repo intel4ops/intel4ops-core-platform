@@ -7038,9 +7038,12 @@ def test_p3xxe1a_semantic_review_governance_migration_round_trip(
             "constrained_columns"
         ]
     ) == {"supersedes_version_id"}
-    assert version_foreign_keys["semantic_decision_versions_supersedes_version_id_fkey"][
-        "referred_table"
-    ] == "semantic_decision_versions"
+    assert (
+        version_foreign_keys["semantic_decision_versions_supersedes_version_id_fkey"][
+            "referred_table"
+        ]
+        == "semantic_decision_versions"
+    )
 
     version_uniques = {
         uq["name"] for uq in inspector.get_unique_constraints("semantic_decision_versions")

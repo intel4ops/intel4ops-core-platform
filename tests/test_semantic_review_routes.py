@@ -47,9 +47,7 @@ def _run_case(db: Session, tmp_path: Path, org_id: UUID) -> tuple[UUID, UUID]:
         db, org_id, case.id, [UploadedFile("maintenance_events.csv", MAINT_CSV)], actor
     )
     run = analysis_case_orchestration_service.start_run(db, org_id, case.id, actor)
-    analysis_case_orchestration_service.execute(
-        db, service.storage, org_id, case.id, run.id, actor
-    )
+    analysis_case_orchestration_service.execute(db, service.storage, org_id, case.id, run.id, actor)
     return case.id, run.id
 
 
