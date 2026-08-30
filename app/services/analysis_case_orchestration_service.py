@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pandas as pd
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    # P3.xxE.3: type-hint-only usages. Kept out of the real (module-level,
+    # ruff-isort-sorted) import block on purpose -- app.entities.entity_resolution
+    # transitively imports app.semantic.candidate, which imports
+    # app.models.entities; a plain top-of-file import here, sorted
+    # alphabetically before the app.models.* block below, would re-trigger
+    # a pre-existing circular-import ordering quirk in this codebase (only
+    # a problem for the FIRST import in the chain to touch app.semantic.candidate
+    # before app.models has fully initialized). PEP 563 (from __future__
+    # import annotations` above) means annotations are never evaluated at
+    # runtime, so TYPE_CHECKING-only is sufficient and always safe here;
+    # the few call sites that need these at runtime import them locally
+    # (see _run_case_level_entity_resolution / _run_case_level_relationship_discovery).
+    from app.entities.entity_candidate import EntityCandidate
+    from app.entities.entity_resolution import EntityResolutionOutcome
 
 from app.core.config import get_settings
 from app.models.analysis_case import (
@@ -25,14 +42,20 @@ from app.models.analysis_case import (
     StageEventStatus,
 )
 from app.models.entities import utc_now
+from app.models.entities_canonical import (
+    CanonicalCaseEntity,
+    CanonicalCaseRelationship,
+    CanonicalEntityObservation,
+)
 from app.models.semantic import (
     SemanticDatasetProfile,
     SemanticInterpretationDecision,
     SemanticRoleInterpretation,
 )
 from app.schemas.trust import TrustAssessmentCreate
-from app.semantic.candidate import SemanticCandidate
+from app.semantic.candidate import InterpretationDecision, SemanticCandidate
 from app.semantic.case_context import CaseSemanticContext
+from app.semantic.concept_registry import default_canonical_concept_registry
 from app.semantic.interpreter import interpret_dataset, profile_and_classify
 from app.semantic.profiler import DatasetProfile, FieldProfile
 from app.semantic.provider_factory import SemanticAIBudget, select_semantic_reasoning_provider
@@ -124,6 +147,22 @@ class ReviewReason:
     message: str
 
 
+@dataclass(frozen=True)
+class SemanticInterpretationOutcome:
+    """P3.xxE.3: what _run_case_level_semantic_interpretation hands back
+    for the new canonical_entity_resolution stage to consume in-memory,
+    rather than re-querying SemanticInterpretationDecision rows from the
+    DB -- avoids both a redundant round-trip and any drift between
+    persisted and reasoned-about state. decisions_by_case_dataset is
+    keyed by AnalysisCaseDataset.id (the persistence-relevant id), unlike
+    case_context.profiles/roles which stay keyed by the underlying
+    Dataset.id (str(case_dataset.dataset_id)) to match interpret_dataset's
+    own existing convention."""
+
+    case_context: CaseSemanticContext
+    decisions_by_case_dataset: dict[UUID, list[InterpretationDecision]]
+
+
 class AnalysisCaseOrchestrationError(ValueError):
     def __init__(self, message: str, *, code: str, status: int = 409) -> None:
         super().__init__(message)
@@ -208,7 +247,7 @@ class AnalysisCaseOrchestrationService:
         run_id: UUID,
         case_datasets: list[AnalysisCaseDataset],
         raw_dfs: dict[UUID, pd.DataFrame],
-    ) -> None:
+    ) -> SemanticInterpretationOutcome:
         """P3.xxE.1/P3.xxE.2: two-pass, order-independent semantic
         interpretation across the whole case (app/semantic/). Read-only
         with respect to everything downstream -- results are persisted for
@@ -221,7 +260,12 @@ class AnalysisCaseOrchestrationService:
         (all datasets, not just earlier-processed ones), so cross-dataset
         evidence is identical regardless of case_datasets iteration order
         -- see app/semantic/case_context.py and
-        app/semantic/cross_dataset_context.py."""
+        app/semantic/cross_dataset_context.py.
+
+        P3.xxE.3: returns a SemanticInterpretationOutcome carrying the
+        CaseSemanticContext and every dataset's in-memory
+        InterpretationDecision list, for the new canonical_entity_resolution
+        stage to consume directly -- see SemanticInterpretationOutcome."""
         profiles: dict[str, DatasetProfile] = {}
         roles: dict[str, DatasetRoleInterpretation] = {}
         for case_dataset in case_datasets:
@@ -243,6 +287,7 @@ class AnalysisCaseOrchestrationService:
         auto_accepted = 0
         review_required = 0
         unresolved = 0
+        decisions_by_case_dataset: dict[UUID, list[InterpretationDecision]] = {}
 
         for case_dataset in case_datasets:
             raw_df = raw_dfs.get(case_dataset.id)
@@ -306,6 +351,8 @@ class AnalysisCaseOrchestrationService:
                 )
             db.commit()
 
+            decisions_by_case_dataset[case_dataset.id] = result.field_decisions
+
             datasets_interpreted += 1
             fields_interpreted += len(result.field_decisions)
             auto_accepted += sum(1 for d in result.field_decisions if d.status == "auto_accepted")
@@ -332,6 +379,166 @@ class AnalysisCaseOrchestrationService:
                 "ai_calls_made": budget.calls_made,
                 "ai_budget_exhausted": budget.calls_made >= budget.max_calls
                 and settings.semantic_ai_enabled,
+            },
+        )
+
+        return SemanticInterpretationOutcome(
+            case_context=case_context, decisions_by_case_dataset=decisions_by_case_dataset
+        )
+
+    def _run_case_level_entity_resolution(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        case_datasets: list[AnalysisCaseDataset],
+        raw_dfs: dict[UUID, pd.DataFrame],
+        semantic_outcome: SemanticInterpretationOutcome,
+    ) -> tuple[dict[tuple[str, str], UUID], list[EntityCandidate]]:
+        """P3.xxE.3: consumes P3.xxE.1A EFFECTIVE semantic decisions
+        (never raw field names) to resolve entities within this run only
+        -- see app/entities/entity_resolution.py. Returns a
+        (entity_type, canonical_key) -> CanonicalCaseEntity.id lookup plus the
+        resolved EntityCandidate list itself, both needed by the
+        relationship-discovery stage that follows. Stage failure never
+        fails the run, mirroring semantic_interpretation's own blanket
+        try/except (see execute())."""
+        from app.entities.entity_resolution import CaseDatasetEntityInput, resolve_entities_for_case
+        from app.entities.entity_type import observation_value_fields
+        from app.entities.identifier_normalization import NORMALIZATION_POLICY_VERSION
+
+        dataset_inputs = [
+            CaseDatasetEntityInput(
+                analysis_case_dataset_id=str(case_dataset.id),
+                dataset_label=case_dataset.source_label,
+                decisions=semantic_outcome.decisions_by_case_dataset.get(case_dataset.id, []),
+                raw_dataframe=raw_dfs[case_dataset.id],
+            )
+            for case_dataset in case_datasets
+            if case_dataset.id in raw_dfs
+        ]
+        outcome: EntityResolutionOutcome = resolve_entities_for_case(
+            dataset_inputs, default_canonical_concept_registry
+        )
+
+        entity_ids: dict[tuple[str, str], UUID] = {}
+        for candidate in outcome.candidates:
+            raw_value, raw_value_hash = observation_value_fields(
+                candidate.entity_type, candidate.display_label
+            )
+            entity_row = CanonicalCaseEntity(
+                organization_id=organization_id,
+                analysis_case_id=analysis_case_id,
+                run_id=run_id,
+                entity_type=candidate.entity_type,
+                canonical_key=candidate.normalized_key,
+                display_label=raw_value or "[redacted]",
+                entity_type_confidence=candidate.entity_type_confidence,
+                entity_identity_confidence=candidate.entity_identity_confidence,
+                resolution_method=candidate.resolution_method,
+                evidence_summary=candidate.evidence_summary,
+                resolution_policy_version=NORMALIZATION_POLICY_VERSION,
+            )
+            db.add(entity_row)
+            db.flush()
+            entity_ids[(candidate.entity_type, candidate.normalized_key)] = entity_row.id
+
+            for obs in candidate.observations:
+                obs_raw_value, obs_raw_value_hash = observation_value_fields(
+                    obs.entity_type, obs.raw_value
+                )
+                db.add(
+                    CanonicalEntityObservation(
+                        organization_id=organization_id,
+                        canonical_entity_id=entity_row.id,
+                        analysis_case_dataset_id=UUID(obs.analysis_case_dataset_id),
+                        source_field=obs.source_field,
+                        concept_code=obs.concept_code,
+                        raw_value=obs_raw_value,
+                        raw_value_hash=obs_raw_value_hash,
+                        normalized_value=obs.normalized_value,
+                        semantic_confidence=obs.semantic_confidence,
+                        semantic_source=obs.semantic_source,
+                        human_validated=obs.human_validated,
+                    )
+                )
+        db.commit()
+
+        self._record_stage(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            "canonical_entity_resolution",
+            StageEventStatus.COMPLETED.value,
+            {
+                "fields_considered": outcome.fields_considered,
+                "fields_typed": outcome.fields_typed,
+                "entities_resolved": len(outcome.candidates),
+                "fuzzy_candidate_scores": len(outcome.fuzzy_scores),
+            },
+        )
+        return entity_ids, outcome.candidates
+
+    def _run_case_level_relationship_discovery(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        entity_candidates: list[EntityCandidate],
+        entity_ids: dict[tuple[str, str], UUID],
+        raw_dfs_by_case_dataset: dict[UUID, pd.DataFrame],
+    ) -> None:
+        """P3.xxE.3: discovers structural/operational relationships
+        between this run's resolved entities -- see
+        app/entities/relationship_discovery.py. Stage failure never fails
+        the run."""
+        from app.entities.confidence_decomposition import RELATIONSHIP_POLICY_VERSION
+        from app.entities.relationship_discovery import discover_relationships_for_case
+
+        raw_dfs_by_str = {str(cd_id): df for cd_id, df in raw_dfs_by_case_dataset.items()}
+        relationship_candidates = discover_relationships_for_case(entity_candidates, raw_dfs_by_str)
+
+        persisted = 0
+        for candidate in relationship_candidates:
+            left_id = entity_ids.get((candidate.left_entity_type, candidate.left_normalized_key))
+            right_id = entity_ids.get((candidate.right_entity_type, candidate.right_normalized_key))
+            if left_id is None or right_id is None or left_id == right_id:
+                continue
+            db.add(
+                CanonicalCaseRelationship(
+                    organization_id=organization_id,
+                    analysis_case_id=analysis_case_id,
+                    run_id=run_id,
+                    left_entity_id=left_id,
+                    right_entity_id=right_id,
+                    relationship_type=candidate.relationship_type,
+                    cardinality=candidate.cardinality,
+                    left_entity_identity_confidence=candidate.confidence.left_entity_identity_confidence,
+                    right_entity_identity_confidence=candidate.confidence.right_entity_identity_confidence,
+                    structural_evidence_confidence=candidate.confidence.structural_evidence_confidence,
+                    relationship_confidence=candidate.confidence.relationship_confidence,
+                    status=candidate.status,
+                    evidence_summary=candidate.evidence_summary,
+                    conflict_reason=candidate.conflict_reason,
+                    relationship_policy_version=RELATIONSHIP_POLICY_VERSION,
+                )
+            )
+            persisted += 1
+        db.commit()
+
+        self._record_stage(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            "relationship_discovery",
+            StageEventStatus.COMPLETED.value,
+            {
+                "relationship_candidates": len(relationship_candidates),
+                "relationships_persisted": persisted,
             },
         )
 
@@ -547,8 +754,9 @@ class AnalysisCaseOrchestrationService:
         # Trust/Mapping so it never affects that loop's behavior; never
         # blocking -- a semantic-layer failure is recorded and skipped,
         # never a run failure.
+        semantic_outcome: SemanticInterpretationOutcome | None = None
         try:
-            self._run_case_level_semantic_interpretation(
+            semantic_outcome = self._run_case_level_semantic_interpretation(
                 db, organization_id, analysis_case_id, run_id, case_datasets, raw_dfs_for_semantic
             )
         except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
@@ -560,6 +768,76 @@ class AnalysisCaseOrchestrationService:
                 "semantic_interpretation",
                 StageEventStatus.FAILED.value,
                 {"error": str(exc)},
+            )
+
+        # P3.xxE.3: additive canonical entity resolution + relationship
+        # discovery, running alongside (never replacing) the legacy
+        # exact-match entity_resolution stage below -- see the P3.xxE.3
+        # plan's legacy cutover roadmap. Consumes EFFECTIVE semantic
+        # decisions from the stage just above; skipped entirely (not
+        # failed) if that stage itself didn't complete, since there is
+        # nothing governed to resolve against.
+        if semantic_outcome is not None:
+            try:
+                entity_ids, entity_candidates = self._run_case_level_entity_resolution(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    case_datasets,
+                    raw_dfs_for_semantic,
+                    semantic_outcome,
+                )
+            except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
+                entity_ids, entity_candidates = {}, []
+                self._record_stage(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    "canonical_entity_resolution",
+                    StageEventStatus.FAILED.value,
+                    {"error": str(exc)},
+                )
+
+            try:
+                self._run_case_level_relationship_discovery(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    entity_candidates,
+                    entity_ids,
+                    raw_dfs_for_semantic,
+                )
+            except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
+                self._record_stage(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    "relationship_discovery",
+                    StageEventStatus.FAILED.value,
+                    {"error": str(exc)},
+                )
+        else:
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "canonical_entity_resolution",
+                StageEventStatus.SKIPPED.value,
+                {"reason": "semantic_interpretation did not complete"},
+            )
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "relationship_discovery",
+                StageEventStatus.SKIPPED.value,
+                {"reason": "semantic_interpretation did not complete"},
             )
 
         # --- ENTITY RESOLUTION (across all successfully mapped datasets) ---
