@@ -232,6 +232,11 @@ from app.models.semantic import (
     SemanticInterpretationDecision,
     SemanticRoleInterpretation,
 )
+from app.models.semantic_review import (
+    SemanticDecisionAuditEvent,
+    SemanticDecisionVersion,
+    SemanticReview,
+)
 from app.models.signatures import (
     OperationalFeatureDefinition,
     OperationalFeatureVersion,
@@ -512,6 +517,9 @@ __all__ = [
     "SemanticDatasetProfile",
     "SemanticInterpretationDecision",
     "SemanticRoleInterpretation",
+    "SemanticReview",
+    "SemanticDecisionVersion",
+    "SemanticDecisionAuditEvent",
 ]
 from app.models.actions import (
     ActionDependency,

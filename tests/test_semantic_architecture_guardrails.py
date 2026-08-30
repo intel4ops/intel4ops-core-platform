@@ -32,6 +32,11 @@ _PRODUCTION_SEMANTIC_FILES = [
     _REPO_ROOT / "app" / "services" / "analysis_case_semantic_service.py",
     _REPO_ROOT / "app" / "api" / "semantic_routes.py",
     _REPO_ROOT / "app" / "schemas" / "semantic.py",
+    _REPO_ROOT / "app" / "semantic" / "review.py",
+    _REPO_ROOT / "app" / "models" / "semantic_review.py",
+    _REPO_ROOT / "app" / "services" / "semantic_review_service.py",
+    _REPO_ROOT / "app" / "api" / "semantic_review_routes.py",
+    _REPO_ROOT / "app" / "schemas" / "semantic_review.py",
 ]
 
 # Also re-verify the pre-existing production execution surface from
