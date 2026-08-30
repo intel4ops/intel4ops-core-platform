@@ -19,6 +19,7 @@ from app.api.decision_intelligence_routes import catalog_router as decision_cata
 from app.api.decision_intelligence_routes import tenant_router as decision_tenant_router
 from app.api.decision_intelligence_routes import workspace_router as decision_workspace_router
 from app.api.economics_routes import router as economics_router
+from app.api.entities_routes import router as entities_router
 from app.api.executive_narrative_routes import router as executive_narrative_router
 from app.api.finding_routes import router as finding_router
 from app.api.forecasting_routes import router as forecasting_router
@@ -181,3 +182,4 @@ app.include_router(analysis_case_router)
 app.include_router(validation_router)
 app.include_router(semantic_router)
 app.include_router(semantic_review_router)
+app.include_router(entities_router)

@@ -109,6 +109,11 @@ from app.models.decision_intelligence import (
     DecisionSolution,
     DecisionVariableDefinition,
 )
+from app.models.entities_canonical import (
+    CanonicalCaseEntity,
+    CanonicalCaseRelationship,
+    CanonicalEntityObservation,
+)
 from app.models.executive_narrative import GroundedExecutiveNarrative
 from app.models.findings import (
     FindingCalculationTrace,
@@ -409,6 +414,9 @@ __all__ = [
     "TrustEvidence",
     "TrustRuleResult",
     "DirectionalValueScan",
+    "CanonicalCaseEntity",
+    "CanonicalEntityObservation",
+    "CanonicalCaseRelationship",
     "GroundedExecutiveNarrative",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",

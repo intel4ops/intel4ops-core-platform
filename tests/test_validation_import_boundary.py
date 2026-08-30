@@ -53,6 +53,22 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/semantic/neighbor_context.py",  # P3.xxE.2 Adaptive Field Interpretation
     "app/semantic/cross_dataset_context.py",  # P3.xxE.2 Adaptive Field Interpretation
     "app/semantic/case_context.py",  # P3.xxE.2 Adaptive Field Interpretation
+    "app/entities/entity_type.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/identifier_normalization.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/entity_candidate.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/entity_type_inference.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/entity_resolution_tiers.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/entity_deduplication.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/case_entity_context.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/entity_resolution.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/relationship_type.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/relationship_candidate.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/confidence_decomposition.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/relationship_discovery.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/entities/intelligence_contract.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/models/entities_canonical.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/services/analysis_case_entities_service.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/api/entities_routes.py",  # P3.xxE.3 Entity + Relationship Intelligence
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")
