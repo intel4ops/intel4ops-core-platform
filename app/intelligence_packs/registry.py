@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.entities.entity_type import EntityType
+
 
 @dataclass(frozen=True)
 class IntelligencePackDefinition:
@@ -25,6 +27,60 @@ class IntelligencePackDefinition:
     supported_industry_contexts: frozenset[str] | None  # None = industry-agnostic
     currency_required: bool
     output_domains: frozenset[str]
+
+    # P3.xxE.5: additive fields extending readiness onto E.3/E.4's canonical
+    # layer -- all defaulted so MAINT-001/XDOM-A/XDOM-B's pre-existing
+    # registrations above need no changes unless they opt into a new check.
+    # "model/rule version" is deliberately NOT duplicated here -- the
+    # existing `version` field above already is that; activation_policy_version
+    # below versions the READINESS-EVALUATION POLICY itself, a distinct
+    # concept, mirroring app/entities/*_policy_version /
+    # app/process/*_policy_version's own convention.
+    required_canonical_entities: frozenset[str] = (
+        frozenset()
+    )  # app.entities.entity_type.EntityType values
+    required_relationships: frozenset[str] = (
+        frozenset()
+    )  # app.entities.relationship_type.RelationshipType values
+    required_activities: frozenset[str] = (
+        frozenset()
+    )  # app.process.activity_type.ActivityType values
+    required_activity_sequences: frozenset[tuple[str, str]] = (
+        frozenset()
+    )  # (from_type, to_type) PRECEDES pairs
+    required_states: frozenset[str] = (
+        frozenset()
+    )  # canonical state names (app.process.state_normalization)
+    required_canonical_measures: frozenset[str] = (
+        frozenset()
+    )  # concept codes for quantity/monetary_amount fields
+
+    minimum_entity_identity_confidence: float = 0.0
+    minimum_relationship_confidence: float = 0.0
+    minimum_activity_confidence: float = 0.0
+    minimum_process_confidence: float = 0.0
+
+    # Plan review correction 2: HOW a ConfidenceDistribution is reduced
+    # against a declared minimum before deciding PARTIAL vs not.
+    # "coverage_above_threshold" (the safe default) means: at least
+    # minimum_coverage_ratio of the matching population must individually
+    # clear the relevant minimum_*_confidence -- one high-confidence
+    # outlier can never carry a low-confidence population to READY.
+    confidence_aggregation_policy: str = "coverage_above_threshold"  # | "min" | "median" | "max"
+    minimum_coverage_ratio: float = 1.0
+
+    # Plan review correction 6 / spec: mirrors calculation_registry.py's own
+    # already-established house convention (single ISO currency per
+    # execution, no FX, mixed/missing required currency blocks) rather than
+    # inventing new vocabulary.
+    currency_behavior: str = (
+        "single_currency_only"  # | "multi_currency_aware" | "currency_agnostic"
+    )
+    unit_behavior: str = "unit_agnostic"  # | "single_unit_only" | "unit_aware"
+
+    evidence_requirements: frozenset[str] = frozenset()
+    activation_policy_version: str = "v1"
+    is_disabled: bool = False
 
 
 class IntelligencePackRegistry:
@@ -83,6 +139,23 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             supported_industry_contexts=None,
             currency_required=False,
             output_domains=frozenset({"maintenance", "operations"}),
+            # P3.xxE.5: ASSET is backed by a real semantic concept
+            # (app/entities/entity_type.py) so E.3 entity resolution can
+            # actually produce it -- a real, checkable enrichment of this
+            # already-registered rule's requirements, not a new rule.
+            # "operational_event" has NO canonical-entity-type analog
+            # (EntityType.EVENT has no backing concept registered yet, per
+            # entity_type.py's own documented gap) -- deliberately left out
+            # of required_canonical_entities rather than mapped to a type
+            # that could never actually be produced.
+            required_canonical_entities=frozenset({EntityType.ASSET.value}),
+            minimum_entity_identity_confidence=0.70,
+            confidence_aggregation_policy="coverage_above_threshold",
+            minimum_coverage_ratio=1.0,
+            # Rule A compares downtime-hour windows only -- never sums or
+            # compares a monetary amount across records.
+            currency_behavior="currency_agnostic",
+            unit_behavior="unit_agnostic",
         )
     )
     registry.register(
@@ -98,6 +171,14 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             supported_industry_contexts=None,
             currency_required=False,
             output_domains=frozenset({"operations", "revenue"}),
+            # P3.xxE.5: no required_canonical_entities set -- "operational_event"
+            # has no EntityType analog reachable by E.3 today (see XDOM-A's
+            # comment above). Rule B only checks whether a matching revenue
+            # RECORD exists, never sums transaction_amount across records,
+            # so it is currency-agnostic despite transaction_amount being a
+            # required canonical field.
+            currency_behavior="currency_agnostic",
+            unit_behavior="unit_agnostic",
         )
     )
     return registry

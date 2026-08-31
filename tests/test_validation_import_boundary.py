@@ -89,6 +89,15 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/models/process_canonical.py",  # P3.xxE.4 Operational Process Interpretation
     "app/services/analysis_case_process_service.py",  # P3.xxE.4 Operational Process Interpretation
     "app/api/process_routes.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/intelligence_packs/registry.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/intelligence_packs/confidence_distribution.py",  # P3.xxE.5 Intelligence Activation
+    "app/intelligence_packs/case_capability_index.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/intelligence_packs/shadow_comparison.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/services/intelligence_readiness_service.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/services/case_capability_index_service.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/models/intelligence_activation.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/services/analysis_case_capability_service.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
+    "app/api/capability_activation_routes.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")

@@ -159,6 +159,7 @@ from app.models.industry_packs import (
     IndustryPackVersion,
 )
 from app.models.intelligence import IntelligenceExecution, IntelligenceExecutionEvidence
+from app.models.intelligence_activation import IntelligenceActivationDecision
 from app.models.knowledge_graph import (
     KnowledgeGraphChange,
     KnowledgeGraphEdge,
@@ -428,6 +429,7 @@ __all__ = [
     "GroundedExecutiveNarrative",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",
+    "IntelligenceActivationDecision",
     "IntelligenceEngineRegistration",
     "IntelligenceOrchestrationDecision",
     "IntelligenceOrchestrationRequest",
