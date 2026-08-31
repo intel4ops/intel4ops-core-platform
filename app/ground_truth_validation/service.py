@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -18,6 +19,11 @@ from app.ground_truth_validation.adapters.registry import (
     default_ground_truth_package_adapter_registry,
 )
 from app.ground_truth_validation.causal_matcher import score_causal
+from app.ground_truth_validation.corpus_discovery import (
+    ExternalSimulationPackage,
+    PackageStatus,
+    SimulationCorpusDiscovery,
+)
 from app.ground_truth_validation.dq_matcher import score_data_quality
 from app.ground_truth_validation.integrity import validate_package_integrity
 from app.ground_truth_validation.leakage_matcher import match_leakage
@@ -72,6 +78,41 @@ class ValidationServiceError(ValueError):
 
 def _default_storage() -> StorageBackend:
     return LocalFileStorage(get_settings().storage_root)
+
+
+def _payload_checksum(payload: dict[str, object]) -> str:
+    """Byte-identical to upload_ground_truth()'s own checksum computation
+    (section: idempotent registration) -- lets register_corpus() detect
+    "this exact package is already registered" or "this simulation_code
+    exists with DIFFERENT truth content" without needing a second upload
+    attempt just to find out."""
+    raw_bytes = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw_bytes).hexdigest()
+
+
+@dataclass(frozen=True)
+class CorpusRegistrationOutcome:
+    simulation_id: str
+    package_status: PackageStatus
+    outcome: str  # newly_registered | already_registered | awaiting_case | conflict | not_ready
+    detail: str
+
+
+@dataclass(frozen=True)
+class CorpusRegistrationSummary:
+    discovered: int = 0
+    ready: int = 0
+    newly_registered: int = 0
+    already_registered: int = 0
+    awaiting_case: int = 0
+    conflicts: int = 0
+    missing_truth: int = 0
+    missing_customer_data: int = 0
+    unsealed: int = 0
+    hash_mismatch: int = 0
+    unsupported_schema: int = 0
+    invalid: int = 0
+    outcomes: tuple[CorpusRegistrationOutcome, ...] = field(default_factory=tuple)
 
 
 def _json_default(value: object) -> object:
@@ -701,6 +742,145 @@ class ValidationService:
             )
             results.append((run, score_row, dimensions, matches))
         return results
+
+    def register_corpus(
+        self,
+        db: Session,
+        organization_id: UUID,
+        corpus_root: str | Path,
+        analysis_case_ids_by_simulation: dict[str, UUID],
+        actor_user_id: UUID,
+        discovery: SimulationCorpusDiscovery | None = None,
+    ) -> CorpusRegistrationSummary:
+        """P3.xxV.1A: idempotent folder-corpus registration -- discovers
+        packages, validates them, and registers every READY package that
+        has a caller-supplied analysis_case_id (AnalysisCase creation and
+        customer-data ingestion stay outside this method, on purpose: the
+        Validation Plane never writes production tables -- see this
+        module's own header comment on the one-way dependency rule).
+        Never overwrites an existing registration with different truth
+        content; a same-code/different-hash package is reported as a
+        conflict, not silently applied."""
+        root = Path(corpus_root)
+        packages = (discovery or SimulationCorpusDiscovery()).discover(root)
+        outcomes: list[CorpusRegistrationOutcome] = []
+        counts = dict.fromkeys(
+            (
+                "ready",
+                "newly_registered",
+                "already_registered",
+                "awaiting_case",
+                "conflict",
+                "missing_truth",
+                "missing_customer_data",
+                "unsealed",
+                "hash_mismatch",
+                "unsupported_schema",
+                "invalid",
+            ),
+            0,
+        )
+
+        for package in packages:
+            if package.package_status != PackageStatus.READY:
+                counts[package.package_status.value.lower()] += 1
+                outcomes.append(
+                    CorpusRegistrationOutcome(
+                        package.simulation_id,
+                        package.package_status,
+                        "not_ready",
+                        package.status_detail,
+                    )
+                )
+                continue
+            counts["ready"] += 1
+            outcome = self._register_ready_package(
+                db, organization_id, package, root, analysis_case_ids_by_simulation, actor_user_id
+            )
+            counts[outcome.outcome] += 1
+            outcomes.append(outcome)
+
+        return CorpusRegistrationSummary(
+            discovered=len(packages),
+            ready=counts["ready"],
+            newly_registered=counts["newly_registered"],
+            already_registered=counts["already_registered"],
+            awaiting_case=counts["awaiting_case"],
+            conflicts=counts["conflict"],
+            missing_truth=counts["missing_truth"],
+            missing_customer_data=counts["missing_customer_data"],
+            unsealed=counts["unsealed"],
+            hash_mismatch=counts["hash_mismatch"],
+            unsupported_schema=counts["unsupported_schema"],
+            invalid=counts["invalid"],
+            outcomes=tuple(outcomes),
+        )
+
+    def _register_ready_package(
+        self,
+        db: Session,
+        organization_id: UUID,
+        package: ExternalSimulationPackage,
+        corpus_root: Path,
+        analysis_case_ids_by_simulation: dict[str, UUID],
+        actor_user_id: UUID,
+    ) -> CorpusRegistrationOutcome:
+        payload = package.build_ground_truth_payload(corpus_root / package.package_reference)
+        candidate_checksum = _payload_checksum(payload)
+
+        existing = validation_ground_truth_repository.get_simulation_by_code(
+            db, organization_id, package.simulation_id
+        )
+        case_id = analysis_case_ids_by_simulation.get(package.simulation_id)
+
+        if existing is not None:
+            latest = validation_ground_truth_repository.latest_ground_truth(
+                db, organization_id, existing.id
+            )
+            if latest is not None:
+                if latest.checksum == candidate_checksum:
+                    return CorpusRegistrationOutcome(
+                        package.simulation_id,
+                        package.package_status,
+                        "already_registered",
+                        "identical truth content already registered",
+                    )
+                return CorpusRegistrationOutcome(
+                    package.simulation_id,
+                    package.package_status,
+                    "conflict",
+                    "an existing registration's ground truth checksum differs from this "
+                    "package's -- refusing to overwrite; investigate before proceeding",
+                )
+            # simulation registered but truth never uploaded -- complete it.
+            self.upload_ground_truth(db, organization_id, existing.id, payload, actor_user_id)
+            return CorpusRegistrationOutcome(
+                package.simulation_id,
+                package.package_status,
+                "newly_registered",
+                "completed a simulation registration that had no ground truth yet",
+            )
+
+        if case_id is None:
+            return CorpusRegistrationOutcome(
+                package.simulation_id,
+                package.package_status,
+                "awaiting_case",
+                "package is READY but no analysis_case_id was supplied for it",
+            )
+
+        simulation = self.create_simulation(
+            db,
+            organization_id,
+            package.simulation_id,
+            package.simulation_id,
+            case_id,
+            actor_user_id,
+        )
+        self.upload_ground_truth(db, organization_id, simulation.id, payload, actor_user_id)
+        return CorpusRegistrationOutcome(
+            package.simulation_id, package.package_status, "newly_registered", "registered fresh"
+        )
 
 
 validation_service = ValidationService()
