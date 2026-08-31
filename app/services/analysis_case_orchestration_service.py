@@ -847,6 +847,7 @@ class AnalysisCaseOrchestrationService:
                 ),
                 *(f"state:{s}" for s in sorted(result.governed.missing_states)),
                 *(f"measure:{m}" for m in sorted(result.governed.missing_canonical_measures)),
+                *(f"trust:{d}" for d in sorted(result.governed.missing_resolved_trust_domains)),
             ]
             db.add(
                 IntelligenceActivationDecision(

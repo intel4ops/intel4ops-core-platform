@@ -53,6 +53,14 @@ class IntelligenceReadinessResult:
     below_confidence_threshold: frozenset[str] = field(default_factory=frozenset)
     currency_violation: bool = False
     unit_violation: bool = False
+    # P3.xxE.5 corrected shadow certification: domains in
+    # pack.required_resolved_trust_domains whose Trust assessment is not
+    # (yet) resolved per index.domains_with_resolved_trust. A mandatory
+    # unresolved Trust prerequisite is BLOCKED, never PARTIAL -- PARTIAL
+    # stays reserved for structurally-available capabilities whose
+    # declared confidence/evidence threshold falls short, which is a
+    # different condition than a prerequisite simply not having run yet.
+    missing_resolved_trust_domains: frozenset[str] = field(default_factory=frozenset)
     reason: str = ""
 
 
@@ -142,6 +150,9 @@ def evaluate_readiness(
     unresolved_currency = pack.currency_required and index.currency_unresolved
     currency_violation = _evaluate_currency_safety(pack, index)
     unit_violation = _evaluate_unit_safety(pack, index)
+    missing_resolved_trust_domains = (
+        pack.required_resolved_trust_domains - index.domains_with_resolved_trust
+    )
 
     below_confidence_threshold: set[str] = set()
     for entity_type in pack.required_canonical_entities - missing_canonical_entities:
@@ -218,6 +229,7 @@ def evaluate_readiness(
         or unresolved_currency
         or currency_violation
         or unit_violation
+        or missing_resolved_trust_domains
     ):
         status = _STATUS_BLOCKED
     elif below_confidence_threshold:
@@ -257,6 +269,11 @@ def evaluate_readiness(
         reasons.append(f"currency safety violated ({pack.currency_behavior})")
     if unit_violation:
         reasons.append(f"unit safety violated ({pack.unit_behavior})")
+    if missing_resolved_trust_domains:
+        reasons.append(
+            "unresolved Trust assessment for domain(s): "
+            + ", ".join(sorted(missing_resolved_trust_domains))
+        )
     if below_confidence_threshold:
         reasons.append(
             f"below confidence threshold: {', '.join(sorted(below_confidence_threshold))}"
@@ -279,5 +296,6 @@ def evaluate_readiness(
         below_confidence_threshold=frozenset(below_confidence_threshold),
         currency_violation=currency_violation,
         unit_violation=unit_violation,
+        missing_resolved_trust_domains=frozenset(missing_resolved_trust_domains),
         reason=reason,
     )

@@ -55,6 +55,17 @@ class IntelligencePackDefinition:
         frozenset()
     )  # concept codes for quantity/monetary_amount fields
 
+    # P3.xxE.5 corrected shadow certification: domains whose Trust
+    # assessment must be RESOLVED (not merely present -- see
+    # CaseCapabilityIndex.domains_with_resolved_trust) before this pack can
+    # ever reach READY. Generic and rule-code-agnostic by construction: the
+    # evaluator only ever compares this set against
+    # index.domains_with_resolved_trust, exactly like every other
+    # required_*/available_* pair above -- see
+    # tests/test_capability_architecture_guardrails.py for the AST-level
+    # guardrail against any pack_code/rule_code branch reading this field.
+    required_resolved_trust_domains: frozenset[str] = frozenset()
+
     minimum_entity_identity_confidence: float = 0.0
     minimum_relationship_confidence: float = 0.0
     minimum_activity_confidence: float = 0.0
@@ -156,6 +167,12 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # compares a monetary amount across records.
             currency_behavior="currency_agnostic",
             unit_behavior="unit_agnostic",
+            # P3.xxE.5 corrected shadow certification: the pre-existing
+            # cross_domain_intelligence stage's own activation condition
+            # for this rule requires a resolved Trust assessment for its
+            # anchor domain, 'maintenance' -- verified directly against
+            # shadow_comparison.py's derive_legacy_activation() re-derivation.
+            required_resolved_trust_domains=frozenset({"maintenance"}),
         )
     )
     registry.register(
@@ -179,6 +196,16 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # required canonical field.
             currency_behavior="currency_agnostic",
             unit_behavior="unit_agnostic",
+            # P3.xxE.5 corrected shadow certification: the pre-existing
+            # cross_domain_intelligence stage's own activation condition
+            # for this rule requires a resolved Trust assessment for its
+            # anchor domain, 'operations' -- verified directly against
+            # shadow_comparison.py's derive_legacy_activation() re-derivation
+            # (this is exactly the disagreement the first shadow run found:
+            # XDOM-B reached governed READY on FIELDMAINT-004/005 despite
+            # legacy withholding activation for unresolved 'operations'
+            # Trust).
+            required_resolved_trust_domains=frozenset({"operations"}),
         )
     )
     return registry
