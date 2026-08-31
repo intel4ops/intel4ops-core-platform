@@ -357,6 +357,25 @@ class ValidationService:
             )
         return simulation
 
+    def get_simulation_by_code(
+        self, db: Session, organization_id: UUID, simulation_code: str
+    ) -> ValidationSimulation:
+        """P3.xxV.1: `simulation_code` is unique per organization (enforced
+        at create_simulation()) but was previously only look-up-able by the
+        opaque UUID a caller happened to already have from the create
+        response -- there was no way to re-discover an existing
+        registration's id from its human-meaningful code. Needed to safely
+        register external Simulation Factory packages without risking a
+        duplicate/orphaned registration on a re-run."""
+        simulation = validation_ground_truth_repository.get_simulation_by_code(
+            db, organization_id, simulation_code
+        )
+        if simulation is None:
+            raise ValidationServiceError(
+                "Simulation not found", code="simulation_not_found", status=404
+            )
+        return simulation
+
     def list_ground_truth_versions(
         self, db: Session, organization_id: UUID, simulation_id: UUID
     ) -> list[ValidationGroundTruth]:
