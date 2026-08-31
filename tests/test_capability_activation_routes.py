@@ -86,11 +86,8 @@ def test_list_activation_decisions_and_shadow_comparison(
     assert decisions
     for decision in decisions:
         assert decision["governed_status"] in ("DISABLED", "READY", "PARTIAL", "BLOCKED")
-        # P3.xxE.5 Phase 2: XDOM-B is GOVERNED, XDOM-A stays SHADOW-only.
-        if decision["rule_code"] == "XDOM-B-LOST-ACTIVITY-REVENUE-GAP":
-            assert decision["mode"] == "governed"
-        else:
-            assert decision["mode"] == "shadow"
+        # P3.xxE.5 Phase 2: both migrated rules are GOVERNED.
+        assert decision["mode"] == "governed"
 
     shadow_response = client.get(
         f"/api/v1/organizations/{org_id}/analysis-cases/{case_id}/shadow-comparison",
