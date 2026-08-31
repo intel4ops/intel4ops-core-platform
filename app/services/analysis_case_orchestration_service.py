@@ -766,6 +766,134 @@ class AnalysisCaseOrchestrationService:
             },
         )
 
+    def _run_case_level_capability_shadow_evaluation(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        by_domain: dict[str, list[AnalysisCaseDataset]],
+        trust_assessment_ids: dict[UUID, UUID],
+        canonical_frames: dict[UUID, pd.DataFrame],
+        semantic_outcome: SemanticInterpretationOutcome | None,
+        raw_dfs_for_semantic: dict[UUID, pd.DataFrame],
+    ) -> None:
+        """P3.xxE.5 Phase 1 (SHADOW): compares the pre-existing, hard-coded
+        cross_domain_intelligence activation condition against the new
+        generic registry/readiness evaluator for XDOM-A/XDOM-B only --
+        read-only, persists a comparison row per rule, never influences
+        what actually ran above. See app/intelligence_packs/shadow_comparison.py."""
+        from app.intelligence_packs.registry import default_intelligence_pack_registry
+        from app.intelligence_packs.shadow_comparison import compare_shadow
+        from app.models.intelligence_activation import IntelligenceActivationDecision
+        from app.semantic.concept_registry import default_canonical_concept_registry
+        from app.services.case_capability_index_service import build_case_capability_index
+
+        available_domains = frozenset(by_domain.keys())
+        available_canonical_fields: set[str] = set()
+        for datasets in by_domain.values():
+            for cd in datasets:
+                df = canonical_frames.get(cd.id)
+                if df is not None:
+                    available_canonical_fields.update(str(c) for c in df.columns)
+
+        domains_with_resolved_trust = {
+            domain
+            for domain, datasets in by_domain.items()
+            if any(trust_assessment_ids.get(cd.id) is not None for cd in datasets)
+        }
+
+        decisions_by_dataset = (
+            semantic_outcome.decisions_by_case_dataset if semantic_outcome is not None else {}
+        )
+
+        index = build_case_capability_index(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            available_domains=available_domains,
+            available_canonical_fields=frozenset(available_canonical_fields),
+            domains_with_resolved_trust=frozenset(domains_with_resolved_trust),
+            decisions_by_dataset=decisions_by_dataset,
+            raw_dataframes=raw_dfs_for_semantic,
+            concept_registry=default_canonical_concept_registry,
+        )
+
+        migrated_rule_codes = {
+            "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
+            "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
+        }
+        evaluated = 0
+        agree_count = 0
+        disagree_count = 0
+        for pack in default_intelligence_pack_registry().all():
+            if pack.rule_code not in migrated_rule_codes:
+                continue
+            result = compare_shadow(pack, index)
+            missing_summary = [
+                *(f"domain:{d}" for d in sorted(result.governed.missing_domains)),
+                *(f"field:{f}" for f in sorted(result.governed.missing_fields)),
+                *(f"legacy_entity:{e}" for e in sorted(result.governed.missing_entities)),
+                *(
+                    f"canonical_entity:{e}"
+                    for e in sorted(result.governed.missing_canonical_entities)
+                ),
+                *(f"relationship:{r}" for r in sorted(result.governed.missing_relationships)),
+                *(f"activity:{a}" for a in sorted(result.governed.missing_activities)),
+                *(
+                    f"sequence:{a}->{b}"
+                    for a, b in sorted(result.governed.missing_activity_sequences)
+                ),
+                *(f"state:{s}" for s in sorted(result.governed.missing_states)),
+                *(f"measure:{m}" for m in sorted(result.governed.missing_canonical_measures)),
+            ]
+            db.add(
+                IntelligenceActivationDecision(
+                    organization_id=organization_id,
+                    analysis_case_id=analysis_case_id,
+                    run_id=run_id,
+                    pack_code=pack.pack_code,
+                    rule_code=pack.rule_code,
+                    pack_version=pack.version,
+                    activation_policy_version=pack.activation_policy_version,
+                    mode="shadow",
+                    legacy_activated=result.legacy.activated,
+                    legacy_reason=result.legacy.reason,
+                    governed_status=result.governed.status,
+                    governed_missing_summary=missing_summary,
+                    governed_confidence_summary={
+                        "below_confidence_threshold": sorted(
+                            result.governed.below_confidence_threshold
+                        ),
+                        "currency_violation": result.governed.currency_violation,
+                        "unit_violation": result.governed.unit_violation,
+                    },
+                    agree=result.agree,
+                    evidence_summary=result.evidence_summary,
+                )
+            )
+            evaluated += 1
+            if result.agree:
+                agree_count += 1
+            else:
+                disagree_count += 1
+        db.commit()
+
+        self._record_stage(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            "capability_shadow_evaluation",
+            StageEventStatus.COMPLETED.value,
+            {
+                "packs_evaluated": evaluated,
+                "agree_count": agree_count,
+                "disagree_count": disagree_count,
+            },
+        )
+
     def start_run(
         self, db: Session, organization_id: UUID, analysis_case_id: UUID, actor_user_id: UUID
     ) -> AnalysisCaseRun:
@@ -1244,6 +1372,36 @@ class AnalysisCaseOrchestrationService:
                 )
             )
         db.commit()
+
+        # P3.xxE.5 Phase 1 (SHADOW): additive, read-only comparison of the
+        # cross_domain_intelligence stage's own pre-existing hard-coded
+        # activation condition against the new generic registry/readiness
+        # evaluator, for XDOM-A/XDOM-B only. Runs strictly AFTER the block
+        # above so it observes the exact same by_domain/trust state that
+        # already decided what actually ran -- it never influences
+        # published_finding_ids or any Finding row. Never fails the run.
+        try:
+            self._run_case_level_capability_shadow_evaluation(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                by_domain,
+                trust_assessment_ids,
+                canonical_frames,
+                semantic_outcome,
+                raw_dfs_for_semantic,
+            )
+        except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "capability_shadow_evaluation",
+                StageEventStatus.FAILED.value,
+                {"error": str(exc)},
+            )
 
         run.completed_at = utc_now()
         run.heartbeat_at = utc_now()
