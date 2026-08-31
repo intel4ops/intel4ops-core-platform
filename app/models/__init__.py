@@ -207,6 +207,11 @@ from app.models.orchestration import (
     IntelligenceOrchestrationStatusHistory,
     IntelligenceOrchestrationStep,
 )
+from app.models.process_canonical import (
+    CanonicalOperationalProcess,
+    CanonicalProcessActivity,
+    CanonicalProcessEdge,
+)
 from app.models.raw_lineage import (
     LineageEdge,
     LineageEvent,
@@ -417,6 +422,9 @@ __all__ = [
     "CanonicalCaseEntity",
     "CanonicalEntityObservation",
     "CanonicalCaseRelationship",
+    "CanonicalOperationalProcess",
+    "CanonicalProcessActivity",
+    "CanonicalProcessEdge",
     "GroundedExecutiveNarrative",
     "IntelligenceExecution",
     "IntelligenceExecutionEvidence",

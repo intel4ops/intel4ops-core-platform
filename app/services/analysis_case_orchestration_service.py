@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     # (see _run_case_level_entity_resolution / _run_case_level_relationship_discovery).
     from app.entities.entity_candidate import EntityCandidate
     from app.entities.entity_resolution import EntityResolutionOutcome
+    from app.entities.relationship_candidate import RelationshipCandidate
 
 from app.core.config import get_settings
 from app.models.analysis_case import (
@@ -46,6 +47,11 @@ from app.models.entities_canonical import (
     CanonicalCaseEntity,
     CanonicalCaseRelationship,
     CanonicalEntityObservation,
+)
+from app.models.process_canonical import (
+    CanonicalOperationalProcess,
+    CanonicalProcessActivity,
+    CanonicalProcessEdge,
 )
 from app.models.semantic import (
     SemanticDatasetProfile,
@@ -490,11 +496,18 @@ class AnalysisCaseOrchestrationService:
         entity_candidates: list[EntityCandidate],
         entity_ids: dict[tuple[str, str], UUID],
         raw_dfs_by_case_dataset: dict[UUID, pd.DataFrame],
-    ) -> None:
+    ) -> list[RelationshipCandidate]:
         """P3.xxE.3: discovers structural/operational relationships
         between this run's resolved entities -- see
         app/entities/relationship_discovery.py. Stage failure never fails
-        the run."""
+        the run.
+
+        P3.xxE.4: returns the in-memory RelationshipCandidate list (mirrors
+        _run_case_level_entity_resolution's own entity_candidates return)
+        so the process_interpretation stage that follows can consume it
+        directly, avoiding a redundant DB round-trip -- the same
+        established philosophy already used for semantic_outcome and
+        entity resolution."""
         from app.entities.confidence_decomposition import RELATIONSHIP_POLICY_VERSION
         from app.entities.relationship_discovery import discover_relationships_for_case
 
@@ -539,6 +552,217 @@ class AnalysisCaseOrchestrationService:
             {
                 "relationship_candidates": len(relationship_candidates),
                 "relationships_persisted": persisted,
+            },
+        )
+        return relationship_candidates
+
+    def _run_case_level_process_interpretation(
+        self,
+        db: Session,
+        organization_id: UUID,
+        analysis_case_id: UUID,
+        run_id: UUID,
+        case_datasets: list[AnalysisCaseDataset],
+        raw_dfs: dict[UUID, pd.DataFrame],
+        semantic_outcome: SemanticInterpretationOutcome,
+        entity_candidates: list[EntityCandidate],
+        entity_ids: dict[tuple[str, str], UUID],
+    ) -> None:
+        """P3.xxE.4: interprets operational process structure (activities,
+        precedence/state-transition edges) from this run's already-resolved
+        canonical entities -- see app/process/process_interpretation.py.
+        Consumes the FULL 5-tier semantic evidence hierarchy for
+        TIMESTAMP/STATUS concepts (plan review correction 1) -- deliberately
+        NOT gated through resolve_effective_decision the way E.3's entity
+        typing is, since that resolver collapses accepted_with_flag into
+        the same "review_required" bucket process interpretation must keep
+        distinct. Reads E.3's CanonicalCaseEntity identity read-only, never
+        rewrites it (Invariant N). Stage failure never fails the run,
+        mirroring semantic_interpretation/canonical_entity_resolution's own
+        blanket try/except (see execute()).
+
+        E.3's discovered CanonicalCaseRelationship rows are threaded
+        in-memory to this stage (via the caller's relationship_candidates,
+        avoiding a redundant DB round-trip) but are not yet consumed here:
+        this milestone's process instances are anchor-entity-scoped (every
+        activity in one instance shares the same primary entity), so
+        E.3's relationship-support corroboration gate
+        (app/process/process_relationship_support.py, spec section 15) has
+        no structurally-applicable cross-entity edge to corroborate against
+        until a future milestone attaches multi-entity participation --
+        the module ships fully tested and ready for that, deliberately not
+        wired into a case where it cannot yet do anything real (given the
+        real-corpus baseline: zero CanonicalCaseRelationship rows
+        corpus-wide)."""
+        from app.process.process_interpretation import (
+            ACTIVITY_POLICY_VERSION,
+            EDGE_POLICY_VERSION,
+            PROCESS_POLICY_VERSION,
+            CaseDatasetProcessInput,
+            interpret_process_for_case,
+        )
+
+        def _dataset_role(case_dataset: AnalysisCaseDataset) -> str:
+            role = semantic_outcome.case_context.roles.get(str(case_dataset.dataset_id))
+            return role.primary_role if role is not None else "unknown"
+
+        dataset_inputs = [
+            CaseDatasetProcessInput(
+                analysis_case_dataset_id=str(case_dataset.id),
+                dataset_label=case_dataset.source_label,
+                dataset_role=_dataset_role(case_dataset),
+                decisions=semantic_outcome.decisions_by_case_dataset.get(case_dataset.id, []),
+                raw_dataframe=raw_dfs[case_dataset.id],
+            )
+            for case_dataset in case_datasets
+            if case_dataset.id in raw_dfs
+        ]
+
+        outcome = interpret_process_for_case(dataset_inputs, entity_candidates)
+
+        processes_persisted = 0
+        activities_persisted = 0
+        edges_persisted = 0
+
+        for instance in outcome.process_instances:
+            anchor_entity_db_id = None
+            if instance.anchor_entity_type is not None and instance.anchor_entity_id is not None:
+                anchor_entity_db_id = entity_ids.get(
+                    (instance.anchor_entity_type, instance.anchor_entity_id)
+                )
+            process_row = CanonicalOperationalProcess(
+                organization_id=organization_id,
+                analysis_case_id=analysis_case_id,
+                run_id=run_id,
+                anchor_entity_id=anchor_entity_db_id,
+                anchor_entity_type=instance.anchor_entity_type,
+                anchor_confidence=instance.anchor_confidence,
+                process_type=instance.process_type,
+                process_label=instance.process_label,
+                process_family=instance.process_family,
+                process_family_confidence=0.0,
+                boundary_status=instance.boundary_status,
+                status=instance.status,
+                coverage_confidence=instance.coverage_confidence,
+                activity_confidence=instance.activity_confidence,
+                entity_participation_confidence=instance.entity_participation_confidence,
+                temporal_confidence=instance.temporal_confidence,
+                precedence_consistency_confidence=instance.precedence_consistency_confidence,
+                state_transition_confidence=instance.state_transition_confidence,
+                overall_confidence=instance.overall_confidence,
+                activity_count=len(instance.activities),
+                edge_count=len(instance.edges),
+                evidence_summary=instance.evidence_summary,
+                conflict_reason=instance.conflict_reason,
+                process_policy_version=PROCESS_POLICY_VERSION,
+            )
+            db.add(process_row)
+            db.flush()
+            processes_persisted += 1
+
+            activity_db_ids: list[UUID] = []
+            for activity in instance.activities:
+                primary_entity_db_id = None
+                if (
+                    activity.primary_entity_type is not None
+                    and activity.primary_entity_id is not None
+                ):
+                    primary_entity_db_id = entity_ids.get(
+                        (activity.primary_entity_type, activity.primary_entity_id)
+                    )
+                activity_row = CanonicalProcessActivity(
+                    organization_id=organization_id,
+                    process_id=process_row.id,
+                    activity_type=activity.activity_type,
+                    activity_label=activity.activity_label,
+                    state_value=activity.state_value,
+                    primary_entity_id=primary_entity_db_id,
+                    activity_type_confidence=activity.activity_type_confidence,
+                    activity_existence_confidence=activity.activity_existence_confidence,
+                    temporal_confidence=activity.temporal_confidence,
+                    participation_confidence=activity.participation_confidence,
+                    activity_confidence=activity.activity_confidence,
+                    state_existence_confidence=activity.state_existence_confidence,
+                    state_meaning_confidence=activity.state_meaning_confidence,
+                    temporal_evidence_tier=activity.temporal_evidence_tier,
+                    occurred_at=activity.occurred_at,
+                    occurred_at_precision=activity.occurred_at_precision,
+                    timezone_source=activity.timezone_source,
+                    is_explicit_event=activity.is_explicit_event,
+                    corroboration_signals=activity.corroboration_signals,
+                    alternative_activity_types=activity.alternative_activity_types,
+                    participation=[],
+                    source_refs=[
+                        {
+                            "analysis_case_dataset_id": obs.analysis_case_dataset_id,
+                            "source_field": obs.source_field,
+                            "concept_code": obs.concept_code,
+                        }
+                        for obs in activity.observations
+                    ],
+                    evidence_summary=activity.evidence_summary,
+                    activity_policy_version=ACTIVITY_POLICY_VERSION,
+                )
+                db.add(activity_row)
+                db.flush()
+                activity_db_ids.append(activity_row.id)
+                activities_persisted += 1
+
+            for edge in instance.edges:
+                if edge.left_index >= len(activity_db_ids) or edge.right_index >= len(
+                    activity_db_ids
+                ):
+                    continue
+                from_id = activity_db_ids[edge.left_index]
+                to_id = activity_db_ids[edge.right_index]
+                if from_id == to_id:
+                    continue
+                db.add(
+                    CanonicalProcessEdge(
+                        organization_id=organization_id,
+                        process_id=process_row.id,
+                        from_activity_id=from_id,
+                        to_activity_id=to_id,
+                        edge_type=edge.edge_type,
+                        from_state=edge.from_state,
+                        to_state=edge.to_state,
+                        support_count=edge.support_count,
+                        a_before_b_count=edge.a_before_b_count,
+                        b_before_a_count=edge.b_before_a_count,
+                        same_time_count=edge.same_time_count,
+                        unknown_order_count=edge.unknown_order_count,
+                        observation_count=edge.observation_count,
+                        temporal_evidence_tier=edge.temporal_evidence_tier,
+                        semantic_confidence=edge.semantic_confidence,
+                        entity_participation_confidence=edge.entity_participation_confidence,
+                        temporal_confidence=edge.temporal_confidence,
+                        repetition_confidence=edge.repetition_confidence,
+                        consistency_confidence=edge.consistency_confidence,
+                        conflict_penalty=edge.conflict_penalty,
+                        precedence_confidence=edge.precedence_confidence,
+                        contradiction_count=edge.contradiction_count,
+                        status=edge.status,
+                        evidence_summary=edge.evidence_summary,
+                        conflict_reason=edge.conflict_reason,
+                        edge_policy_version=EDGE_POLICY_VERSION,
+                    )
+                )
+                edges_persisted += 1
+        db.commit()
+
+        self._record_stage(
+            db,
+            organization_id,
+            analysis_case_id,
+            run_id,
+            "process_interpretation",
+            StageEventStatus.COMPLETED.value,
+            {
+                "activities_discovered": outcome.activities_discovered,
+                "entity_types_considered": outcome.entity_types_considered,
+                "processes_persisted": processes_persisted,
+                "activities_persisted": activities_persisted,
+                "edges_persisted": edges_persisted,
             },
         )
 
@@ -820,6 +1044,35 @@ class AnalysisCaseOrchestrationService:
                     StageEventStatus.FAILED.value,
                     {"error": str(exc)},
                 )
+
+            # P3.xxE.4: additive process interpretation, running after
+            # relationship_discovery -- see app/process/process_interpretation.py.
+            # Runs whenever semantic_outcome completed, even if entity
+            # resolution itself degraded to empty results above, so a
+            # (possibly near-empty) UNKNOWN_PROCESS outcome is still
+            # produced rather than silently skipped -- never fails the run.
+            try:
+                self._run_case_level_process_interpretation(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    case_datasets,
+                    raw_dfs_for_semantic,
+                    semantic_outcome,
+                    entity_candidates,
+                    entity_ids,
+                )
+            except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
+                self._record_stage(
+                    db,
+                    organization_id,
+                    analysis_case_id,
+                    run_id,
+                    "process_interpretation",
+                    StageEventStatus.FAILED.value,
+                    {"error": str(exc)},
+                )
         else:
             self._record_stage(
                 db,
@@ -836,6 +1089,15 @@ class AnalysisCaseOrchestrationService:
                 analysis_case_id,
                 run_id,
                 "relationship_discovery",
+                StageEventStatus.SKIPPED.value,
+                {"reason": "semantic_interpretation did not complete"},
+            )
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "process_interpretation",
                 StageEventStatus.SKIPPED.value,
                 {"reason": "semantic_interpretation did not complete"},
             )
