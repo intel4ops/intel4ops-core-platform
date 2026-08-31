@@ -119,6 +119,26 @@ def test_simulation_code_is_unique_per_organization(db: Session, tmp_path: Path)
     assert excinfo.value.code == "simulation_code_conflict"
 
 
+def test_get_simulation_by_code_finds_an_existing_registration(db: Session, tmp_path: Path) -> None:
+    """P3.xxV.1: re-discovering an existing simulation_id from its
+    human-meaningful code -- needed to avoid a duplicate/orphaned
+    registration when re-registering an external Simulation Factory
+    package whose code was already registered in a prior session."""
+    org, actor, case, _run = _completed_run(db, tmp_path, "gtv-lookup-by-code")
+    created = validation_service.create_simulation(
+        db, org.id, "SIM-LOOKUP-001", "Lookup Target", case.id, actor
+    )
+    found = validation_service.get_simulation_by_code(db, org.id, "SIM-LOOKUP-001")
+    assert found.id == created.id
+
+
+def test_get_simulation_by_code_raises_when_not_found(db: Session) -> None:
+    org = _organization(db, "gtv-lookup-missing")
+    with pytest.raises(ValidationServiceError) as excinfo:
+        validation_service.get_simulation_by_code(db, org.id, "SIM-DOES-NOT-EXIST")
+    assert excinfo.value.code == "simulation_not_found"
+
+
 def test_ground_truth_uploads_are_versioned_and_immutable(db: Session, tmp_path: Path) -> None:
     org, actor, case, _run = _completed_run(db, tmp_path, "gtv-versioning")
     simulation = validation_service.create_simulation(

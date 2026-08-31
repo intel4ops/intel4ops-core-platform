@@ -110,6 +110,21 @@ def upload_ground_truth(
     return _ground_truth_read(db, organization_id, ground_truth)
 
 
+@router.get("/simulations/by-code/{simulation_code}", response_model=ValidationSimulationRead)
+def get_simulation_by_code(
+    organization_id: UUID,
+    simulation_code: str,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(require_organization_roles(*VALIDATION_READ_ROLES)),
+) -> object:
+    # Declared before the /{simulation_id} route below: "by-code" would
+    # otherwise be attempted as a UUID path param there first.
+    try:
+        return validation_service.get_simulation_by_code(db, organization_id, simulation_code)
+    except ValidationServiceError as exc:
+        _raise(exc)
+
+
 @router.get("/simulations/{simulation_id}", response_model=ValidationSimulationDetail)
 def get_simulation(
     organization_id: UUID,
