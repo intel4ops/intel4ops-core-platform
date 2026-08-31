@@ -41,6 +41,7 @@ from app.api.oikb_routes import router as oikb_router
 from app.api.operational_memory_routes import router as operational_memory_router
 from app.api.orchestration_routes import engine_router
 from app.api.orchestration_routes import router as orchestration_router
+from app.api.process_routes import router as process_router
 from app.api.raw_lineage_routes import router as raw_lineage_router
 from app.api.recovery_ledger_routes import router as recovery_ledger_router
 from app.api.recovery_portfolio_routes import router as recovery_portfolio_router
@@ -183,3 +184,4 @@ app.include_router(validation_router)
 app.include_router(semantic_router)
 app.include_router(semantic_review_router)
 app.include_router(entities_router)
+app.include_router(process_router)

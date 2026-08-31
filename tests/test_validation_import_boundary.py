@@ -69,6 +69,26 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/models/entities_canonical.py",  # P3.xxE.3 Entity + Relationship Intelligence
     "app/services/analysis_case_entities_service.py",  # P3.xxE.3 Entity + Relationship Intelligence
     "app/api/entities_routes.py",  # P3.xxE.3 Entity + Relationship Intelligence
+    "app/process/activity_type.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/temporal_evidence.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/activity_candidate.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/activity_type_inference.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/state_normalization.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/participation_inference.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/case_process_context.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/activity_discovery.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/process_anchor_discovery.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/process_boundary.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/sequence_discovery.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/precedence_confidence.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/process_confidence.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/process_relationship_support.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/reasoning_provider.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/process_interpretation.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/process/intelligence_contract.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/models/process_canonical.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/services/analysis_case_process_service.py",  # P3.xxE.4 Operational Process Interpretation
+    "app/api/process_routes.py",  # P3.xxE.4 Operational Process Interpretation
 ]
 
 FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")
