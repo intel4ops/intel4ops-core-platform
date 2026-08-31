@@ -117,13 +117,20 @@ _INTELLIGENCE_RELEVANT_DOMAINS = frozenset(_DOMAIN_TRUST_RULES.keys())
 # above. This is an ORCHESTRATION-level rollout decision, never a branch
 # inside the generic readiness evaluator itself (evaluate_readiness() stays
 # rule-code-agnostic -- see tests/test_capability_architecture_guardrails.py's
-# AST guardrail). XDOM-B is promoted because its corrected corpus-wide
+# AST guardrail). XDOM-B was promoted first because its corrected corpus-wide
 # shadow certification exercised BOTH outcomes live (READY on
 # FIELDMAINT-001/002/003, BLOCKED on the rest) with 22/22 legacy agreement.
-# XDOM-A stays SHADOW-only because its READY path has never fired on the
-# real corpus -- promoting it now would give it governed authority over a
-# code path with zero live positive-path verification.
-_GOVERNED_RULE_CODES = frozenset({"XDOM-B-LOST-ACTIVITY-REVENUE-GAP"})
+# XDOM-A is promoted here on the strength of a dedicated positive-path
+# certification fixture (its READY path has never fired on the real 11-case
+# corpus -- domain detection has never classified a dataset as 'maintenance'
+# there -- so live corpus evidence alone could not prove it; see
+# tests/test_capability_governed_activation_xdom_a.py for the controlled
+# proof that governed READY, legacy activation, and finding equivalence all
+# hold when the underlying evidence genuinely satisfies XDOM-A's real,
+# unmodified capability contract).
+_GOVERNED_RULE_CODES = frozenset(
+    {"XDOM-A-ASSET-FAILURE-LOST-ACTIVITY", "XDOM-B-LOST-ACTIVITY-REVENUE-GAP"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1362,37 +1369,46 @@ class AnalysisCaseOrchestrationService:
                 StageEventStatus.FAILED.value,
                 {"error": str(exc)},
             )
+        xdom_a_governed_ready = (
+            governed_status_by_rule.get("XDOM-A-ASSET-FAILURE-LOST-ACTIVITY") == "READY"
+        )
         xdom_b_governed_ready = (
             governed_status_by_rule.get("XDOM-B-LOST-ACTIVITY-REVENUE-GAP") == "READY"
         )
 
-        for maint_cd in maint_datasets:
-            trust_id = trust_assessment_ids.get(maint_cd.id)
-            if trust_id is None:
-                continue
-            for ops_cd in ops_datasets:
-                findings = run_asset_failure_to_lost_activity(
-                    db,
-                    organization_id,
-                    maint_cd.dataset_id,
-                    canonical_frames[maint_cd.id],
-                    ops_cd.dataset_id,
-                    canonical_frames[ops_cd.id],
-                    trust_id,
-                    matched_assets,
-                    actor_user_id,
-                )
-                for finding in findings:
-                    published_finding_ids.add(finding.id)
-                self._record_stage(
-                    db,
-                    organization_id,
-                    analysis_case_id,
-                    run_id,
-                    "cross_domain_intelligence",
-                    StageEventStatus.COMPLETED.value,
-                    {"rule": "XDOM-A", "finding_count": len(findings)},
-                )
+        # P3.xxE.5 Phase 2 (XDOM-A promotion): XDOM-A is GOVERNED -- same
+        # gating shape as XDOM-B below. Proven via a dedicated positive-path
+        # certification fixture (tests/test_capability_governed_activation_xdom_a.py)
+        # since the real 11-case corpus has never produced a maintenance-domain
+        # detection, and therefore never a READY case, for this rule.
+        if xdom_a_governed_ready:
+            for maint_cd in maint_datasets:
+                trust_id = trust_assessment_ids.get(maint_cd.id)
+                if trust_id is None:
+                    continue
+                for ops_cd in ops_datasets:
+                    findings = run_asset_failure_to_lost_activity(
+                        db,
+                        organization_id,
+                        maint_cd.dataset_id,
+                        canonical_frames[maint_cd.id],
+                        ops_cd.dataset_id,
+                        canonical_frames[ops_cd.id],
+                        trust_id,
+                        matched_assets,
+                        actor_user_id,
+                    )
+                    for finding in findings:
+                        published_finding_ids.add(finding.id)
+                    self._record_stage(
+                        db,
+                        organization_id,
+                        analysis_case_id,
+                        run_id,
+                        "cross_domain_intelligence",
+                        StageEventStatus.COMPLETED.value,
+                        {"rule": "XDOM-A", "finding_count": len(findings)},
+                    )
         # P3.xxE.5 Phase 2: XDOM-B is GOVERNED -- the readiness evaluator
         # computed above is now the authority for whether this rule
         # executes at all, replacing the ad-hoc per-dataset trust check as

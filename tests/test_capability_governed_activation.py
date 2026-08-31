@@ -2,9 +2,11 @@
 its own generic readiness result (already exercised and certified in
 tests/test_intelligence_readiness_service.py and
 tests/test_shadow_comparison.py) now gates whether the pre-existing
-run_lost_activity_to_revenue_gap execution runs at all. XDOM-A stays
-SHADOW-only: its own legacy execution loop is completely untouched by this
-milestone. See _GOVERNED_RULE_CODES in analysis_case_orchestration_service.py.
+run_lost_activity_to_revenue_gap execution runs at all. XDOM-A is promoted
+separately (see tests/test_capability_governed_activation_xdom_a.py for its
+own dedicated positive-path certification) -- this file focuses on XDOM-B's
+own gate plus the generic failure-safety/audit-trail machinery shared by
+both rules. See _GOVERNED_RULE_CODES in analysis_case_orchestration_service.py.
 
 These tests cover the ORCHESTRATION-level gate (does execution actually
 happen or not, and is it recorded correctly) -- the readiness evaluator's
@@ -164,12 +166,19 @@ def test_xdom_b_blocked_execution_does_not_occur(db: Session, tmp_path: Path) ->
     assert not any(e.detail.get("rule") == "XDOM-B" for e in stage_events)
 
 
-def test_xdom_a_remains_legacy_authoritative_shadow_only(db: Session, tmp_path: Path) -> None:
-    """G -- XDOM-A's own legacy execution is completely unaffected by this
-    milestone: it still runs whenever legacy's own domain+trust condition
-    holds, regardless of what the governed evaluator says, and its
-    activation decision is persisted in mode='shadow', never 'governed'."""
-    org = _organization(db, "gov-xdom-a-shadow")
+def test_xdom_a_governed_blocked_overrides_legacy_activation(db: Session, tmp_path: Path) -> None:
+    """XDOM-A is now GOVERNED (see test_capability_governed_activation_xdom_a.py
+    for its own positive-path certification). This file's own MAINT_CSV
+    fixture repeats a single asset_id ("V1") with no independent-identifier
+    sibling column, so E.3's canonical entity resolution never reaches
+    AUTO_ACCEPTED for it (see the real semantic contract documented in
+    test_capability_governed_activation_xdom_a.py) -- legacy's own simpler
+    domain+trust condition WOULD activate XDOM-A here, but the governed
+    evaluator correctly stays BLOCKED on missing canonical ASSET evidence.
+    Once governed, this disagreement must resolve toward safety: XDOM-A
+    must NOT execute, proving promotion actually overrides legacy's more
+    permissive check rather than merely observing it."""
+    org = _organization(db, "gov-xdom-a-blocked")
     case_id, run_id = _run_case(
         db,
         tmp_path,
@@ -182,7 +191,10 @@ def test_xdom_a_remains_legacy_authoritative_shadow_only(db: Session, tmp_path: 
     )
     decisions = {d.rule_code: d for d in _decisions(db, run_id)}
     xdom_a = decisions[_XDOM_A]
-    assert xdom_a.mode == "shadow"
+    assert xdom_a.mode == "governed"
+    assert xdom_a.legacy_activated is True
+    assert xdom_a.governed_status == "BLOCKED"
+    assert xdom_a.agree is False
 
     stage_events = list(
         db.scalars(
@@ -193,11 +205,11 @@ def test_xdom_a_remains_legacy_authoritative_shadow_only(db: Session, tmp_path: 
         ).all()
     )
     xdom_a_ran = any(e.detail.get("rule") == "XDOM-A" for e in stage_events)
-    # legacy's own condition for XDOM-A (maintenance domain + resolved
-    # trust, both present in this fixture) is untouched by this milestone
-    # -- it must still run exactly as it always has, independent of
-    # governed_status (which is a comparison-only signal for XDOM-A).
-    assert xdom_a_ran is True
+    assert xdom_a_ran is False, "governed BLOCKED must override legacy's own activation"
+
+    priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
+    xdom_a_findings = [p for p in priorities if p.finding.rule_id == _XDOM_A]
+    assert xdom_a_findings == []
 
 
 def test_shadow_comparison_persisted_in_governed_mode(db: Session, tmp_path: Path) -> None:
@@ -229,8 +241,9 @@ def test_governed_evaluation_failure_defaults_to_not_activated(
     db: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """N -- if capability evaluation itself raises unexpectedly, the safe
-    default is NOT ACTIVATED: XDOM-B must not execute, the run must not
-    fail, and the failure must be recorded as evidence."""
+    default is NOT ACTIVATED for every governed rule (XDOM-A and XDOM-B):
+    neither must execute, the run must not fail, and the failure must be
+    recorded as evidence."""
     import app.services.analysis_case_orchestration_service as orch_module
 
     def _boom(self: object, *args: object, **kwargs: object) -> dict[str, str]:
@@ -260,7 +273,9 @@ def test_governed_evaluation_failure_defaults_to_not_activated(
 
     priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
     xdom_b_findings = [p for p in priorities if p.finding.rule_id == _XDOM_B]
+    xdom_a_findings = [p for p in priorities if p.finding.rule_id == _XDOM_A]
     assert xdom_b_findings == [], "capability-evaluation failure must never fall back to executing"
+    assert xdom_a_findings == [], "capability-evaluation failure must never fall back to executing"
 
     failed_events = list(
         db.scalars(
