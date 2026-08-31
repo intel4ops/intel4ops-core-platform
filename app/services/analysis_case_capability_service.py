@@ -66,11 +66,13 @@ class AnalysisCaseCapabilityService:
         analysis_case_id: UUID,
         run_id: UUID | None = None,
     ) -> tuple[UUID | None, list[IntelligenceActivationDecision]]:
-        resolved_run_id, decisions = self.list_activation_decisions(
-            db, organization_id, analysis_case_id, run_id
-        )
-        shadow_decisions = [d for d in decisions if d.mode == "shadow"]
-        return resolved_run_id, shadow_decisions
+        # P3.xxE.5 Phase 2: legacy-vs-governed comparison data (legacy_activated,
+        # governed_status, agree) is populated identically regardless of
+        # mode -- a GOVERNED rule's audit trail must remain available here
+        # after governance becomes active, not silently dropped once it
+        # stops being SHADOW. No mode filter: every persisted decision row
+        # is a comparison.
+        return self.list_activation_decisions(db, organization_id, analysis_case_id, run_id)
 
 
 analysis_case_capability_service = AnalysisCaseCapabilityService()
