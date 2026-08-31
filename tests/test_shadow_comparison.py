@@ -96,6 +96,51 @@ def test_compare_shadow_disagrees_when_legacy_activates_but_governed_blocks() ->
     assert result.agree is False
 
 
+def test_xdom_b_unresolved_operations_trust_now_agrees_blocked() -> None:
+    """F -- P3.xxE.5 corrected shadow certification: the exact fixture
+    shape that produced the original corpus-wide disagreement on
+    FIELDMAINT-004/005 (every structural XDOM-B requirement satisfied, but
+    'operations' Trust unresolved). With required_resolved_trust_domains
+    now populated on the real registry pack, legacy and governed agree:
+    both withhold activation."""
+    registry = default_intelligence_pack_registry()
+    pack = next(p for p in registry.all() if p.rule_code == _XDOM_B)
+    index = _index(
+        available_domains=frozenset({"operations", "revenue"}),
+        available_canonical_fields=frozenset(
+            {"operational_event_id", "operational_event_status", "transaction_amount"}
+        ),
+        resolved_entity_types=frozenset({"operational_event"}),
+        domains_with_resolved_trust=frozenset(),  # 'operations' deliberately unresolved
+    )
+    result = compare_shadow(pack, index)
+    assert result.legacy.activated is False
+    assert "trust" in result.legacy.reason
+    assert result.governed.status == "BLOCKED"
+    assert result.governed.missing_resolved_trust_domains == frozenset({"operations"})
+    assert result.agree is True
+
+
+def test_xdom_b_resolved_operations_trust_reaches_ready() -> None:
+    """G -- the positive counterpart: once 'operations' Trust is resolved
+    and every other XDOM-B requirement is satisfied, governed reaches
+    READY (and agrees with legacy, which also activates)."""
+    registry = default_intelligence_pack_registry()
+    pack = next(p for p in registry.all() if p.rule_code == _XDOM_B)
+    index = _index(
+        available_domains=frozenset({"operations", "revenue"}),
+        available_canonical_fields=frozenset(
+            {"operational_event_id", "operational_event_status", "transaction_amount"}
+        ),
+        resolved_entity_types=frozenset({"operational_event"}),
+        domains_with_resolved_trust=frozenset({"operations"}),
+    )
+    result = compare_shadow(pack, index)
+    assert result.legacy.activated is True
+    assert result.governed.status == "READY"
+    assert result.agree is True
+
+
 def test_unknown_rule_code_never_activates_legacy() -> None:
     index = _index(
         available_domains=frozenset({"maintenance", "operations", "revenue"}),

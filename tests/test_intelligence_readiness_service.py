@@ -265,3 +265,61 @@ def test_incompatible_units_block_when_declared_single_unit_only() -> None:
     result = evaluate_readiness(pack, index)
     assert result.status == "BLOCKED"
     assert result.unit_violation is True
+
+
+# P3.xxE.5 corrected shadow certification: required_resolved_trust_domains
+# vs index.domains_with_resolved_trust. _BASE_INDEX has trust resolved for
+# 'maintenance' only (see its definition above) -- 'operations' is
+# deliberately absent so it can stand in for an unresolved domain.
+
+
+def test_resolved_trust_domain_satisfied_does_not_block() -> None:
+    """A -- required domain present and its required Trust IS resolved:
+    the Trust requirement contributes nothing to BLOCKED."""
+    pack = replace(_BASE_PACK, required_resolved_trust_domains=frozenset({"maintenance"}))
+    result = evaluate_readiness(pack, _BASE_INDEX)
+    assert result.status == "READY"
+    assert result.missing_resolved_trust_domains == frozenset()
+
+
+def test_unresolved_required_trust_domain_blocks() -> None:
+    """B -- required domain present, but its required Trust is NOT
+    resolved: BLOCKED, even though every structural requirement is met."""
+    pack = replace(_BASE_PACK, required_resolved_trust_domains=frozenset({"operations"}))
+    result = evaluate_readiness(pack, _BASE_INDEX)
+    assert result.status == "BLOCKED"
+    assert result.missing_resolved_trust_domains == frozenset({"operations"})
+
+
+def test_unresolved_trust_and_confidence_shortfall_both_preserved() -> None:
+    """C -- an unresolved Trust prerequisite combined with a separate
+    confidence shortfall: final status is BLOCKED (never PARTIAL, since a
+    mandatory unresolved prerequisite always outranks a confidence-only
+    shortfall), but correction 1's own discipline still applies -- the
+    confidence shortfall must not be hidden just because a blocker also
+    exists."""
+    pack = replace(
+        _BASE_PACK,
+        required_resolved_trust_domains=frozenset({"operations"}),
+        required_canonical_entities=frozenset({"ASSET"}),
+        minimum_entity_identity_confidence=0.9,
+    )
+    index = replace(
+        _BASE_INDEX,
+        canonical_entity_types_present=frozenset({"ASSET"}),
+        canonical_entity_identity_confidence_by_type={"ASSET": ConfidenceDistribution((0.2,))},
+    )
+    result = evaluate_readiness(pack, index)
+    assert result.status == "BLOCKED"
+    assert result.missing_resolved_trust_domains == frozenset({"operations"})
+    assert result.below_confidence_threshold == frozenset({"entity_identity.ASSET"})
+
+
+def test_pack_with_no_required_trust_domains_is_unaffected() -> None:
+    """D -- a pack declaring no required_resolved_trust_domains (the
+    default, matching every pack that existed before this correction)
+    behaves exactly as before: never blocked by this requirement,
+    regardless of what index.domains_with_resolved_trust contains."""
+    result = evaluate_readiness(_BASE_PACK, _BASE_INDEX)
+    assert result.status == "READY"
+    assert result.missing_resolved_trust_domains == frozenset()
