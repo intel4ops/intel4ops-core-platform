@@ -97,8 +97,13 @@ def test_capability_shadow_evaluation_stage_completes_and_persists_decisions(
     rule_codes = {d.rule_code for d in decisions}
     assert rule_codes <= {"XDOM-A-ASSET-FAILURE-LOST-ACTIVITY", "XDOM-B-LOST-ACTIVITY-REVENUE-GAP"}
     for decision in decisions:
-        assert decision.mode == "shadow"
         assert decision.governed_status in ("DISABLED", "READY", "PARTIAL", "BLOCKED")
+        # P3.xxE.5 Phase 2: XDOM-B is GOVERNED, XDOM-A stays SHADOW-only --
+        # see _GOVERNED_RULE_CODES in analysis_case_orchestration_service.py.
+        if decision.rule_code == "XDOM-B-LOST-ACTIVITY-REVENUE-GAP":
+            assert decision.mode == "governed"
+        else:
+            assert decision.mode == "shadow"
 
 
 def test_shadow_stage_never_changes_legacy_finding_output(db: Session, tmp_path: Path) -> None:

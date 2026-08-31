@@ -112,6 +112,19 @@ _DOMAIN_TRUST_RULES: dict[str, dict[str, dict[str, object]]] = {
 # _DOMAIN_TRUST_RULES's own key set.
 _INTELLIGENCE_RELEVANT_DOMAINS = frozenset(_DOMAIN_TRUST_RULES.keys())
 
+# P3.xxE.5 Phase 2: rule codes promoted to GOVERNED activation authority --
+# an explicit, reviewed rollout list, exactly like _INTELLIGENCE_RELEVANT_DOMAINS
+# above. This is an ORCHESTRATION-level rollout decision, never a branch
+# inside the generic readiness evaluator itself (evaluate_readiness() stays
+# rule-code-agnostic -- see tests/test_capability_architecture_guardrails.py's
+# AST guardrail). XDOM-B is promoted because its corrected corpus-wide
+# shadow certification exercised BOTH outcomes live (READY on
+# FIELDMAINT-001/002/003, BLOCKED on the rest) with 22/22 legacy agreement.
+# XDOM-A stays SHADOW-only because its READY path has never fired on the
+# real corpus -- promoting it now would give it governed authority over a
+# code path with zero live positive-path verification.
+_GOVERNED_RULE_CODES = frozenset({"XDOM-B-LOST-ACTIVITY-REVENUE-GAP"})
+
 
 # ---------------------------------------------------------------------------
 # P3.xxC.2E: review_required actionability. Two conditions set
@@ -766,7 +779,7 @@ class AnalysisCaseOrchestrationService:
             },
         )
 
-    def _run_case_level_capability_shadow_evaluation(
+    def _evaluate_intelligence_capabilities(
         self,
         db: Session,
         organization_id: UUID,
@@ -777,12 +790,17 @@ class AnalysisCaseOrchestrationService:
         canonical_frames: dict[UUID, pd.DataFrame],
         semantic_outcome: SemanticInterpretationOutcome | None,
         raw_dfs_for_semantic: dict[UUID, pd.DataFrame],
-    ) -> None:
-        """P3.xxE.5 Phase 1 (SHADOW): compares the pre-existing, hard-coded
+    ) -> dict[str, str]:
+        """P3.xxE.5 Phase 2: compares the pre-existing, hard-coded
         cross_domain_intelligence activation condition against the new
-        generic registry/readiness evaluator for XDOM-A/XDOM-B only --
-        read-only, persists a comparison row per rule, never influences
-        what actually ran above. See app/intelligence_packs/shadow_comparison.py."""
+        generic registry/readiness evaluator for XDOM-A/XDOM-B, and persists
+        one IntelligenceActivationDecision row per rule. Runs BEFORE any
+        cross-domain execution decision below so its result can actually
+        gate a GOVERNED rule (see _GOVERNED_RULE_CODES) -- for rules not yet
+        promoted (XDOM-A), this remains a read-only SHADOW comparison and
+        never influences what executes. Returns {rule_code: governed_status}
+        so the caller can gate execution without re-deriving readiness.
+        See app/intelligence_packs/shadow_comparison.py."""
         from app.intelligence_packs.registry import default_intelligence_pack_registry
         from app.intelligence_packs.shadow_comparison import compare_shadow
         from app.models.intelligence_activation import IntelligenceActivationDecision
@@ -827,10 +845,13 @@ class AnalysisCaseOrchestrationService:
         evaluated = 0
         agree_count = 0
         disagree_count = 0
+        governed_status_by_rule: dict[str, str] = {}
         for pack in default_intelligence_pack_registry().all():
             if pack.rule_code not in migrated_rule_codes:
                 continue
             result = compare_shadow(pack, index)
+            governed_status_by_rule[pack.rule_code] = result.governed.status
+            mode = "governed" if pack.rule_code in _GOVERNED_RULE_CODES else "shadow"
             missing_summary = [
                 *(f"domain:{d}" for d in sorted(result.governed.missing_domains)),
                 *(f"field:{f}" for f in sorted(result.governed.missing_fields)),
@@ -858,7 +879,7 @@ class AnalysisCaseOrchestrationService:
                     rule_code=pack.rule_code,
                     pack_version=pack.version,
                     activation_policy_version=pack.activation_policy_version,
-                    mode="shadow",
+                    mode=mode,
                     legacy_activated=result.legacy.activated,
                     legacy_reason=result.legacy.reason,
                     governed_status=result.governed.status,
@@ -892,8 +913,10 @@ class AnalysisCaseOrchestrationService:
                 "packs_evaluated": evaluated,
                 "agree_count": agree_count,
                 "disagree_count": disagree_count,
+                "governed_rule_codes": sorted(_GOVERNED_RULE_CODES),
             },
         )
+        return governed_status_by_rule
 
     def start_run(
         self, db: Session, organization_id: UUID, analysis_case_id: UUID, actor_user_id: UUID
@@ -1309,6 +1332,40 @@ class AnalysisCaseOrchestrationService:
         maint_datasets = by_domain.get("maintenance", [])
         ops_datasets = by_domain.get("operations", [])
         revenue_datasets = by_domain.get("revenue", [])
+
+        # P3.xxE.5 Phase 2: capability readiness is evaluated HERE, before
+        # any cross-domain execution decision below, so a GOVERNED rule's
+        # gate (see _GOVERNED_RULE_CODES) can actually use the result.
+        # Failure-safe: any exception degrades to "no rule ready" -- never
+        # silently falls back to running a governed rule -- and never fails
+        # the run, matching this file's established additive-stage pattern.
+        governed_status_by_rule: dict[str, str] = {}
+        try:
+            governed_status_by_rule = self._evaluate_intelligence_capabilities(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                by_domain,
+                trust_assessment_ids,
+                canonical_frames,
+                semantic_outcome,
+                raw_dfs_for_semantic,
+            )
+        except Exception as exc:  # noqa: BLE001 -- safe default is NOT ACTIVATED, never fail the run
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "capability_shadow_evaluation",
+                StageEventStatus.FAILED.value,
+                {"error": str(exc)},
+            )
+        xdom_b_governed_ready = (
+            governed_status_by_rule.get("XDOM-B-LOST-ACTIVITY-REVENUE-GAP") == "READY"
+        )
+
         for maint_cd in maint_datasets:
             trust_id = trust_assessment_ids.get(maint_cd.id)
             if trust_id is None:
@@ -1336,32 +1393,39 @@ class AnalysisCaseOrchestrationService:
                     StageEventStatus.COMPLETED.value,
                     {"rule": "XDOM-A", "finding_count": len(findings)},
                 )
-        for ops_cd in ops_datasets:
-            trust_id = trust_assessment_ids.get(ops_cd.id)
-            if trust_id is None:
-                continue
-            for rev_cd in revenue_datasets:
-                findings = run_lost_activity_to_revenue_gap(
-                    db,
-                    organization_id,
-                    ops_cd.dataset_id,
-                    canonical_frames[ops_cd.id],
-                    rev_cd.dataset_id,
-                    canonical_frames[rev_cd.id],
-                    trust_id,
-                    actor_user_id,
-                )
-                for finding in findings:
-                    published_finding_ids.add(finding.id)
-                self._record_stage(
-                    db,
-                    organization_id,
-                    analysis_case_id,
-                    run_id,
-                    "cross_domain_intelligence",
-                    StageEventStatus.COMPLETED.value,
-                    {"rule": "XDOM-B", "finding_count": len(findings)},
-                )
+        # P3.xxE.5 Phase 2: XDOM-B is GOVERNED -- the readiness evaluator
+        # computed above is now the authority for whether this rule
+        # executes at all, replacing the ad-hoc per-dataset trust check as
+        # the entry gate. When not READY, XDOM-B does not execute and no
+        # XDOM-B findings are emitted; the activation decision persisted by
+        # _evaluate_intelligence_capabilities above already records why.
+        if xdom_b_governed_ready:
+            for ops_cd in ops_datasets:
+                trust_id = trust_assessment_ids.get(ops_cd.id)
+                if trust_id is None:
+                    continue
+                for rev_cd in revenue_datasets:
+                    findings = run_lost_activity_to_revenue_gap(
+                        db,
+                        organization_id,
+                        ops_cd.dataset_id,
+                        canonical_frames[ops_cd.id],
+                        rev_cd.dataset_id,
+                        canonical_frames[rev_cd.id],
+                        trust_id,
+                        actor_user_id,
+                    )
+                    for finding in findings:
+                        published_finding_ids.add(finding.id)
+                    self._record_stage(
+                        db,
+                        organization_id,
+                        analysis_case_id,
+                        run_id,
+                        "cross_domain_intelligence",
+                        StageEventStatus.COMPLETED.value,
+                        {"rule": "XDOM-B", "finding_count": len(findings)},
+                    )
 
         for finding_id in published_finding_ids:
             db.add(
@@ -1373,36 +1437,6 @@ class AnalysisCaseOrchestrationService:
                 )
             )
         db.commit()
-
-        # P3.xxE.5 Phase 1 (SHADOW): additive, read-only comparison of the
-        # cross_domain_intelligence stage's own pre-existing hard-coded
-        # activation condition against the new generic registry/readiness
-        # evaluator, for XDOM-A/XDOM-B only. Runs strictly AFTER the block
-        # above so it observes the exact same by_domain/trust state that
-        # already decided what actually ran -- it never influences
-        # published_finding_ids or any Finding row. Never fails the run.
-        try:
-            self._run_case_level_capability_shadow_evaluation(
-                db,
-                organization_id,
-                analysis_case_id,
-                run_id,
-                by_domain,
-                trust_assessment_ids,
-                canonical_frames,
-                semantic_outcome,
-                raw_dfs_for_semantic,
-            )
-        except Exception as exc:  # noqa: BLE001 -- additive layer, must never fail the run
-            self._record_stage(
-                db,
-                organization_id,
-                analysis_case_id,
-                run_id,
-                "capability_shadow_evaluation",
-                StageEventStatus.FAILED.value,
-                {"error": str(exc)},
-            )
 
         run.completed_at = utc_now()
         run.heartbeat_at = utc_now()
