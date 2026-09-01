@@ -104,6 +104,9 @@ class IntelligencePackRegistry:
     def all(self) -> list[IntelligencePackDefinition]:
         return list(self._packs)
 
+    def get(self, rule_code: str) -> IntelligencePackDefinition | None:
+        return next((p for p in self._packs if p.rule_code == rule_code), None)
+
     def applicable(
         self, available_domains: set[str], available_fields: set[str], industry_code: str | None
     ) -> list[IntelligencePackDefinition]:
@@ -161,8 +164,26 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # that could never actually be produced.
             required_canonical_entities=frozenset({EntityType.ASSET.value}),
             minimum_entity_identity_confidence=0.70,
-            confidence_aggregation_policy="coverage_above_threshold",
-            minimum_coverage_ratio=1.0,
+            # P3.xxV.2H (Fix #5): XDOM-A is a PER_ENTITY / candidate-local
+            # model, confirmed directly from run_asset_failure_to_lost_activity's
+            # own implementation -- it iterates a pre-filtered, per-asset
+            # candidate set and publishes one finding per independently
+            # qualifying asset (app/services/cross_domain_intelligence_service.py).
+            # "coverage_above_threshold" @ ratio=1.0 (the E.5-era generic
+            # default, never reasoned about per-model -- see
+            # docs/p3xxv2g-entity-population-coverage-diagnosis-report.md,
+            # Section B) required the ENTIRE case-global ASSET population to
+            # individually clear the confidence floor, incorrectly blocking
+            # this rule on unrelated single-dataset tail entities it would
+            # never evaluate as candidates anyway. "max" is an existing,
+            # already-generic evaluator option (app/services/
+            # intelligence_readiness_service.py's own _meets_confidence) --
+            # unchanged here, only selected: it answers exactly the question
+            # a candidate-local model needs, "does at least one eligible
+            # entity exist," never "does every entity in the case clear the
+            # bar." minimum_coverage_ratio is therefore left at its class
+            # default (unused by the "max" policy).
+            confidence_aggregation_policy="max",
             # Rule A compares downtime-hour windows only -- never sums or
             # compares a monetary amount across records.
             currency_behavior="currency_agnostic",

@@ -47,6 +47,7 @@ naturally satisfy the EXISTING, unmodified thresholds those modules already
 enforce."""
 
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -374,3 +375,195 @@ def test_xdom_a_stays_blocked_when_maintenance_domain_absent(db: Session, tmp_pa
     priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
     xdom_a_findings = [p for p in priorities if p.finding.rule_id == _XDOM_A]
     assert xdom_a_findings == []
+
+
+# ---------------------------------------------------------------------------
+# P3.xxV.2H (Fix #5): mixed-population certification. The prior ablation
+# tests above (A-G) are unchanged and still pass -- this section adds the
+# scenario Fix #5 specifically exists for: some, but not all, of a case's
+# ASSET population individually clears the 0.70 floor. Before Fix #5, one
+# below-floor "tail" entity anywhere in the case-global CanonicalCaseEntity
+# population blocked the whole rule (docs/p3xxv2g-entity-population-coverage-
+# diagnosis-report.md). After Fix #5, readiness and execution both read the
+# same canonical population and agree: the tail entity is excluded from
+# execution, but does not block the otherwise-eligible candidates.
+# ---------------------------------------------------------------------------
+
+
+def _mixed_fixture_csvs() -> list[UploadedFile]:
+    """5 assets (A-1..A-5) legitimately cross-referenced in BOTH
+    maintenance and operations datasets -- multi-dataset, identity
+    confidence >= 0.70, exactly like _positive_fixture_csvs() above. A 6th
+    asset (A-6) appears ONLY in the maintenance dataset -- single-dataset,
+    identity confidence stays at the 0.65 floor, below XDOM-A's declared
+    minimum. No simulation-specific or asset-name-specific logic anywhere
+    in production reads "A-6" -- it is simply the one asset_id value this
+    fixture never repeats in operations_events.csv."""
+    maint_rows = "asset_id,work_order_id,failure_code,downtime_hours,repair_cost,event_date\n"
+    for i in range(_N_ASSETS):
+        maint_rows += f"A-{i + 1},WO-{i + 1},brake,48,10000,2026-08-{i + 1:02d}T08:00:00\n"
+    maint_rows += "A-6,WO-6,brake,48,10000,2026-08-06T08:00:00\n"
+    ops_rows = "operational_event_id,asset_id,event_date,operational_event_status\n"
+    for i in range(_N_ASSETS):
+        ops_rows += f"OE-{i + 1},A-{i + 1},2026-08-{i + 1:02d}T18:00:00,completed\n"
+    rev_rows = "transaction_amount,event_date,operational_event_id\n"
+    for i in range(_N_ASSETS):
+        rev_rows += f"{5000 + i * 100},2026-08-{i + 1:02d}T18:00:00,OE-{i + 1}\n"
+    return [
+        UploadedFile("maintenance_events.csv", maint_rows.encode()),
+        UploadedFile("operations_events.csv", ops_rows.encode()),
+        UploadedFile("revenue_events.csv", rev_rows.encode()),
+    ]
+
+
+def _stage_events(db: Session, run_id: UUID) -> list[AnalysisCaseStageEvent]:
+    events = list(
+        db.scalars(
+            select(AnalysisCaseStageEvent).where(
+                AnalysisCaseStageEvent.run_id == run_id,
+                AnalysisCaseStageEvent.stage == "cross_domain_intelligence",
+            )
+        ).all()
+    )
+    return [e for e in events if e.detail.get("rule") == "XDOM-A"]
+
+
+def test_mixed_a_below_floor_tail_entity_confirmed_at_065(db: Session, tmp_path: Path) -> None:
+    """Precondition: A-6 really does resolve at the single-dataset 0.65
+    floor, and A-1..A-5 really do clear 0.70 -- the fixture produces the
+    exact mixed population this migration targets, not merely a claim."""
+    org = _organization(db, "xdom-a-mixed-precondition")
+    _, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
+    entities = list(
+        db.scalars(select(CanonicalCaseEntity).where(CanonicalCaseEntity.run_id == run_id)).all()
+    )
+    asset_entities = {e.canonical_key: e for e in entities if e.entity_type == "ASSET"}
+    assert len(asset_entities) == _N_ASSETS + 1
+    assert asset_entities["a-6"].entity_identity_confidence == 0.65
+    for i in range(1, _N_ASSETS + 1):
+        assert asset_entities[f"a-{i}"].entity_identity_confidence >= 0.70
+
+
+def test_mixed_b_readiness_is_ready_not_blocked_by_the_tail_entity(
+    db: Session, tmp_path: Path
+) -> None:
+    """The core Fix #5 readiness proof: before this fix, A-6 alone would
+    have kept entity_identity.ASSET below the case-global coverage_above_
+    threshold@1.0 bar, BLOCKING the whole rule. Under the corrected "max"
+    policy, at least one eligible entity existing is sufficient."""
+    org = _organization(db, "xdom-a-mixed-readiness")
+    _, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
+    decisions = _decisions(db, run_id)
+    xdom_a = decisions[_XDOM_A]
+    assert xdom_a.governed_status == "READY"
+    assert xdom_a.governed_confidence_summary["below_confidence_threshold"] == []
+
+
+def test_mixed_c_execution_includes_eligible_assets_and_excludes_the_tail(
+    db: Session, tmp_path: Path
+) -> None:
+    """B, C, negative A/D: XDOM-A actually executes over A-1..A-5
+    independently -- A-6, correctly excluded from the eligible set, never
+    enters the candidate loop and produces no finding referencing it. One
+    low-confidence asset never invalidates independent high-confidence
+    candidates.
+
+    Only asserts >=1 finding and that none reference A-6, not "exactly 5"
+    findings: publish() silently collapses same-dataset/same-affected-count
+    findings to one row (governed_finding_publisher.publish() never
+    attaches an "affected_record"-typed evidence item identifying WHICH
+    asset a finding is about, so FindingDeduplicationService.key() hashes
+    identically for every asset in this fixture and every call after the
+    first returns the pre-existing row) -- a genuine, pre-existing defect,
+    identical on the original 5-asset _positive_fixture_csvs() (that test
+    only ever asserted "at least one finding" for the same reason), wholly
+    unrelated to entity eligibility and explicitly out of scope for Fix #5
+    (see the Fix #5 report's next-empirical-blocker section)."""
+    org = _organization(db, "xdom-a-mixed-execution")
+    case_id, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
+
+    priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
+    xdom_a_findings = [p.finding for p in priorities if p.finding.rule_id == _XDOM_A]
+    titles = {f.title for f in xdom_a_findings}
+    assert titles, "expected at least one XDOM-A finding"
+    assert titles <= {
+        f"Asset A-{i} failure downtime overlapped scheduled activity"
+        for i in range(1, _N_ASSETS + 1)
+    }
+    assert not any("A-6" in title for title in titles)
+
+
+def test_mixed_d_legacy_vs_canonical_comparison_recorded_on_stage_event(
+    db: Session, tmp_path: Path
+) -> None:
+    """Section 6 migration safety comparison: both populations are
+    computed and recorded, neither silently dropped. Legacy's own
+    >=2-dataset exact-match rule independently excludes A-6 the same way
+    (it never appears in a second dataset) -- so on this fixture the two
+    populations happen to agree; Section F of the Fix #5 report explains
+    why that agreement is expected, not coincidental, given both mechanisms
+    count datasets from the same underlying observations."""
+    org = _organization(db, "xdom-a-mixed-comparison")
+    _, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
+    events = _stage_events(db, run_id)
+    assert events, "expected an XDOM-A cross_domain_intelligence stage event"
+    detail = events[0].detail
+    assert detail["eligible_asset_count"] == _N_ASSETS
+    assert detail["legacy_matched_asset_count"] == _N_ASSETS
+    assert detail["eligible_and_legacy_intersection"] == _N_ASSETS
+    assert detail["legacy_only_count"] == 0
+    assert detail["canonical_only_count"] == 0
+
+
+def test_mixed_e_readiness_execution_consistency_invariant(db: Session, tmp_path: Path) -> None:
+    """Section 12 release-blocking invariant, checked live end-to-end: if
+    readiness reports READY on entity_identity.ASSET, execution must
+    enumerate >=1 eligible entity from the same run; the converse
+    (governed BLOCKED-only-on-entities => zero eligible) is exercised by
+    test_ablation_c_missing_canonical_entity_blocks / test_ablation_f at
+    the pure evaluate_readiness() level already."""
+    org = _organization(db, "xdom-a-mixed-consistency")
+    _, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
+    decisions = _decisions(db, run_id)
+    xdom_a = decisions[_XDOM_A]
+    below_threshold = cast(list, xdom_a.governed_confidence_summary["below_confidence_threshold"])
+    entity_ready = "entity_identity.ASSET" not in below_threshold
+    events = _stage_events(db, run_id)
+    eligible_count = cast(int, events[0].detail["eligible_asset_count"]) if events else 0
+    assert entity_ready is True
+    assert eligible_count > 0
+
+
+def test_ablation_h_mixed_confidence_population_still_ready(db: Session, tmp_path: Path) -> None:
+    """H (pure evaluate_readiness() level, mirrors ablation A-G's own
+    style): a distribution with one entity far below 0.70 and others far
+    above it must NOT block readiness under XDOM-A's "max" policy -- the
+    exact scenario "coverage_above_threshold @ 1.0" got wrong."""
+    from dataclasses import replace
+
+    index = replace(
+        _READY_INDEX,
+        canonical_entity_identity_confidence_by_type={
+            "ASSET": ConfidenceDistribution((0.95, 0.94, 0.3))
+        },
+    )
+    result = evaluate_readiness(_xdom_a_pack(), index)
+    assert result.status == "READY"
+    assert result.below_confidence_threshold == frozenset()
+
+
+def test_ablation_i_all_low_confidence_still_blocks(db: Session, tmp_path: Path) -> None:
+    """I: the safety side of the same change -- if NO entity in the
+    population clears the floor, "max" still correctly fails, exactly like
+    "coverage_above_threshold" did. Fix #5 changes WHICH question is asked
+    (does at least one qualify vs. does the whole population qualify), not
+    whether a genuinely all-low-confidence case is protected."""
+    from dataclasses import replace
+
+    index = replace(
+        _READY_INDEX,
+        canonical_entity_identity_confidence_by_type={"ASSET": ConfidenceDistribution((0.3, 0.4))},
+    )
+    result = evaluate_readiness(_xdom_a_pack(), index)
+    assert result.status == "PARTIAL"
+    assert result.below_confidence_threshold == frozenset({"entity_identity.ASSET"})

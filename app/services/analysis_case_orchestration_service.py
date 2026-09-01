@@ -1229,6 +1229,8 @@ class AnalysisCaseOrchestrationService:
         # decisions from the stage just above; skipped entirely (not
         # failed) if that stage itself didn't complete, since there is
         # nothing governed to resolve against.
+        entity_ids: dict[tuple[str, str], UUID] = {}
+        entity_candidates: list[EntityCandidate] = []
         if semantic_outcome is not None:
             try:
                 entity_ids, entity_candidates = self._run_case_level_entity_resolution(
@@ -1356,11 +1358,40 @@ class AnalysisCaseOrchestrationService:
             StageEventStatus.COMPLETED.value,
             {"link_count": len(links)},
         )
+        # Legacy exact-string entity link -- retained (not deleted, per
+        # P3.xxV.2H/Fix #5's explicit deprecation plan): still the sole
+        # source of `resolved_entity_types` for every pack's pre-existing
+        # legacy required_entities check (all of MAINT-001/XDOM-A/XDOM-B),
+        # and kept here for the legacy-vs-canonical comparison recorded on
+        # the XDOM-A stage event below. No longer XDOM-A's candidate
+        # source -- see eligible_assets.
         matched_assets = {
             link.canonical_key
             for link in links
             if link.entity_type == "asset" and link.status == EntityLinkStatus.MATCHED.value
         }
+
+        # P3.xxV.2H (Fix #5): XDOM-A's actual candidate population, sourced
+        # from the SAME canonical E.3 entity evidence its readiness check
+        # (entity_identity.ASSET, above in _evaluate_intelligence_capabilities)
+        # reads -- see app/entities/intelligence_contract.py::eligible_entity_keys.
+        # The threshold is read from the pack's own declaration, never a
+        # second, independently-chosen number, so readiness and execution
+        # stay provably aligned on one evidence contract.
+        from app.entities.entity_type import EntityType
+        from app.entities.intelligence_contract import eligible_entity_keys
+        from app.intelligence_packs.registry import default_intelligence_pack_registry
+
+        xdom_a_pack = default_intelligence_pack_registry().get("XDOM-A-ASSET-FAILURE-LOST-ACTIVITY")
+        eligible_assets = (
+            eligible_entity_keys(
+                entity_candidates,
+                EntityType.ASSET.value,
+                xdom_a_pack.minimum_entity_identity_confidence,
+            )
+            if xdom_a_pack is not None
+            else set()
+        )
 
         # --- DOMAIN INTELLIGENCE ---
         by_domain: dict[str, list[AnalysisCaseDataset]] = {}
@@ -1471,7 +1502,7 @@ class AnalysisCaseOrchestrationService:
                         ops_cd.dataset_id,
                         canonical_frames[ops_cd.id],
                         trust_id,
-                        matched_assets,
+                        eligible_assets,
                         actor_user_id,
                         canonical_evidence_completeness=maint_canonical_evidence,
                     )
@@ -1484,7 +1515,20 @@ class AnalysisCaseOrchestrationService:
                         run_id,
                         "cross_domain_intelligence",
                         StageEventStatus.COMPLETED.value,
-                        {"rule": "XDOM-A", "finding_count": len(findings)},
+                        {
+                            "rule": "XDOM-A",
+                            "finding_count": len(findings),
+                            # P3.xxV.2H (Fix #5) migration safety comparison --
+                            # legacy vs. canonical candidate population, both
+                            # computed on the same run, neither deleted.
+                            "eligible_asset_count": len(eligible_assets),
+                            "legacy_matched_asset_count": len(matched_assets),
+                            "eligible_and_legacy_intersection": len(
+                                eligible_assets & matched_assets
+                            ),
+                            "legacy_only_count": len(matched_assets - eligible_assets),
+                            "canonical_only_count": len(eligible_assets - matched_assets),
+                        },
                     )
         # P3.xxE.5 Phase 2: XDOM-B is GOVERNED -- the readiness evaluator
         # computed above is now the authority for whether this rule
