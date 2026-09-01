@@ -5,7 +5,11 @@ conclusion OPEN->IN_PROGRESS->COMPLETE, unless independently corroborated."""
 
 from datetime import UTC, datetime
 
-from app.process.state_normalization import find_state_sequence, normalize_state_value
+from app.process.state_normalization import (
+    find_state_sequence,
+    lookup_canonical_state,
+    normalize_state_value,
+)
 
 
 def _dt(hour: int) -> datetime:
@@ -91,3 +95,39 @@ def test_find_state_sequence_never_invents_intermediate_states() -> None:
 def test_find_state_sequence_requires_at_least_two_observations() -> None:
     assert find_state_sequence([]) == []
     assert find_state_sequence([("OPEN", _dt(8))]) == []
+
+
+# P3.xxV.2C: lookup_canonical_state -- the deterministic, machine-status-
+# independent raw-value lookup XDOM-B (and any future rule) consumes instead
+# of a raw source-system literal. Generic alias-table lookup only -- no
+# simulation ID, business family, or filename ever appears here.
+
+
+def test_lookup_canonical_state_completed_variants() -> None:
+    for raw in ("completed", "complete", "done", "finished"):
+        assert lookup_canonical_state(raw) == "COMPLETED"
+
+
+def test_lookup_canonical_state_closed_variants() -> None:
+    for raw in ("closed", "close"):
+        assert lookup_canonical_state(raw) == "CLOSED"
+
+
+def test_lookup_canonical_state_is_case_and_whitespace_insensitive() -> None:
+    assert lookup_canonical_state("CLOSED") == "CLOSED"
+    assert lookup_canonical_state("  Closed  ") == "CLOSED"
+    assert lookup_canonical_state("In Progress") == "IN_PROGRESS"
+
+
+def test_lookup_canonical_state_open_in_progress_cancelled_are_not_completed() -> None:
+    assert lookup_canonical_state("open") == "OPEN"
+    assert lookup_canonical_state("in_progress") == "IN_PROGRESS"
+    assert lookup_canonical_state("cancelled") == "CANCELLED"
+    assert lookup_canonical_state("canceled") == "CANCELLED"
+
+
+def test_lookup_canonical_state_unrecognized_value_returns_none() -> None:
+    """Arbitrary/unknown status text never fabricates a canonical state --
+    the caller's own governance decides what an unmatched value means."""
+    assert lookup_canonical_state("frobnicated") is None
+    assert lookup_canonical_state("") is None

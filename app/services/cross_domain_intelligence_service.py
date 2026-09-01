@@ -8,12 +8,26 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.entities import Finding
+from app.process.state_normalization import lookup_canonical_state
 from app.schemas.findings import FindingSeverity, FindingType
 from app.services.governed_finding_publisher import (
     ContributingDataset,
     GovernedFindingRequest,
     governed_finding_publisher,
 )
+
+# P3.xxV.2C: Rule B's business condition is "the operational event reached a
+# sufficiently terminal/executed state such that revenue evidence is
+# expected" -- never a raw source-system string. The canonical state names
+# come from the existing, shared P3.xxE.4 process-state vocabulary
+# (app/process/state_normalization.py); this set names which of THOSE
+# canonical states satisfy Rule B's own business condition. COMPLETED and
+# CLOSED are kept as the two distinct canonical states the shared vocabulary
+# already defines (never merged into one) -- both legitimately mean
+# "the work is done", so both qualify here; CANCELLED/OPEN/IN_PROGRESS/
+# ASSIGNED do not, and an unrecognized raw value normalizes to no canonical
+# state at all and is excluded, never assumed complete.
+_REVENUE_EXPECTED_OPERATIONAL_STATES = frozenset({"COMPLETED", "CLOSED"})
 
 
 @dataclass(frozen=True)
@@ -144,9 +158,8 @@ def run_lost_activity_to_revenue_gap(
     matched' data-linkage issue (Section 8) -- never conflates the two."""
     if "operational_event_status" not in operations_df.columns:
         return []
-    completed = operations_df[
-        operations_df["operational_event_status"].astype(str).str.lower() == "completed"
-    ]
+    canonical_states = operations_df["operational_event_status"].map(lookup_canonical_state)
+    completed = operations_df[canonical_states.isin(_REVENUE_EXPECTED_OPERATIONAL_STATES)]
     if completed.empty:
         return []
 
