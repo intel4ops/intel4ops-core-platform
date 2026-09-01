@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.entities import Finding
 from app.process.state_normalization import lookup_canonical_state
 from app.schemas.findings import FindingSeverity, FindingType
+from app.services.canonical_evidence_completeness import CanonicalEvidenceCompletenessResult
 from app.services.governed_finding_publisher import (
     ContributingDataset,
     GovernedFindingRequest,
@@ -70,6 +71,7 @@ def run_asset_failure_to_lost_activity(
     trust_assessment_id: UUID,
     matched_asset_keys: set[str],
     actor_user_id: UUID,
+    canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None,
 ) -> list[Finding]:
     """Rule A: ASSET_FAILURE_TO_LOST_ACTIVITY instance. Fires only for
     assets the entity resolver actually matched across both datasets, and
@@ -135,6 +137,7 @@ def run_asset_failure_to_lost_activity(
                 entities=[{"entity_type": "asset", "canonical_key": asset_id}],
                 domains=["maintenance", "operations"],
                 economic_status="governed_pending",
+                canonical_evidence_completeness=canonical_evidence_completeness,
                 limitations=["Observed operational impact only -- no economic value estimated."],
             ),
         )
@@ -152,6 +155,7 @@ def run_lost_activity_to_revenue_gap(
     revenue_df: pd.DataFrame,
     trust_assessment_id: UUID,
     actor_user_id: UUID,
+    canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None,
 ) -> list[Finding]:
     """Rule B: LOST_ACTIVITY_TO_REVENUE_GAP instance. Distinguishes a
     genuine 'matched, no revenue' finding from a 'could not be reliably
@@ -198,6 +202,7 @@ def run_lost_activity_to_revenue_gap(
                 contributing_datasets=[ContributingDataset(dataset_id=revenue_dataset_id)],
                 domains=["operations", "revenue"],
                 economic_status="governed_pending",
+                canonical_evidence_completeness=canonical_evidence_completeness,
                 limitations=["No shared match key -- linkage issue only, not a leakage claim."],
             ),
         )
@@ -247,6 +252,7 @@ def run_lost_activity_to_revenue_gap(
             contributing_datasets=[ContributingDataset(dataset_id=revenue_dataset_id)],
             domains=["operations", "revenue"],
             economic_status="governed_pending",
+            canonical_evidence_completeness=canonical_evidence_completeness,
             limitations=["Observed activity/revenue-presence gap only -- no amount estimated."],
         ),
     )

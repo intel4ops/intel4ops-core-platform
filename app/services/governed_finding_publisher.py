@@ -27,6 +27,7 @@ from app.schemas.findings import (
     FindingValueType,
     RuleTraceCreate,
 )
+from app.services.canonical_evidence_completeness import CanonicalEvidenceCompletenessResult
 from app.services.finding_platform_service import FindingPlatformError, finding_publication_service
 
 
@@ -60,6 +61,17 @@ class GovernedFindingRequest:
     domains: list[str] = field(default_factory=list)
     economic_status: str = "governed_pending"
     limitations: list[str] = field(default_factory=list)
+    # P3.xxV.2D: optional POST-SEMANTIC canonical evidence completeness
+    # result (see app/services/canonical_evidence_completeness.py). When the
+    # backing arithmetic readiness decision is BLOCKED for the single reason
+    # "required_field_completeness" -- Trust's own RAW-field check, run
+    # before mapping/semantic interpretation -- and this result independently
+    # confirms every required canonical concept has governed evidence, that
+    # specific blocking reason is treated as satisfied for publication
+    # purposes. Every OTHER blocking reason (or a missing/incomplete
+    # canonical_evidence_completeness) still blocks publication -- this is
+    # additive, never a bypass of Trust as a whole.
+    canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None
 
 
 class IntelligenceReadinessUnavailable(RuntimeError):
@@ -84,13 +96,64 @@ class GovernedFindingPublisher:
                 AnalyticalReadinessDecision.organization_id == request.organization_id,
                 AnalyticalReadinessDecision.trust_assessment_id == request.trust_assessment_id,
                 AnalyticalReadinessDecision.analytical_level == AnalyticalLevel.ARITHMETIC.value,
-                AnalyticalReadinessDecision.readiness_status.in_(
-                    (ReadinessStatus.READY.value, ReadinessStatus.READY_WITH_WARNINGS.value)
-                ),
             )
         )
         if readiness is None:
             return None
+        if readiness.readiness_status not in (
+            ReadinessStatus.READY.value,
+            ReadinessStatus.READY_WITH_WARNINGS.value,
+        ):
+            # P3.xxV.2D: the ONLY corrected path -- an ARITHMETIC decision
+            # blocked for exactly one reason, Trust's early RAW-field
+            # required_field_completeness rule, is not itself wrong (it
+            # correctly reports the literal raw column is absent); it is
+            # simply the wrong check for GOVERNED FINDING PUBLICATION, which
+            # must judge canonical evidence, not raw column names. Any other
+            # blocking reason (or no canonical_evidence_completeness result
+            # at all, or that result itself reporting missing evidence)
+            # still blocks publication -- Trust as a whole is never bypassed.
+            corrected = (
+                request.canonical_evidence_completeness is not None
+                and request.canonical_evidence_completeness.satisfied
+                and set(readiness.blocking_rule_codes or []) == {"required_field_completeness"}
+            )
+            if not corrected:
+                return None
+            # The ORIGINAL early-Trust decision (raw dataset quality) is
+            # never mutated -- it still, correctly, reports blocked. A
+            # SEPARATE, new AnalyticalReadinessDecision row is persisted
+            # instead, reusing the exact same existing representation
+            # (never a new evidence object) to record that, for GOVERNED
+            # FINDING PUBLICATION specifically, canonical evidence was
+            # independently confirmed complete. finding_platform_service's
+            # own downstream re-validation re-reads readiness by id, so the
+            # execution must reference THIS row, not the original blocked
+            # one, for that re-validation to correctly succeed.
+            assert request.canonical_evidence_completeness is not None
+            readiness = AnalyticalReadinessDecision(
+                organization_id=request.organization_id,
+                trust_assessment_id=request.trust_assessment_id,
+                analytical_level=AnalyticalLevel.ARITHMETIC.value,
+                readiness_status=ReadinessStatus.READY_WITH_WARNINGS.value,
+                blocking_rule_codes=[],
+                warning_rule_codes=["canonical_evidence_completeness_corrected"],
+                explanation=(
+                    "Raw-field required_field_completeness blocked this trust assessment "
+                    "(source columns use aliases of the required canonical concepts, e.g. "
+                    "a work-order identifier column rather than the canonical concept name "
+                    "itself). Canonical evidence completeness was independently confirmed: "
+                    + ", ".join(
+                        f"{field.canonical_field} <- {field.source_field} "
+                        f"({field.semantic_status}, {field.semantic_confidence})"
+                        for field in request.canonical_evidence_completeness.fields
+                        if field.satisfied
+                    )
+                    + "."
+                ),
+            )
+            db.add(readiness)
+            db.flush()
 
         now = datetime.now(UTC)
         definition_fingerprint = _hash(request.definition_code, request.definition_version)

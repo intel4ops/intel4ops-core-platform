@@ -68,6 +68,11 @@ from app.semantic.provider_factory import SemanticAIBudget, select_semantic_reas
 from app.semantic.role_classifier import DatasetRoleInterpretation
 from app.services.analysis_case_intelligence_service import run_maintenance_pack
 from app.services.analysis_case_mapping_service import analysis_case_mapping_service
+from app.services.canonical_evidence_completeness import (
+    CanonicalEvidenceCompletenessResult,
+    RawFieldSemanticEvidence,
+    evaluate_canonical_evidence_completeness,
+)
 from app.services.cross_domain_intelligence_service import (
     run_asset_failure_to_lost_activity,
     run_lost_activity_to_revenue_gap,
@@ -111,6 +116,18 @@ _DOMAIN_TRUST_RULES: dict[str, dict[str, dict[str, object]]] = {
 # not force the run into review_required -- reused, not duplicated, from
 # _DOMAIN_TRUST_RULES's own key set.
 _INTELLIGENCE_RELEVANT_DOMAINS = frozenset(_DOMAIN_TRUST_RULES.keys())
+
+
+def _required_canonical_fields(domain: str) -> frozenset[str]:
+    """Typed accessor for _DOMAIN_TRUST_RULES[domain]["required_field_completeness"]
+    ["required_fields"] -- reuses the SAME single declared list Trust's own
+    RawFieldCompletenessRule already runs against (never a second, drifting
+    copy), just read with a concrete type for
+    _evaluate_canonical_evidence_completeness's callers."""
+    raw = _DOMAIN_TRUST_RULES[domain]["required_field_completeness"]["required_fields"]
+    assert isinstance(raw, list)
+    return frozenset(str(item) for item in raw)
+
 
 # P3.xxE.5 Phase 2: rule codes promoted to GOVERNED activation authority --
 # an explicit, reviewed rollout list, exactly like _INTELLIGENCE_RELEVANT_DOMAINS
@@ -786,6 +803,58 @@ class AnalysisCaseOrchestrationService:
             },
         )
 
+    def _evaluate_canonical_evidence_completeness(
+        self,
+        db: Session,
+        organization_id: UUID,
+        run_id: UUID,
+        case_dataset: AnalysisCaseDataset,
+        required_canonical_fields: frozenset[str],
+    ) -> CanonicalEvidenceCompletenessResult:
+        """P3.xxV.2D: the POST-SEMANTIC, POST-MAPPING evidence-completeness
+        check governed finding publication needs -- distinct from, and never
+        a replacement for, Trust's own early RawFieldCompletenessRule (see
+        app/services/canonical_evidence_completeness.py's module docstring
+        for the full rationale). Adapts the two persisted representations
+        that already carry this information (AnalysisCaseFieldMapping:
+        which raw field mapping resolved to which canonical concept;
+        SemanticInterpretationDecision: that SAME raw field's own machine
+        semantic authority) into the framework-free RawFieldSemanticEvidence
+        shape, then delegates the actual authority judgment entirely to
+        evaluate_canonical_evidence_completeness -- no duplicate logic here."""
+        mappings = list(
+            db.scalars(
+                select(AnalysisCaseFieldMapping).where(
+                    AnalysisCaseFieldMapping.organization_id == organization_id,
+                    AnalysisCaseFieldMapping.analysis_case_dataset_id == case_dataset.id,
+                    AnalysisCaseFieldMapping.canonical_field.in_(required_canonical_fields),
+                    AnalysisCaseFieldMapping.mapping_status == MappingStatus.AUTO_MAPPED.value,
+                )
+            ).all()
+        )
+        candidates: list[RawFieldSemanticEvidence] = []
+        for mapping in mappings:
+            decision = db.scalar(
+                select(SemanticInterpretationDecision).where(
+                    SemanticInterpretationDecision.organization_id == organization_id,
+                    SemanticInterpretationDecision.analysis_case_dataset_id == case_dataset.id,
+                    SemanticInterpretationDecision.run_id == run_id,
+                    SemanticInterpretationDecision.source_field == mapping.source_field,
+                )
+            )
+            if decision is None or mapping.canonical_field is None:
+                continue
+            candidates.append(
+                RawFieldSemanticEvidence(
+                    canonical_field=mapping.canonical_field,
+                    source_field=mapping.source_field,
+                    machine_status=decision.status,
+                    machine_selected_concept=decision.selected_concept,
+                    machine_confidence=decision.confidence,
+                )
+            )
+        return evaluate_canonical_evidence_completeness(required_canonical_fields, candidates)
+
     def _evaluate_intelligence_capabilities(
         self,
         db: Session,
@@ -1386,6 +1455,13 @@ class AnalysisCaseOrchestrationService:
                 trust_id = trust_assessment_ids.get(maint_cd.id)
                 if trust_id is None:
                     continue
+                maint_canonical_evidence = self._evaluate_canonical_evidence_completeness(
+                    db,
+                    organization_id,
+                    run_id,
+                    maint_cd,
+                    _required_canonical_fields("maintenance"),
+                )
                 for ops_cd in ops_datasets:
                     findings = run_asset_failure_to_lost_activity(
                         db,
@@ -1397,6 +1473,7 @@ class AnalysisCaseOrchestrationService:
                         trust_id,
                         matched_assets,
                         actor_user_id,
+                        canonical_evidence_completeness=maint_canonical_evidence,
                     )
                     for finding in findings:
                         published_finding_ids.add(finding.id)
@@ -1420,6 +1497,13 @@ class AnalysisCaseOrchestrationService:
                 trust_id = trust_assessment_ids.get(ops_cd.id)
                 if trust_id is None:
                     continue
+                ops_canonical_evidence = self._evaluate_canonical_evidence_completeness(
+                    db,
+                    organization_id,
+                    run_id,
+                    ops_cd,
+                    _required_canonical_fields("operations"),
+                )
                 for rev_cd in revenue_datasets:
                     findings = run_lost_activity_to_revenue_gap(
                         db,
@@ -1430,6 +1514,7 @@ class AnalysisCaseOrchestrationService:
                         canonical_frames[rev_cd.id],
                         trust_id,
                         actor_user_id,
+                        canonical_evidence_completeness=ops_canonical_evidence,
                     )
                     for finding in findings:
                         published_finding_ids.add(finding.id)
