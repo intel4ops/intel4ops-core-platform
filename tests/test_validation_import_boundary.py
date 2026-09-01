@@ -100,7 +100,15 @@ PRODUCTION_EXECUTION_MODULES = [
     "app/api/capability_activation_routes.py",  # P3.xxE.5 Intelligence Activation (SHADOW)
 ]
 
-FORBIDDEN_PREFIXES = ("app.ground_truth_validation", "app.models.ground_truth_validation")
+FORBIDDEN_PREFIXES = (
+    "app.ground_truth_validation",
+    "app.models.ground_truth_validation",
+    # P3.xxV.1: app.validation_program is the Validation Program
+    # orchestration layer -- it imports app.ground_truth_validation
+    # itself, so a production module reaching it would be an indirect
+    # route around the direct-import ban above. Forbidden here too.
+    "app.validation_program",
+)
 
 
 def _imported_module_names(path: Path) -> set[str]:
