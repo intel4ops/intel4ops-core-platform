@@ -32,6 +32,24 @@ _CANONICAL_STATE_ALIASES: dict[str, frozenset[str]] = {
 }
 
 
+def _normalize_raw_state_text(raw_value: object) -> str:
+    return " ".join(str(raw_value).strip().casefold().split())
+
+
+def lookup_canonical_state(raw_value: object) -> str | None:
+    """Deterministic raw-value -> canonical-state-name lookup against the
+    same small, generic alias table _CANONICAL_STATE_ALIASES already uses --
+    for callers that already know a column IS a state/status field (e.g. via
+    domain/field mapping) and only need the value-level mapping, without the
+    machine_status/confidence-tier gating normalize_state_value applies for
+    the separate, harder question of whether a field's CONCEPT identity is
+    itself confirmed. Returns None (never a fabricated name) when the raw
+    value matches no known alias -- the caller's own governance decides what
+    an unrecognized value means; this function only ever reports canonical
+    identity, never invents one."""
+    return _lookup_canonical_state(_normalize_raw_state_text(raw_value))
+
+
 def _lookup_canonical_state(normalized_raw: str) -> str | None:
     for canonical, aliases in _CANONICAL_STATE_ALIASES.items():
         if normalized_raw in aliases:
@@ -52,7 +70,7 @@ def normalize_state_value(
     ACCEPTED_WITH_FLAG with independent corroboration); otherwise it stays
     the raw, source-specific value -- existence recorded, meaning not
     claimed."""
-    normalized_raw = " ".join(str(raw_value).strip().casefold().split())
+    normalized_raw = _normalize_raw_state_text(raw_value)
 
     if machine_status in _HUMAN_TIERS or machine_status == "auto_accepted":
         state_existence_confidence = machine_confidence
