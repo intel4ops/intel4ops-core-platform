@@ -115,7 +115,14 @@ def _datatype_compatible(concept_type: str, field_profile: FieldProfile) -> bool
     if concept_type == "timestamp":
         return field_profile.is_date_like
     if concept_type == "identifier":
-        return field_profile.is_candidate_identifier
+        # P3.xxV.2F: a PRIMARY-shaped identifier (near-unique) and a
+        # legitimate REPEATED REFERENCE/foreign-key identifier (many rows
+        # referencing few real-world entities, e.g. many work orders per
+        # asset) are both genuinely identifier-shaped data -- see
+        # app/semantic/profiler.py's is_candidate_reference_identifier.
+        return (
+            field_profile.is_candidate_identifier or field_profile.is_candidate_reference_identifier
+        )
     if concept_type == "status":
         return field_profile.is_candidate_categorical
     return True
