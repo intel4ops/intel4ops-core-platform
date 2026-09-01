@@ -51,6 +51,7 @@ CANONICAL_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "service_ticket_id",
         "production_order_id",
         "work_order_id",
+        "dispatch_id",
     ),
     "operational_event_status": ("status", "trip_status", "job_status"),
     "operational_event_start": (
@@ -59,8 +60,16 @@ CANONICAL_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "scheduled_start",
         "trip_start",
         "job_start",
+        "dispatch_date",
     ),
-    "operational_event_end": ("end_time", "end_date", "scheduled_end", "trip_end", "job_end"),
+    "operational_event_end": (
+        "end_time",
+        "end_date",
+        "scheduled_end",
+        "trip_end",
+        "job_end",
+        "return_date",
+    ),
     "fuel_quantity": ("fuel_quantity", "fuel_volume", "fuel_liters", "fuel_gallons"),
     "transaction_amount": (
         "amount",
