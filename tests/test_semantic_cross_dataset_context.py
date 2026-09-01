@@ -22,7 +22,12 @@ from app.services.organization_service import OrganizationService
 from app.storage.local_storage import LocalFileStorage
 
 
-def _field(name: str, samples: list[str], identifier: bool = True) -> FieldProfile:
+def _field(
+    name: str,
+    samples: list[str],
+    identifier: bool = True,
+    reference_identifier: bool = False,
+) -> FieldProfile:
     return FieldProfile(
         source_field=name,
         physical_type="object",
@@ -33,6 +38,7 @@ def _field(name: str, samples: list[str], identifier: bool = True) -> FieldProfi
         uniqueness_ratio=1.0,
         sample_values=samples,
         is_candidate_identifier=identifier,
+        is_candidate_reference_identifier=reference_identifier,
     )
 
 
@@ -132,6 +138,127 @@ def test_no_case_context_returns_no_evidence() -> None:
         )
         == []
     )
+
+
+# --- P3.xxV.2F: repeated reference/foreign-key identifier eligibility ---
+
+
+def test_reference_identifier_field_now_gets_cross_dataset_evidence() -> None:
+    """B (generic FK): a field that is NOT near-unique (is_candidate_identifier
+    False) but IS a plausible repeated reference identifier can still be
+    corroborated -- the exact NEXT-2 mechanism, exercised generically here
+    with no simulation-specific data."""
+    current_field = _field(
+        "job_ref", ["A1", "A2", "A1"], identifier=False, reference_identifier=True
+    )
+    sibling_field = _field("work_order_id", ["A1", "A2", "A9"])
+    case_context = CaseSemanticContext(
+        profiles={"other-ds": _dataset("other.csv", [sibling_field])}, roles={}
+    )
+    candidates = generate_cross_dataset_evidence(
+        "this-ds",
+        current_field,
+        {"work_order_id"},
+        case_context,
+        default_canonical_concept_registry,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].candidate_concept == "work_order_id"
+
+
+def test_reference_identifier_sibling_field_also_eligible() -> None:
+    """The broadened eligibility applies symmetrically to the SIBLING field
+    too, not just the field under evaluation."""
+    current_field = _field("job_ref", ["A1", "A2", "A9"])
+    sibling_field = _field(
+        "work_order_id", ["A1", "A2", "A1"], identifier=False, reference_identifier=True
+    )
+    case_context = CaseSemanticContext(
+        profiles={"other-ds": _dataset("other.csv", [sibling_field])}, roles={}
+    )
+    candidates = generate_cross_dataset_evidence(
+        "this-ds",
+        current_field,
+        {"work_order_id"},
+        case_context,
+        default_canonical_concept_registry,
+    )
+    assert len(candidates) == 1
+
+
+def test_low_cardinality_non_reference_field_still_gets_no_evidence() -> None:
+    """A (negative, mirrors Section 12.A): neither near-unique nor a
+    plausible reference population (is_candidate_identifier and
+    is_candidate_reference_identifier both False, e.g. a 3-value
+    categorical/status-shaped field) -- must not receive cross-dataset
+    evidence merely because it shares a value with a sibling field."""
+    current_field = _field(
+        "status_id", ["OPEN", "CLOSED", "OPEN"], identifier=False, reference_identifier=False
+    )
+    sibling_field = _field("work_order_id", ["OPEN", "Z2", "Z9"])
+    case_context = CaseSemanticContext(
+        profiles={"other-ds": _dataset("other.csv", [sibling_field])}, roles={}
+    )
+    assert (
+        generate_cross_dataset_evidence(
+            "this-ds",
+            current_field,
+            {"work_order_id"},
+            case_context,
+            default_canonical_concept_registry,
+        )
+        == []
+    )
+
+
+def test_placeholder_only_overlap_produces_no_false_corroboration() -> None:
+    """D (negative, Section 12.D): a shared value that is a known
+    placeholder/default (here "0000" and "n/a") must never itself count as
+    corroborating overlap, even between two otherwise-eligible reference
+    identifiers."""
+    current_field = _field(
+        "job_ref", ["0000", "n/a", "A2"], identifier=False, reference_identifier=True
+    )
+    sibling_field = _field(
+        "work_order_id", ["0000", "N/A", "Z9"], identifier=False, reference_identifier=True
+    )
+    case_context = CaseSemanticContext(
+        profiles={"other-ds": _dataset("other.csv", [sibling_field])}, roles={}
+    )
+    assert (
+        generate_cross_dataset_evidence(
+            "this-ds",
+            current_field,
+            {"work_order_id"},
+            case_context,
+            default_canonical_concept_registry,
+        )
+        == []
+    )
+
+
+def test_genuine_overlap_still_works_alongside_placeholder_values() -> None:
+    """A genuine shared non-placeholder value ("A2") still corroborates,
+    even when placeholder values are ALSO present on both sides -- the
+    placeholder filter removes noise, it does not require a placeholder-free
+    dataset."""
+    current_field = _field(
+        "job_ref", ["0000", "A2", "A1"], identifier=False, reference_identifier=True
+    )
+    sibling_field = _field(
+        "work_order_id", ["0000", "A2", "Z9"], identifier=False, reference_identifier=True
+    )
+    case_context = CaseSemanticContext(
+        profiles={"other-ds": _dataset("other.csv", [sibling_field])}, roles={}
+    )
+    candidates = generate_cross_dataset_evidence(
+        "this-ds",
+        current_field,
+        {"work_order_id"},
+        case_context,
+        default_canonical_concept_registry,
+    )
+    assert len(candidates) == 1
 
 
 # --- Part B: real orchestration, order-permutation proof ---

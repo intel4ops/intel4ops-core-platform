@@ -23,12 +23,30 @@ from app.semantic.profiler import FieldProfile
 
 CROSS_DATASET_OVERLAP_WEIGHT = 0.15
 _MIN_SHARED_VALUES = 1
+# P3.xxV.2F Section 8/12.D: a shared PLACEHOLDER/default value (a blank,
+# "N/A", a zero-shaped filler) must never itself count as corroborating
+# overlap -- two otherwise-unrelated columns coincidentally sharing one
+# such value is a real false-corroboration risk, especially now that
+# eligibility (below) is broadened beyond near-unique fields. Small,
+# generic, industry-agnostic list -- never a client-specific value.
+_PLACEHOLDER_VALUES = frozenset(
+    {"", "n/a", "na", "null", "none", "unknown", "0", "0000", "-", "--", "tbd", "pending"}
+)
 
 
 def _values_overlap(a: list[str], b: list[str]) -> bool:
-    a_set = {v.strip().lower() for v in a if v}
-    b_set = {v.strip().lower() for v in b if v}
+    a_set = {v.strip().lower() for v in a if v} - _PLACEHOLDER_VALUES
+    b_set = {v.strip().lower() for v in b if v} - _PLACEHOLDER_VALUES
     return len(a_set & b_set) >= _MIN_SHARED_VALUES
+
+
+def _is_identifier_eligible(field_profile: FieldProfile) -> bool:
+    """P3.xxV.2F: eligibility for cross-dataset semantic corroboration is
+    no longer restricted to near-unique (PRIMARY-shaped) fields -- a
+    legitimate repeated reference/foreign-key identifier (many rows,
+    few real-world entities) is just as eligible to be corroborated by a
+    sibling dataset's field. See app/semantic/profiler.py."""
+    return field_profile.is_candidate_identifier or field_profile.is_candidate_reference_identifier
 
 
 def generate_cross_dataset_evidence(
@@ -44,7 +62,7 @@ def generate_cross_dataset_evidence(
     and folded into the matching concept's candidate by the confidence
     engine's existing merge-by-concept step (app/semantic/confidence_engine.py),
     exactly like an AI proposal would be. No new merge mechanism needed."""
-    if case_context is None or not field_profile.is_candidate_identifier or not candidate_concepts:
+    if case_context is None or not _is_identifier_eligible(field_profile) or not candidate_concepts:
         return []
 
     pseudo_candidates: list[SemanticCandidate] = []
@@ -53,7 +71,7 @@ def generate_cross_dataset_evidence(
         if other_key == current_dataset_key:
             continue
         for other_field in other_profile.fields:
-            if not other_field.is_candidate_identifier:
+            if not _is_identifier_eligible(other_field):
                 continue
             structurally_similar = _values_overlap(
                 field_profile.sample_values, other_field.sample_values

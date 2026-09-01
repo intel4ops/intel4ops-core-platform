@@ -86,7 +86,16 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             description="Identifier of a physical or logical operational asset.",
             aliases=frozenset({"asset_id", "vehicle_id", "equipment_id", "unit_id", "machine_id"}),
             expected_value_patterns=frozenset({"alpha_dash_digits", "digits"}),
-            compatible_dataset_roles=frozenset({"master", "reference", "event", "transaction"}),
+            # P3.xxV.2F: work_order and contract added -- a physical/
+            # logical asset is generically the subject of a work order
+            # (maintenance/service performed ON it) and can generically be
+            # the subject of a contract (a lease/service agreement FOR a
+            # specific asset), not just appear in master/reference/event/
+            # transaction-shaped datasets. Not blindly extended to every
+            # DatasetRole value -- only the two with direct evidence.
+            compatible_dataset_roles=frozenset(
+                {"master", "reference", "event", "transaction", "work_order", "contract"}
+            ),
             compatible_entity_types=frozenset({"ASSET"}),
         )
     )
@@ -111,7 +120,12 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
                     "bestellnummer",
                 }
             ),
-            compatible_dataset_roles=frozenset({"work_order", "transaction", "event"}),
+            # P3.xxV.2F: labor and invoice added -- a unit of work is
+            # generically the subject a labor/time record was logged
+            # against, and generically the subject an invoice bills for.
+            compatible_dataset_roles=frozenset(
+                {"work_order", "transaction", "event", "labor", "invoice"}
+            ),
             compatible_entity_types=frozenset({"WORK_ORDER"}),
         )
     )

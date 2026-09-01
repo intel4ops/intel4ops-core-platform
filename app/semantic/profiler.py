@@ -16,6 +16,12 @@ import pandas as pd
 _MAX_SAMPLE_VALUES = 5
 _CATEGORICAL_MAX_DISTINCT_RATIO = 0.2
 _IDENTIFIER_MIN_UNIQUENESS_RATIO = 0.95
+# P3.xxV.2F: a generic floor separating a plausible repeated-reference
+# identifier population from a small categorical/status-shaped enum
+# (open/closed/pending, active/inactive, a handful of severity levels --
+# almost always single digits). An absolute count, not a ratio, so it
+# does not shrink as the referencing dataset grows.
+_REFERENCE_IDENTIFIER_MIN_DISTINCT = 10
 
 _CURRENCY_PATTERN = re.compile(r"^[$€£¥]?\s?-?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{1,4})?\s?[A-Z]{0,3}$")
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -45,6 +51,7 @@ class FieldProfile:
     is_date_like: bool = False
     is_numeric_like: bool = False
     is_candidate_identifier: bool = False
+    is_candidate_reference_identifier: bool = False
     is_candidate_categorical: bool = False
     is_currency_like: bool = False
     is_unit_like: bool = False
@@ -189,6 +196,23 @@ def _profile_field(name: str, series: pd.Series, row_count: int) -> FieldProfile
         and (distinct_count / row_count if row_count else 0) <= _CATEGORICAL_MAX_DISTINCT_RATIO
         and distinct_count <= 50
     )
+    # P3.xxV.2F: is_identifier (>=95% row-level uniqueness) correctly
+    # describes a PRIMARY/master-key-shaped column -- it must never be
+    # loosened, since it also gates entity-formation-adjacent evidence
+    # elsewhere. But it wrongly doubled as the ONLY signal that let a
+    # field earn identifier-datatype/cross-dataset evidence at all, which
+    # incorrectly excluded a second, equally legitimate shape: a REPEATED
+    # REFERENCE/FOREIGN-KEY identifier (e.g. many work orders -> one
+    # asset_id) -- uniqueness is the wrong test for that shape by
+    # construction, not a data-quality defect. distinct_count alone
+    # (never a ratio, so it doesn't shrink as the referencing dataset
+    # grows) distinguishes a genuine, non-trivial referenced population
+    # from a small categorical/status-shaped enum (a handful of lifecycle
+    # states, a boolean flag) -- the false-positive case this floor
+    # exists to exclude.
+    is_reference_identifier = (
+        not is_identifier and distinct_count > _REFERENCE_IDENTIFIER_MIN_DISTINCT
+    )
 
     return FieldProfile(
         source_field=name,
@@ -205,6 +229,7 @@ def _profile_field(name: str, series: pd.Series, row_count: int) -> FieldProfile
         is_date_like=is_date,
         is_numeric_like=is_numeric,
         is_candidate_identifier=is_identifier,
+        is_candidate_reference_identifier=is_reference_identifier,
         is_candidate_categorical=is_categorical,
         is_currency_like=is_currency,
         is_unit_like=is_unit,
