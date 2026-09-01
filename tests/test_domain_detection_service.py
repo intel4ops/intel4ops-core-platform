@@ -90,6 +90,19 @@ def test_asset_id_and_dispatch_fields_confirms_operations() -> None:
     assert result.status == DetectionStatus.CONFIRMED.value
 
 
+def test_asset_id_and_rental_dispatch_id_confirms_operations() -> None:
+    """P3.xxV.1B Wave 1 remediation: dispatch_id is the equipment-rental
+    industry's own equally standard name for the same operational-event
+    concept work_order_id/trip_id/job_id already cover -- confirmed absent
+    from the alias table by the Wave 1 finding that every rental
+    simulation's dispatch.csv (dispatch_id, asset_id, dispatch_date,
+    return_date) never classified as operations at all."""
+    result = detect_domain(["asset_id", "dispatch_id", "dispatch_date", "return_date"])
+    assert result.domain == "operations"
+    assert result.status == DetectionStatus.CONFIRMED.value
+    assert set(result.basis) == {"asset_id", "dispatch_id"}
+
+
 def test_ambiguous_generic_schema_is_unknown_not_a_domain_guess() -> None:
     """E. ambiguous generic schema -> unknown. event_date alone overlaps
     revenue's signature, but event_date is itself a generic field, so no
