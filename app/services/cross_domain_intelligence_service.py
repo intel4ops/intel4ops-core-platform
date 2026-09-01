@@ -69,14 +69,19 @@ def run_asset_failure_to_lost_activity(
     operations_dataset_id: UUID,
     operations_df: pd.DataFrame,
     trust_assessment_id: UUID,
-    matched_asset_keys: set[str],
+    eligible_asset_keys: set[str],
     actor_user_id: UUID,
     canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None,
 ) -> list[Finding]:
     """Rule A: ASSET_FAILURE_TO_LOST_ACTIVITY instance. Fires only for
-    assets the entity resolver actually matched across both datasets, and
-    only when both sides carry the required time field -- never a fabricated
-    overlap."""
+    assets that independently resolved to an ASSET-typed canonical entity
+    (P3.xxE.3) whose identity confidence clears this model's own declared
+    floor (P3.xxV.2H, Fix #5 -- see app/entities/intelligence_contract.py's
+    eligible_entity_keys()) -- never a legacy raw exact-string match
+    (app/services/entity_resolution_service.py, retired as this rule's
+    candidate source; still used elsewhere, see the Fix #5 report's
+    deprecation plan) -- and only when both sides carry the required time
+    field -- never a fabricated overlap."""
     required = {"asset_id", "downtime_hours"}
     if not required <= set(maintenance_df.columns):
         return []
@@ -89,7 +94,7 @@ def run_asset_failure_to_lost_activity(
     ops = operations_df.copy()
     ops["event_date"] = pd.to_datetime(ops["event_date"], errors="coerce")
 
-    for asset_id in sorted(matched_asset_keys):
+    for asset_id in sorted(eligible_asset_keys):
         asset_events = maint[maint["asset_id"].astype(str) == asset_id]
         asset_ops = (
             ops[ops["asset_id"].astype(str) == asset_id]
