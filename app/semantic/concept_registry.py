@@ -183,8 +183,44 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="event_timestamp",
             concept_type=CanonicalConceptType.TIMESTAMP.value,
             description="When an event or activity actually occurred.",
+            # P3.xxV.2I: maintenance_date/dispatch_date added -- both are
+            # real, evidenced raw column names in this corpus's own CSVs
+            # (Rental's maintenance.csv/dispatch.csv) that carry exactly
+            # this meaning (when a maintenance event / dispatch activity
+            # actually occurred), just spelled with an industry-specific
+            # noun instead of the generic "event"/"date". Not a blind
+            # <noun>_date pattern match -- each addition is a specific,
+            # observed alias, mirroring the P3.xxV.2F asset_id precedent.
+            #
+            # Deliberately NOT given compatible_dataset_roles (left at the
+            # class default, empty): tried during implementation, then
+            # reverted -- app/semantic/neighbor_context.py's
+            # NEIGHBOR_FIELD_CONTEXT corroboration is symmetric and keys
+            # off ANY role overlap between two DIFFERENT concepts, so
+            # giving this concept role compatibility also retroactively
+            # corroborated co-occurring IDENTIFIER concepts (asset_id's
+            # own roles overlap heavily with any role set broad enough to
+            # cover real corpus datasets), pushing an unrelated asset_id
+            # decision from accepted_with_flag to auto_accepted in one
+            # existing regression fixture
+            # (tests/test_capability_governed_activation.py) -- a genuine,
+            # confirmed, out-of-scope side effect on entity confidence.
+            # Reverted; the alias additions above, combined with the
+            # existing, unmodified CROSS_DATASET_OVERLAP mechanism's
+            # pattern-class evidence (app/semantic/cross_dataset_context.py,
+            # requires no role compatibility), already reach auto_accepted
+            # on real corpus-shaped data -- confirmed live, see the Fix #6
+            # report, Section D.
             aliases=frozenset(
-                {"event_date", "date", "occurred_at", "event_timestamp", "timestamp"}
+                {
+                    "event_date",
+                    "date",
+                    "occurred_at",
+                    "event_timestamp",
+                    "timestamp",
+                    "maintenance_date",
+                    "dispatch_date",
+                }
             ),
             expected_value_patterns=frozenset({"iso_date"}),
         )

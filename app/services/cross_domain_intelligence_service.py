@@ -71,6 +71,8 @@ def run_asset_failure_to_lost_activity(
     trust_assessment_id: UUID,
     eligible_asset_keys: set[str],
     actor_user_id: UUID,
+    maintenance_time_field: str | None,
+    operations_time_field: str | None,
     canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None,
 ) -> list[Finding]:
     """Rule A: ASSET_FAILURE_TO_LOST_ACTIVITY instance. Fires only for
@@ -80,19 +82,28 @@ def run_asset_failure_to_lost_activity(
     eligible_entity_keys()) -- never a legacy raw exact-string match
     (app/services/entity_resolution_service.py, retired as this rule's
     candidate source; still used elsewhere, see the Fix #5 report's
-    deprecation plan) -- and only when both sides carry the required time
-    field -- never a fabricated overlap."""
+    deprecation plan) -- and only when governed canonical event-time
+    evidence exists on both sides (P3.xxV.2I, Fix #6 --
+    app/services/canonical_temporal_evidence.py resolves
+    maintenance_time_field/operations_time_field upstream; this rule never
+    reaches back into a raw dict or hardcodes a literal column name -- see
+    the Fix #6 report) -- never a fabricated overlap."""
     required = {"asset_id", "downtime_hours"}
     if not required <= set(maintenance_df.columns):
         return []
-    if "event_date" not in maintenance_df.columns or "event_date" not in operations_df.columns:
-        return []  # BLOCKED by missing required time field -- readiness layer already reports this
+    if maintenance_time_field is None or operations_time_field is None:
+        return []  # insufficient canonical temporal evidence -- readiness layer already reports
+    if (
+        maintenance_time_field not in maintenance_df.columns
+        or operations_time_field not in operations_df.columns
+    ):
+        return []
 
     published: list[Finding] = []
     maint = maintenance_df.copy()
-    maint["event_date"] = pd.to_datetime(maint["event_date"], errors="coerce")
+    maint[maintenance_time_field] = pd.to_datetime(maint[maintenance_time_field], errors="coerce")
     ops = operations_df.copy()
-    ops["event_date"] = pd.to_datetime(ops["event_date"], errors="coerce")
+    ops[operations_time_field] = pd.to_datetime(ops[operations_time_field], errors="coerce")
 
     for asset_id in sorted(eligible_asset_keys):
         asset_events = maint[maint["asset_id"].astype(str) == asset_id]
@@ -105,13 +116,14 @@ def run_asset_failure_to_lost_activity(
             continue
         affected_operational_event_ids: set[str] = set()
         for _, event in asset_events.iterrows():
-            if pd.isna(event["event_date"]):
+            if pd.isna(event[maintenance_time_field]):
                 continue
             downtime_hours = float(event.get("downtime_hours") or 0)
-            window_start = event["event_date"]
+            window_start = event[maintenance_time_field]
             window_end = window_start + timedelta(hours=downtime_hours)
             overlapping = asset_ops[
-                (asset_ops["event_date"] >= window_start) & (asset_ops["event_date"] <= window_end)
+                (asset_ops[operations_time_field] >= window_start)
+                & (asset_ops[operations_time_field] <= window_end)
             ]
             if "operational_event_id" in overlapping.columns:
                 affected_operational_event_ids.update(

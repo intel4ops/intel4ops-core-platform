@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.entities.relationship_candidate import RelationshipCandidate
 
 from app.core.config import get_settings
+from app.domain_registry import canonicalize_field
 from app.models.analysis_case import (
     AnalysisCase,
     AnalysisCaseDataset,
@@ -72,6 +73,10 @@ from app.services.canonical_evidence_completeness import (
     CanonicalEvidenceCompletenessResult,
     RawFieldSemanticEvidence,
     evaluate_canonical_evidence_completeness,
+)
+from app.services.canonical_temporal_evidence import (
+    RawTemporalFieldCandidate,
+    resolve_canonical_temporal_evidence,
 )
 from app.services.cross_domain_intelligence_service import (
     run_asset_failure_to_lost_activity,
@@ -855,6 +860,54 @@ class AnalysisCaseOrchestrationService:
             )
         return evaluate_canonical_evidence_completeness(required_canonical_fields, candidates)
 
+    @staticmethod
+    def _resolve_canonical_temporal_field(
+        case_dataset_id: UUID,
+        semantic_outcome: SemanticInterpretationOutcome | None,
+        temporal_concept: str,
+    ) -> str | None:
+        """P3.xxV.2I (Fix #6): which COLUMN (if any) on this dataset's
+        canonical_frames dataframe carries governed evidence for the
+        declared canonical temporal concept -- see
+        app/services/canonical_temporal_evidence.py. Pure, in-memory:
+        built directly from the SAME semantic_outcome this run already
+        produced (no DB round-trip, matching entity_candidates' own
+        threading), so callers never duplicate semantic resolution
+        themselves (Fix #6's explicit instruction).
+
+        Bridges the two independent canonicalization systems this
+        codebase has (documented in the P3.xxV.2G diagnosis for entities;
+        the same disconnect applies to fields): semantic evidence
+        identifies a field by its ORIGINAL raw name
+        (SemanticInterpretationDecision.source_field), but
+        domain_registry.py's own, unrelated alias/rename table may
+        independently have already renamed that exact raw column in
+        canonical_frames (e.g. Rental's "dispatch_date" -> canonical
+        "operational_event_start", for a completely different reason --
+        an operational event's start-time field, unrelated to this
+        module's own temporal-concept resolution). canonicalize_field()
+        is the single existing source of truth for that rename; never
+        duplicated here, only reused, so this always returns the name the
+        column actually has in canonical_frames."""
+        if semantic_outcome is None:
+            return None
+        decisions = semantic_outcome.decisions_by_case_dataset.get(case_dataset_id, [])
+        candidates = [
+            RawTemporalFieldCandidate(
+                source_field=decision.source_field,
+                machine_status=decision.status,
+                machine_selected_concept=decision.selected_concept,
+                machine_confidence=decision.confidence,
+            )
+            for decision in decisions
+        ]
+        winning_source_field = resolve_canonical_temporal_evidence(
+            temporal_concept, candidates
+        ).source_field
+        if winning_source_field is None:
+            return None
+        return canonicalize_field(winning_source_field) or winning_source_field
+
     def _evaluate_intelligence_capabilities(
         self,
         db: Session,
@@ -1493,7 +1546,16 @@ class AnalysisCaseOrchestrationService:
                     maint_cd,
                     _required_canonical_fields("maintenance"),
                 )
+                # P3.xxV.2I (Fix #6): the governed canonical event-time
+                # field for the maintenance side, resolved once per
+                # maint_cd -- never a literal "event_date" lookup.
+                maintenance_time_field = self._resolve_canonical_temporal_field(
+                    maint_cd.id, semantic_outcome, "event_timestamp"
+                )
                 for ops_cd in ops_datasets:
+                    operations_time_field = self._resolve_canonical_temporal_field(
+                        ops_cd.id, semantic_outcome, "event_timestamp"
+                    )
                     findings = run_asset_failure_to_lost_activity(
                         db,
                         organization_id,
@@ -1504,6 +1566,8 @@ class AnalysisCaseOrchestrationService:
                         trust_id,
                         eligible_assets,
                         actor_user_id,
+                        maintenance_time_field,
+                        operations_time_field,
                         canonical_evidence_completeness=maint_canonical_evidence,
                     )
                     for finding in findings:
@@ -1526,6 +1590,11 @@ class AnalysisCaseOrchestrationService:
                             "eligible_and_legacy_intersection": len(
                                 eligible_assets & matched_assets
                             ),
+                            # P3.xxV.2I (Fix #6): canonical event-time
+                            # evidence actually resolved for this pair, for
+                            # live before/after auditability.
+                            "maintenance_time_field": maintenance_time_field,
+                            "operations_time_field": operations_time_field,
                             "legacy_only_count": len(matched_assets - eligible_assets),
                             "canonical_only_count": len(eligible_assets - matched_assets),
                         },
