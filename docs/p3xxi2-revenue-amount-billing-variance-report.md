@@ -287,28 +287,109 @@ milestone, confined to that one assertion and its comment); re-ran green.
 
 ## I. Wave 1 capability-scoped evaluation
 
-**Not performed against the live frozen corpus in this pass.** This report's
-own required scope (Sections 20-22) is local implementation + PR; Section 21
-("controlled Wave 1 validation") and Section 26 ("post-merge live
-certification") are explicitly POST-MERGE steps, gated on CI passing and
-owner merge authorization, which have not occurred yet as this document is
-drafted. Recorded honestly as not yet performed rather than assumed or
-estimated -- see Section N ("next recommended capability" is deferred until
-after live certification, per the mission's own phase ordering).
+Post-merge certification was performed on production `main` at
+`4860713a12bbd319efc80ba18e561ef24df27dd1` (PR #108). The worktree was clean
+and `HEAD == origin/main` before the live evidence was reconciled. Existing
+completed runs were recovered rather than repeated; the remaining Rental
+cases were run on their already-loaded frozen Wave 1 cases.
+
+`NR` means the production Navigator did not expose a capability-level
+readiness or candidate count for that run; it is not interpreted as zero.
+`READY*` is proven by governed capability findings. Total findings include
+other capabilities; the capability column is the scoped count used for
+scoring.
+
+| Frozen case | Live case / latest run | Terminal state | Readiness | Candidates | Total findings | Capability findings |
+|---|---|---|---:|---:|---:|---:|
+| FIELDMAINT-001 | `35e99211-0953-47f8-ab8e-5147f2596106` / `5621692e-9e67-40d9-bcae-4b7b98e8edab` | Review Required | NR | NR | 2 | 0 |
+| FIELDMAINT-002 | `083edfba-c255-42b1-ba17-c60da64b4698` / `f2f337b1-4615-4dd4-a895-1e7e1ec63df3` | Review Required | READY* | 178 | 179 | 178 |
+| FIELDMAINT-005 | `0ef2988a-6a3c-4bf6-af76-7624a5fe8777` / `141ec19a-a3bc-44b4-9481-5547ada15e44` | Review Required | READY | NR | 1 | 0 |
+| FIELDMAINT-007 | `e2d3fcef-01fe-45b6-9084-0d718d7a128a` / `f7db600f-fb9d-4182-ac17-802a0648a60c` | Review Required | NR | NR | 1 | 0 |
+| RENTAL-001 | `70f860e5-98dc-4075-9b10-c3c540671242` / `d67ce15d-2e12-4601-b9c0-d842a83fbfb9` | Review Required | NR | NR | 0 | 0 |
+| RENTAL-003 | `cc2e1724-d814-44ea-a44a-8ac8eed3c7bb` / `a96d879d-bc9b-4e00-aa24-4c60302c3109` | Review Required | NR | NR | 0 | 0 |
+| RENTAL-011 | `23d8e43d-b3fe-45f7-b974-e1bfe2e8e969` / `d01e8427-9b54-48f0-9669-bc36548e396a` | Review Required | NR | NR | 0 | 0 |
+| RENTAL-012 | `b91f9550-b22d-4720-9874-7b8168117318` / `e3c161f5-b049-48db-b41f-0aa5322ab213` | Review Required | NR | NR | 0 | 0 |
+| RENTAL-015 | `0cd01327-5ab3-4721-85e4-5e5c76d70955` / `837bba25-daae-4b10-b379-ee1eb2a7324d` | Review Required | NR | NR | 0 | 0 |
+| RENTAL-018 | `260a0b35-cb0d-4568-befa-1cd07dfbd810` / `715fab0a-ae52-47e1-b484-f7a158dba622` | Review Required | NR | NR | 0 | 0 |
+
+The Review Required state came from source-domain review flags and is not a
+failed orchestration state. The Navigator did not report per-capability pack
+totals, so missing values remain NR rather than being manufactured.
+
+### I.1 179-finding anomaly diagnosis
+
+FIELDMAINT-002 contained one pre-existing cross-domain finding and **178
+REVENUE-AMOUNT-VARIANCE findings**. Every capability finding described an
+expected parts amount and "actual billed amount is 0 ... from 0 invoice
+record(s)." This is not genuine underbilling:
+
+- `parts_usage.csv` has 259 rows across 178 unique `work_order_id` values;
+- `invoices.csv` has 254 rows across 254 unique `work_order_id` values;
+- all 178 candidate work orders have a directly linked invoice row;
+- no invoice row has a blank work-order key; and
+- false expected-side exposure sums to 168,713, while the invoice file
+  contains 421,653 of actual billed amount.
+
+The source linkage exists. The raw invoice column is named `amount`; on the
+real corpus it remains `accepted_with_flag` because that alias is shared by
+`unit_price`, `invoice_amount`, and `cost_amount`. The capability consequently
+constructed zero actual invoice records and treated evidence absence as the
+numeric value zero. Primary failure: `SEMANTIC_EVIDENCE_GAP`, with a
+downstream `CAPABILITY_MODEL_GAP`. This is not a source `LINKAGE_GAP`; all 178
+records are false positives.
+
+### I.2 `unit_price` ambiguity diagnosis
+
+The ambiguity is legitimate at the isolated raw-header level: `amount` alone
+does not prove rate, invoice total, or cost. It is correctly
+`accepted_with_flag`; lowering the shared semantic threshold would be unsafe.
+However, the recurring dataset structure supplies reusable evidence that is
+not yet governed: an invoice-shaped dataset with `invoice_id`,
+`work_order_id`, `invoice_date`, and `status` makes its `amount` materially
+different from a consumption-row unit price. Classification:
+`LEGITIMATE_AMBIGUITY` for the raw token and `SEMANTIC_EVIDENCE_GAP` for the
+missing dataset-role/co-column evidence. It is not a truth-authoring defect.
+
+### I.3 Missing evidence versus observed zero
+
+The capability does **not** safely distinguish these states in production.
+An observed invoice amount of zero may support a full-shortfall finding, but
+zero resolved invoice records is absence of actual-side evidence. The latter
+must be blocked or represented as uncertain; it must not become
+`actual_amount=0`. FIELDMAINT-002 proves the current model publishes the same
+business conclusion for both states.
 
 ## J. TP/FP/FN
 
-Not measured yet, for the same reason as Section I -- hidden-truth
-comparison requires a live, post-merge Wave 1 rerun (mission Section 22:
-"Inspect every produced Wave 1 finding against hidden truth only AFTER the
-production run terminates"). Deferred to the live-certification pass.
+The frozen capability truth family is the architecture-defined Revenue
+Leakage -- Amount Variance family: `unbilled_parts` (113),
+`unbilled_labor_hours` (32), `missing_field_ticket_billing` (7),
+`unbilled_rental_days` (2), and `late_return_leakage` (12), for **166 truth
+items**. Contract/rental rate mismatches belong to the separate Contract /
+Rate Compliance family and are not added to this denominator.
+
+| Metric | Result |
+|---|---:|
+| TP | 0 |
+| FP | 178 |
+| FN | 166 |
+| Precision | 0 / 178 = **0.00%** |
+| Capability-scoped recall | 0 / 166 = **0.00%** |
+
+Full-truth recall across the complete 788-item Wave 1 truth corpus is also
+**0 / 788 = 0.00%**. It is supplied for full-truth transparency, not as the
+capability acceptance denominator. No ambiguous match credit was assigned:
+FIELDMAINT-002 has no amount-variance truth and all 178 published subjects
+have source invoice evidence.
 
 ## K. Economic-value capture
 
-Not measured against Wave 1 yet (Section I/J). Structurally, this
-capability's `exposure_value` is the first `IntelligenceExecution`/`Finding`
-row in this codebase to carry a real, non-null economic exposure figure at
-all -- every prior P3.xxC.1 rule left it `None` by design (Section D.2).
+The 166 in-family truth items carry **324,804.76** of economic value:
+60,102.76 unbilled parts + 9,470.00 unbilled labor + 14,182.00 missing field
+ticket billing + 51,400.00 unbilled rental days + 189,650.00 late-return
+leakage. True-positive captured value is **0**, so economic-value capture is
+**0 / 324,804.76 = 0.00%**. The 168,713 published on FIELDMAINT-002 is false
+exposure and is excluded from captured value.
 
 ## L. Generalization test
 
@@ -344,8 +425,7 @@ proof, not forced into also producing a finding.
 - **No governed FX or UOM subsystem** -- by design (Section 24 stop-gate);
   `different_known`/`mixed_known_unknown` currency and any quantity without
   a co-located rate are always left uncertain, never bridged.
-- **Wave 1 capability-scoped recall/TP/FP/FN is not yet measured** (Section
-  I/J) -- pending post-merge live certification.
+- **Wave 1 certification failed:** 0 TP, 178 FP, 166 FN (Sections I/J).
 - **Multi-line credit/adjustment records** (a distinct billing-reduction
   concept) are not modeled -- only positive `invoice_amount` rows are summed;
   no `credit_amount`/negative-adjustment concept exists in the registry
@@ -353,32 +433,26 @@ proof, not forced into also producing a finding.
 
 ## N. Next recommended capability
 
-Deferred. Per `docs/p3xxi1-intelligence-capability-coverage-architecture.md`
-Section 10's roadmap, Rank 2 (Revenue Billing Timeliness) is the next
-evidence-backed candidate -- but per this mission's own Section 29 hard
-stop, no further capability is recommended for implementation here; the
-live Wave 1 certification of THIS capability (Sections I/J/K, deferred)
-should inform whether the roadmap's ranking still holds before that decision
-is made.
+The next bounded milestone should remain inside P3.xxI.2: govern invoice-side
+amount semantics from dataset-role/co-column evidence and add an explicit
+actual-evidence-presence state so missing evidence blocks instead of becoming
+zero. It should prove linked multi-line invoice aggregation on the frozen
+corpus before rerunning certification. This is a recommendation only; no
+Fix #9 or new capability work was started.
 
 ## O. Final classification
 
-**P3.xxI.2 PARTIALLY VALIDATED**
+**P3.xxI.2 FAILED**
 
-Local implementation, architecture, currency/unit governance, materiality
-policy, capability registration, orchestration wiring, the full Section 17
-test matrix (17/17), and the full regression suite (79/79 targeted +
-full-suite pending) are all complete and green. Classified PARTIALLY
-VALIDATED rather than VALIDATED because the milestone's own required
-capability-scoped Wave 1 evaluation (Sections I/J/K -- TP/FP/FN, precision/
-recall, economic-value capture against the live frozen corpus) has not yet
-been performed: it is explicitly a post-merge, post-CI, owner-authorized
-step (mission Sections 21/22/26) that has not occurred as of this report.
-Not classified FAILED because no success criterion (Section 27) was
-observed to fail -- every criterion checkable before merge is met.
+The local implementation and regression suites remain green, but the
+post-merge frozen-corpus evidence fails decisively: 0.00% precision, 0.00%
+capability-scoped recall, 0.00% economic-value capture, and 178 false
+positives created by equating structurally missing actual-billing evidence
+with an observed billed amount of zero. The next dominant failure category
+is **SEMANTIC_EVIDENCE_GAP**, followed by **CAPABILITY_MODEL_GAP**. Remaining
+zeros in cases containing in-family truth are consistent with the same
+evidence-resolution gap; no evidence supports reclassifying truth, weakening
+thresholds, or changing XDOM-A, XDOM-B, or MAINT-001.
 
-This report will be updated (or a companion certification note added) once
-the post-merge live certification (Sections 26-27, TP/FP/FN) is performed,
-per the mission's own phase ordering. No further capability, XDOM-A/B/
-MAINT-001 change, truth change, Wave 2, E.6, E.7, or frontend work was
-started.
+No application code, truth, XDOM-A/B, MAINT-001, Wave 2, E.6, E.7, frontend,
+or next-capability work was changed during certification.
