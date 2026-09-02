@@ -14,6 +14,7 @@ from app.services.canonical_evidence_completeness import CanonicalEvidenceComple
 from app.services.governed_finding_publisher import (
     ContributingDataset,
     GovernedFindingRequest,
+    StableFindingIdentityReference,
     governed_finding_publisher,
 )
 
@@ -152,6 +153,14 @@ def run_asset_failure_to_lost_activity(
                 actor_user_id=actor_user_id,
                 contributing_datasets=[ContributingDataset(dataset_id=operations_dataset_id)],
                 entities=[{"entity_type": "asset", "canonical_key": asset_id}],
+                identity_references=[
+                    StableFindingIdentityReference(
+                        identity_role="subject",
+                        reference_type="asset",
+                        canonical_reference=asset_id,
+                        canonical_entity="asset",
+                    )
+                ],
                 domains=["maintenance", "operations"],
                 economic_status="governed_pending",
                 canonical_evidence_completeness=canonical_evidence_completeness,

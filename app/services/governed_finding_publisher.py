@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -36,6 +37,55 @@ def _hash(*parts: str) -> str:
 
 
 @dataclass(frozen=True)
+class StableFindingIdentityReference:
+    """Stable business identity explicitly supplied by a capability.
+
+    ``entities`` remains presentation and validation lineage and may contain
+    contextual entries. Only references declared here participate in logical
+    finding identity.
+    """
+
+    identity_role: Literal["subject", "material_condition"]
+    reference_type: str
+    canonical_reference: str
+    canonical_entity: str | None = None
+
+
+def _identity_evidence_items(
+    references: list[StableFindingIdentityReference],
+) -> list[EvidenceItemCreate]:
+    """Normalize stable identity references into deterministic evidence."""
+    normalized: dict[tuple[str, str], StableFindingIdentityReference] = {}
+    for reference in references:
+        reference_type = reference.reference_type.strip()
+        canonical_reference = reference.canonical_reference.strip()
+        if not reference_type or not canonical_reference:
+            raise ValueError("Finding identity references require a type and canonical reference")
+        key = (reference_type, canonical_reference)
+        existing = normalized.get(key)
+        if existing is not None and existing.identity_role != reference.identity_role:
+            raise ValueError("A finding identity reference cannot have conflicting roles")
+        normalized[key] = reference
+
+    items: list[EvidenceItemCreate] = []
+    for (reference_type, canonical_reference), reference in sorted(normalized.items()):
+        canonical_entity = (reference.canonical_entity or "").strip() or None
+        items.append(
+            EvidenceItemCreate(
+                evidence_type=EvidenceType.AFFECTED_RECORD,
+                reference_type=reference_type,
+                reference_id=canonical_reference,
+                canonical_entity=canonical_entity,
+                canonical_record_reference=canonical_reference,
+                label=f"{reference.identity_role.replace('_', ' ').title()}: "
+                f"{reference_type} {canonical_reference}",
+                metadata={"identity_role": reference.identity_role},
+            )
+        )
+    return items
+
+
+@dataclass(frozen=True)
 class ContributingDataset:
     dataset_id: UUID
     dataset_version_id: UUID | None = None
@@ -58,6 +108,7 @@ class GovernedFindingRequest:
     actor_user_id: UUID
     contributing_datasets: list[ContributingDataset] = field(default_factory=list)
     entities: list[dict[str, object]] = field(default_factory=list)
+    identity_references: list[StableFindingIdentityReference] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     economic_status: str = "governed_pending"
     limitations: list[str] = field(default_factory=list)
@@ -207,6 +258,10 @@ class GovernedFindingPublisher:
                     dataset_id=contributing.dataset_id,
                 )
             )
+        # P3.xxV.2J (Fix #7): explicitly declared subject/material-condition
+        # identity participates through the platform's existing
+        # affected-record evidence contract.
+        evidence.extend(_identity_evidence_items(request.identity_references))
 
         payload = CandidateFindingCreate(
             execution_id=execution.id,
