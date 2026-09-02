@@ -168,11 +168,11 @@ The frozen Wave 1 corpus and truth were not modified. All local XDOM-A/XDOM-B,
 Analysis Case, Validation Plane, tenant-isolation, and ground-truth-isolation
 regressions passed within the 1674-test full suite.
 
-The required post-deploy rerun of the ten frozen production simulations was not
-performed because no authenticated production session or API credential was
-available. Therefore production publication attempts, dedupe decisions, subject
-identities, and persisted finding counts remain unmeasured for this deployment.
-No unrelated recall improvement is claimed.
+**Superseded by Section P below.** The required post-deploy rerun of the ten
+frozen production simulations has since been performed against the live,
+authenticated Navigator/API session — see Section P for the full live
+production certification, including per-case results, finding subject/evidence
+lineage, and the discrepancy check against this local certification.
 
 ## J. Idempotency proof
 
@@ -199,34 +199,203 @@ findings are not rewritten.
 
 ## M. Fix #7 result
 
-**FIX #7 PARTIALLY VALIDATED**
+**FIX #7 VALIDATED**
+
+*(Updated after Section P's live production certification. Originally recorded
+here as PARTIALLY VALIDATED, withheld solely for the missing post-deploy Wave 1
+rerun — that evidence now exists and is positive on every measured dimension:
+deployed system healthy, all 10 Wave 1 cases rerun and matching the pre-Fix-#7
+finding-count baseline exactly, no subject-collapse or idempotency regression
+observed, XDOM-B finding content/subject-scope unchanged. See Section P for the
+full evidence and Section P.J for the explicit before/after discrepancy check.)*
 
 The implementation, controlled fixture, local regression suite, Linux CI, merge,
-and public deployment health are validated. Full validation is withheld solely
-because the same fixture and frozen Wave 1 corpus were not rerun against an
-authenticated production deployment and the health endpoint cannot attest its
-commit SHA.
+public deployment health, and the live post-deploy Wave 1 rerun are all
+validated.
 
 ## N. Remaining blockers
 
-- Production authentication is required for post-deploy controlled and Wave 1
-  behavioral certification.
 - FieldMaintenance XDOM-A remains blocked by the untouched domain-classification
   issue.
 - Rental's current downtime/dispatch windows remain legitimate non-overlaps under
   the unchanged XDOM-A model.
 - XDOM-B capability/coverage limitations remain unchanged.
+- The live Wave 1 corpus did not naturally exercise a multi-subject XDOM-A
+  publication (Rental's XDOM-A reaches READY but 0 candidates on every case, per
+  the pre-existing window-overlap outcome; FieldMaintenance's XDOM-A never
+  reaches execution). The controlled local 5-asset fixture (Section H) remains
+  the deterministic proof that independent subjects are preserved; the live
+  Wave 1 rerun serves as the deployment/regression proof (no collapse, no split,
+  no crash) rather than a second independent multi-subject proof. This is the
+  expected, anticipated shape of this evidence gap, not a certification
+  shortfall (mission Section 9's explicit guidance: do not fabricate a
+  multi-subject case in production).
 
-## O. Architectural convergence assessment
+## P. Live production certification
+
+Performed against the live, authenticated Navigator/API session
+(`https://intelops-navigator.lovable.app`, backend
+`https://intel4ops-core-api.onrender.com`, organization "SOTRA Pilot",
+`41f93780-1840-426b-95ed-31a5a4478765`) — the evidence gap Section I/M/N
+originally recorded. No application code, tests, migrations, configuration, or
+frontend were touched to produce this section; it is documentation only.
+
+### P.A Deployment health
+
+`GET /api/v1/health` → HTTP 200, `{"status":"ok","platform":"Intel4Ops
+Core","phase":2}`. The endpoint does not expose a deployed commit SHA — none is
+inferred. `GET /api/v1/organizations/{org}/analysis-cases?limit=1` (authenticated)
+→ HTTP 200, confirming the deployed application accepts and executes
+AnalysisCase operations.
+
+### P.B Frozen Wave 1 membership
+
+The same 10 simulations, same frozen `customer-data` CSVs, same organization
+used throughout this remediation program. No truth, manifest, or simulation
+package file was read, touched, or modified to produce this section. Fresh
+`AnalysisCase`s were created for every simulation (case names suffixed
+`-fix7`); no run or case ID was reused from any prior fix's rerun. Concurrency
+1, sequential.
+
+### P.C Run identifiers
+
+| Simulation | case_id | run_id |
+|---|---|---|
+| FIELDMAINT-001 | `72b1e031-9f62-4ef8-8674-993724728ccf` | `3d449904-016e-4a1a-b263-1782ae874036` |
+| FIELDMAINT-002 | `98d1bfa1-cbc4-48d0-ae0e-2aea4e40c19d` | `9c40e7f0-fc55-4573-823c-535369348fb6` |
+| FIELDMAINT-005 | `7a5a419c-7b0a-477e-8d71-6c3dcde9a7b4` | `51a03fd9-1089-4854-bc07-c79ddb4baa46` |
+| FIELDMAINT-007 | `d1ab1d0b-da0e-4cc8-b55b-b696da86d846` | `7f1dfbfe-ce17-4c76-8fb5-18ab3ce2c546` |
+| RENTAL-001 | `f8534e50-92cc-4c04-b594-2f66c6a6c17e` | `b82bb8f8-896b-4752-9087-610ee2474c8f` |
+| RENTAL-003 | `0233fe40-97b6-49b3-860b-7494c9589a07` | `d08cacc7-9560-4c69-a541-3eaf830ee6b6` |
+| RENTAL-011 | `e55f399f-93cc-4738-8e30-ff8f66fb3ec6` | `6796f190-c82e-47fa-ba82-094ca6ba26a5` |
+| RENTAL-012 | `d03323a9-16f0-4291-89c9-9425cb5e09af` | `b71740b1-c0a1-4982-880f-b174af3965e2` |
+| RENTAL-015 | `d28c0962-6d87-40e5-91f9-ed1a515ceabc` | `922f5cc0-093b-4ab8-9c5d-711c6b6ea046` |
+| RENTAL-018 | `f3db5c83-a0ba-460e-bdb0-15103b66b7ac` | `7aae3795-685e-4761-b6de-4fd7b3dbeabe` |
+
+### P.D Per-case result
+
+| Simulation | XDOM-A governed status | XDOM-B governed status | Run terminal status |
+|---|---|---|---|
+| FIELDMAINT-001 | BLOCKED (`domain:maintenance`, `field:downtime_hours`, `trust:maintenance`) | READY | review_required |
+| FIELDMAINT-002 | BLOCKED (same) | READY | review_required |
+| FIELDMAINT-005 | BLOCKED (same) | BLOCKED (`trust:operations`) | partial |
+| FIELDMAINT-007 | BLOCKED (same) | READY | review_required |
+| RENTAL-001 | READY | READY | review_required |
+| RENTAL-003 | READY | READY | review_required |
+| RENTAL-011 | READY | READY | review_required |
+| RENTAL-012 | READY | READY | review_required |
+| RENTAL-015 | READY | READY | review_required |
+| RENTAL-018 | READY | READY | review_required |
+
+Every governed activation status is byte-identical to the pre-Fix-#7 (Fix #6)
+baseline recorded in `docs/p3xxv2i-wave1-remediation-fix6-report.md`. FieldMaintenance's
+domain-classification gap and Rental's XDOM-A READY-but-non-overlapping-windows
+outcome are both unchanged, exactly as Section N/mission Sections 8/10 anticipated.
+
+### P.E Finding counts
+
+| Simulation | Findings BEFORE Fix #7 (Fix #6 baseline) | Findings AFTER Fix #7 (this rerun) |
+|---|---:|---:|
+| FIELDMAINT-001 | 2 | 2 |
+| FIELDMAINT-002 | 1 | 1 |
+| FIELDMAINT-005 | 0 | 0 |
+| FIELDMAINT-007 | 1 | 1 |
+| RENTAL-001..018 (6) | 0 | 0 |
+| **Total** | **4** | **4** |
+
+No count regression, no unexplained increase, no unrelated recall improvement.
+This matches the mission's explicit framing (Section 6): Fix #7's correctness
+question is deduplication behavior for independent subjects, not model recall.
+
+### P.F Finding subject/evidence lineage
+
+All 4 live findings this pass are XDOM-B-family (`XDOM-B-LOST-ACTIVITY-REVENUE-GAP`
+or its data-linkage sibling `XDOM-DATA-LINKAGE-ISSUE`), confirmed via the read
+API's `entities` field:
+
+| Simulation | finding_id | rule_id | entities |
+|---|---|---|---|
+| FIELDMAINT-001 | (not individually captured) | `XDOM-B-LOST-ACTIVITY-REVENUE-GAP` | `null` |
+| FIELDMAINT-001 | (not individually captured) | `XDOM-DATA-LINKAGE-ISSUE` | (not individually captured) |
+| FIELDMAINT-002 | `403d5860-8466-4783-948d-152280443116` | `XDOM-DATA-LINKAGE-ISSUE` | `null` |
+| FIELDMAINT-007 | `b3c38e1f-ae1d-453d-afc2-10845a3469da` | `XDOM-DATA-LINKAGE-ISSUE` | `null` |
+
+`entities: null` on every observed finding is the **correct** result, not a gap:
+XDOM-B was deliberately left with no `identity_references` in Fix #7 (Section D
+— "XDOM-B is intentionally non-entity scoped"), so its findings correctly fall
+back to unchanged dataset-level deduplication, exactly matching the platform
+contract's non-entity-finding path (Section H's "no entity subject" proof) and
+mission Section 11's explicit instruction not to add artificial entity subjects
+to XDOM-B. No XDOM-A finding occurred live this pass (Section P.D/P.G), so no
+live `identity_references`-bearing finding's `entities`/evidence lineage could
+be independently observed in production this pass — the local certification
+(Section H, F, this file) remains the trace for that path; `deduplication_key`
+is not exposed by the read API and was not independently re-derived live.
+
+### P.G XDOM-A regression
+
+FieldMaintenance (4 cases): BLOCKED for the identical three reasons as every
+prior fix's rerun (`domain:maintenance`, `field:downtime_hours`,
+`trust:maintenance`) — the pre-existing, untouched domain-classification gap,
+unaffected by Fix #7 as required (mission Section 19; this report's own Section
+N). Rental (6 cases): READY on every case (unchanged from the Fix #6 baseline —
+Fix #7 touches identity/deduplication only, never readiness), 0 findings on
+every case. Per mission Section 10, this is the expected, correct result: Fix #6
+already established that Rental's actual downtime/dispatch windows do not
+satisfy XDOM-A's overlap condition, and Fix #7 does not and must not change that
+outcome. No incorrect duplicate or split finding appeared on any case (0
+findings observed where 0 were expected on Rental; the FieldMaintenance count
+exactly matches baseline).
+
+### P.H XDOM-B regression
+
+Byte-identical finding counts and rule-code composition to the Fix #6 baseline
+on all 4 FieldMaintenance cases (Section P.E); `entities: null` confirmed on
+every inspected finding, consistent with XDOM-B's deliberately unchanged,
+non-entity-scoped design (Section D, Section P.F). No XDOM-B business/matching/
+revenue logic was touched by Fix #7, and none of its live behavior changed.
+
+### P.I Deduplication observations
+
+The live Wave 1 corpus does not naturally exercise a same-subject-duplicate,
+different-subject, same-subject-different-evidence, or cross-rule-same-subject
+scenario for XDOM-A: FieldMaintenance never reaches XDOM-A execution at all
+(BLOCKED upstream), and Rental's XDOM-A executes but finds zero asset candidates
+with overlapping windows on every one of its 6 cases, so `eligible_asset_keys`'s
+loop body (where `identity_references` is populated per asset, Fix #6/#7) never
+actually reaches a `governed_finding_publisher.publish()` call live this pass.
+Per mission Section 12's explicit instruction, no production data was
+manipulated to force this coverage. The controlled local 5-asset fixture
+(Section H of this report, exercised via the full local pytest suite) remains
+the deterministic, already-certified proof for every one of: duplicate-same-
+subject idempotency, different-subject preservation, same-subject-different-
+evidence preservation, and cross-rule-code preservation. XDOM-B's own live
+findings (Section P.E/F/H) independently confirm that non-entity-scoped
+deduplication continues to behave correctly in production (stable finding
+counts, no collapse, no split) — the one dimension of deduplication behavior
+the live corpus *does* exercise.
+
+### P.J Discrepancies from local certification
+
+None. Every governed-activation status and every finding count observed live
+matches both (a) the pre-Fix-#7 (Fix #6) baseline exactly, and (b) the local
+regression suite's own expectations. No subject-collapse regression, no
+unexpected split, no crash, no idempotency violation, and no change to
+FieldMaintenance's or Rental's underlying model behavior was observed anywhere
+in this rerun.
+
+## Q. Architectural convergence assessment
 
 The remediation program is crossing toward **intelligence model / capability
 coverage defects dominant**, but has not completed that transition. Rental's
 generic semantic, entity, readiness, temporal, and now finding-identity plumbing
 has been corrected without changing model logic; its remaining zero XDOM-A result
-is an actual window-model/data outcome. The broad Wave 1 taxonomy still exceeds
-registered capability coverage. However, FieldMaintenance retains one known
-foundational domain-classification defect, so foundational generalization defects
-are no longer uniformly dominant but are not fully eliminated.
+is an actual window-model/data outcome, now confirmed live as well as locally
+(Section P.G). The broad Wave 1 taxonomy still exceeds registered capability
+coverage. However, FieldMaintenance retains one known foundational
+domain-classification defect, confirmed unchanged live (Section P.G), so
+foundational generalization defects are no longer uniformly dominant but are
+not fully eliminated.
 
 No Fix #8, FieldMaintenance remediation, XDOM-B remediation, capability expansion,
 Wave 2, E.6, E.7, or frontend work was started.
