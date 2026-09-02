@@ -181,5 +181,17 @@ def default_rule_registry() -> RuleRegistry:
                 ("unmatched_event_count", "threshold"),
                 analytical_level="arithmetic",
             ),
+            # P3.xxI.2: additive third P3.xxC.1 rule -- additive governed
+            # sibling to XDOM-B, never a modification of it.
+            RuleDefinition(
+                "REVENUE-AMOUNT-VARIANCE",
+                "1.0",
+                "Revenue amount shortfall",
+                "A work order's actual billed amount is materially below the amount "
+                "expected from governed consumption/rate or reference-cost evidence.",
+                RuleOperator.GREATER_THAN,
+                ("expected_minus_actual_amount", "tolerance"),
+                analytical_level="arithmetic",
+            ),
         ]
     )

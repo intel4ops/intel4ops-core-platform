@@ -123,8 +123,14 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             # P3.xxV.2F: labor and invoice added -- a unit of work is
             # generically the subject a labor/time record was logged
             # against, and generically the subject an invoice bills for.
+            # P3.xxI.2: inventory added -- a parts/materials consumption
+            # record (quantity + part identifier) linked to a work order
+            # is generically inventory-shaped by role_classifier.py's own
+            # own scoring (quantity+part-like identifier both present),
+            # even though work_order_id is the column that actually links
+            # it back to the work it was consumed against.
             compatible_dataset_roles=frozenset(
-                {"work_order", "transaction", "event", "labor", "invoice"}
+                {"work_order", "transaction", "event", "labor", "invoice", "inventory"}
             ),
             compatible_entity_types=frozenset({"WORK_ORDER"}),
         )
@@ -248,8 +254,24 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="quantity",
             concept_type=CanonicalConceptType.QUANTITY.value,
             description="A counted or measured amount of something, not currency.",
-            aliases=frozenset({"quantity", "qty", "count", "units"}),
-            compatible_dataset_roles=frozenset({"inventory", "measurement"}),
+            # P3.xxI.2: hours/hrs added -- a logged labor duration is
+            # generically a measured quantity of time, the same category
+            # of fact as a counted part quantity, just a different unit.
+            # Not a blind unit-name pattern (days/miles/etc are NOT added
+            # here without their own observed evidence).
+            aliases=frozenset({"quantity", "qty", "count", "units", "hours", "hrs"}),
+            # P3.xxI.2: work_order/labor added -- a consumption record
+            # (parts used, hours logged) linked to a work order is
+            # generically quantity-bearing, not just literal inventory/
+            # measurement-shaped datasets.
+            compatible_dataset_roles=frozenset({"inventory", "measurement", "work_order", "labor"}),
+            # P3.xxI.2: a counted/measured quantity is always numeric --
+            # plain integer counts ("digits") or a fractional measure
+            # ("decimal"), never free text. Every other IDENTIFIER concept
+            # in this registry already declares its own expected shape
+            # (asset_id: alpha_dash_digits/digits); quantity previously
+            # declared none at all.
+            expected_value_patterns=frozenset({"digits", "decimal"}),
         )
     )
     registry.register(
@@ -264,8 +286,17 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             # (never resolved here), letting the ambiguity engine actually
             # exercise ACCEPTED_WITH_FLAG/REVIEW_REQUIRED on a tied score
             # rather than never seeing a multi-candidate field at all.
-            aliases=frozenset({"unit_price", "price", "rate", "amount"}),
-            compatible_dataset_roles=frozenset({"invoice", "inventory"}),
+            # P3.xxI.2: labor_rate added -- a specific, observed alias
+            # (service-contract labor-rate columns), mirroring the
+            # event_timestamp precedent of adding evidenced spellings only.
+            aliases=frozenset({"unit_price", "price", "rate", "amount", "labor_rate"}),
+            # P3.xxI.2: work_order/labor/contract added -- a rate quoted on
+            # a service contract or applied on a work-order-linked
+            # consumption record is generically a unit price, not just an
+            # invoice/inventory line.
+            compatible_dataset_roles=frozenset(
+                {"invoice", "inventory", "work_order", "labor", "contract"}
+            ),
         )
     )
     registry.register(

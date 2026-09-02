@@ -112,6 +112,23 @@ class GovernedFindingRequest:
     domains: list[str] = field(default_factory=list)
     economic_status: str = "governed_pending"
     limitations: list[str] = field(default_factory=list)
+    # P3.xxI.2: optional, currency-scoped observed/estimated economic
+    # exposure. CandidateFindingCreate already validates this triad
+    # (exposure_value_type == CURRENCY requires exposure_currency;
+    # exposure_currency is invalid without a value) -- this publisher
+    # previously always passed exposure_value=None unconditionally,
+    # matching every existing rule's own choice never to estimate a
+    # dollar figure. Purely additive: omitted (None), every existing
+    # caller's behavior is unchanged.
+    exposure_value: Decimal | None = None
+    exposure_value_type: FindingValueType | None = None
+    exposure_currency: str | None = None
+    # P3.xxI.2: additional evidence items a capability wants to attach
+    # beyond the identity/dataset evidence this publisher already builds
+    # -- e.g. the specific quantity/rate/invoice rows a calculated
+    # exposure value was derived from. Appended as-is; never replaces or
+    # reorders the existing evidence this publisher constructs.
+    supporting_evidence: list[EvidenceItemCreate] = field(default_factory=list)
     # P3.xxV.2D: optional POST-SEMANTIC canonical evidence completeness
     # result (see app/services/canonical_evidence_completeness.py). When the
     # backing arithmetic readiness decision is BLOCKED for the single reason
@@ -134,9 +151,10 @@ class IntelligenceReadinessUnavailable(RuntimeError):
 class GovernedFindingPublisher:
     """Shared publication path for every P3.xxC.1 domain and cross-domain
     rule. Never publishes a fabricated economic value: measured_value is
-    always a real observed count, exposure_value is always None unless a
-    directly observed, currency-resolved figure is supplied by the caller
-    (none of the P3.xxC.1 rules do this). Reuses the existing governed
+    always a real observed count; exposure_value is None unless the caller
+    directly computed a currency-resolved figure from governed evidence
+    (P3.xxI.2's revenue-variance capability is the first to do so -- every
+    other rule still omits it). Reuses the existing governed
     IntelligenceExecution/CandidateFindingCreate/FindingPublicationService
     pipeline unchanged -- no schema relaxation was needed (confirmed by
     investigation before implementation)."""
@@ -228,8 +246,8 @@ class GovernedFindingPublisher:
             breached=request.affected_record_count > 0,
             checked_record_count=max(request.affected_record_count, 1),
             affected_record_count=request.affected_record_count,
-            exposure_value=None,
-            exposure_currency=None,
+            exposure_value=request.exposure_value,
+            exposure_currency=request.exposure_currency,
             evaluation_time=now,
             created_by_user_id=request.actor_user_id,
             completed_at=now,
@@ -262,6 +280,11 @@ class GovernedFindingPublisher:
         # identity participates through the platform's existing
         # affected-record evidence contract.
         evidence.extend(_identity_evidence_items(request.identity_references))
+        # P3.xxI.2: capability-supplied calculation evidence (e.g. the
+        # quantity/rate/invoice rows an exposure_value was derived from),
+        # appended after the identity evidence this publisher already
+        # builds.
+        evidence.extend(request.supporting_evidence)
 
         payload = CandidateFindingCreate(
             execution_id=execution.id,
@@ -272,6 +295,9 @@ class GovernedFindingPublisher:
             domain_code=request.domain_code,
             measured_value=Decimal(request.affected_record_count),
             measured_value_type=FindingValueType.COUNT,
+            exposure_value=request.exposure_value,
+            exposure_value_type=request.exposure_value_type,
+            exposure_currency=request.exposure_currency,
             severity=request.severity,
             severity_reason={"basis": request.rule_condition_code},
             confidence_level=ConfidenceLevel.HIGH,
