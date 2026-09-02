@@ -172,8 +172,9 @@ def test_xdom_a_ready_governed_execution_occurs_with_real_finding(
     db: Session, tmp_path: Path
 ) -> None:
     """B, C -- governed READY: XDOM-A actually executes (stage event
-    recorded) and publishes at least one real, well-formed finding -- not
-    merely "the function was called"."""
+    recorded) and publishes one real, well-formed finding per independently
+    eligible asset -- not merely "the function was called", and (since
+    P3.xxV.2J / Fix #7) not collapsed by a shared deduplication key either."""
     org = _organization(db, "xdom-a-pos-execution")
     case_id, run_id = _run_case(db, tmp_path, org.id, _positive_fixture_csvs())
 
@@ -189,7 +190,13 @@ def test_xdom_a_ready_governed_execution_occurs_with_real_finding(
 
     priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
     xdom_a_priorities = [p for p in priorities if p.finding.rule_id == _XDOM_A]
-    assert xdom_a_priorities, "expected at least one real XDOM-A finding"
+    assert len(xdom_a_priorities) == _N_ASSETS
+    assert {
+        entity["canonical_key"]
+        for priority in xdom_a_priorities
+        for entity in (priority.finding.entities_json or [])
+        if entity.get("entity_type") == "asset"
+    } == {f"A-{i}" for i in range(1, _N_ASSETS + 1)}
 
     finding = xdom_a_priorities[0].finding
     assert finding.rule_id == _XDOM_A
@@ -469,28 +476,32 @@ def test_mixed_c_execution_includes_eligible_assets_and_excludes_the_tail(
     low-confidence asset never invalidates independent high-confidence
     candidates.
 
-    Only asserts >=1 finding and that none reference A-6, not "exactly 5"
-    findings: publish() silently collapses same-dataset/same-affected-count
-    findings to one row (governed_finding_publisher.publish() never
-    attaches an "affected_record"-typed evidence item identifying WHICH
-    asset a finding is about, so FindingDeduplicationService.key() hashes
-    identically for every asset in this fixture and every call after the
-    first returns the pre-existing row) -- a genuine, pre-existing defect,
-    identical on the original 5-asset _positive_fixture_csvs() (that test
-    only ever asserted "at least one finding" for the same reason), wholly
-    unrelated to entity eligibility and explicitly out of scope for Fix #5
-    (see the Fix #5 report's next-empirical-blocker section)."""
+    Asserts exactly 5 findings, one per eligible asset: before P3.xxV.2J
+    (Fix #7), governed_finding_publisher.publish() never attached an
+    "affected_record"-typed evidence item identifying WHICH asset a finding
+    concerns, so FindingDeduplicationService.key() hashed identically for
+    every asset in this fixture and every call after the first silently
+    returned the pre-existing row (documented at the time as a known,
+    out-of-scope defect in the Fix #5 report). Fix #7 corrected this
+    platform-wide; see tests/test_governed_finding_publisher_identity.py
+    for the dedicated identity/deduplication contract tests."""
     org = _organization(db, "xdom-a-mixed-execution")
     case_id, run_id = _run_case(db, tmp_path, org.id, _mixed_fixture_csvs())
 
     priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
     xdom_a_findings = [p.finding for p in priorities if p.finding.rule_id == _XDOM_A]
     titles = {f.title for f in xdom_a_findings}
-    assert titles, "expected at least one XDOM-A finding"
-    assert titles <= {
+    assert len(xdom_a_findings) == _N_ASSETS
+    assert titles == {
         f"Asset A-{i} failure downtime overlapped scheduled activity"
         for i in range(1, _N_ASSETS + 1)
     }
+    assert {
+        entity["canonical_key"]
+        for finding in xdom_a_findings
+        for entity in (finding.entities_json or [])
+        if entity.get("entity_type") == "asset"
+    } == {f"A-{i}" for i in range(1, _N_ASSETS + 1)}
     assert not any("A-6" in title for title in titles)
 
 

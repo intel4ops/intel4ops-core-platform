@@ -10,6 +10,7 @@ from app.rules.maintenance_rules import detect_repeated_asset_failures
 from app.schemas.findings import FindingSeverity, FindingType
 from app.services.governed_finding_publisher import (
     GovernedFindingRequest,
+    StableFindingIdentityReference,
     governed_finding_publisher,
 )
 
@@ -58,6 +59,14 @@ def run_maintenance_pack(
                 finding_type=FindingType.EXCEPTION,
                 actor_user_id=actor_user_id,
                 entities=[{"entity_type": "asset", "canonical_key": str(asset_id)}],
+                identity_references=[
+                    StableFindingIdentityReference(
+                        identity_role="subject",
+                        reference_type="asset",
+                        canonical_reference=str(asset_id),
+                        canonical_entity="asset",
+                    )
+                ],
                 domains=["maintenance"],
                 economic_status="governed_pending",
                 limitations=[
