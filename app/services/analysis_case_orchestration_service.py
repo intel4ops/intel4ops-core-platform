@@ -59,7 +59,7 @@ from app.models.semantic import (
     SemanticInterpretationDecision,
     SemanticRoleInterpretation,
 )
-from app.schemas.trust import TrustAssessmentCreate
+from app.schemas.trust import MAX_ASSESSMENT_RECORDS, TrustAssessmentCreate
 from app.semantic.candidate import InterpretationDecision, SemanticCandidate
 from app.semantic.case_context import CaseSemanticContext
 from app.semantic.concept_registry import default_canonical_concept_registry
@@ -239,6 +239,37 @@ def _reload_canonical_dataframe(
         if extracted.label == case_dataset.source_label:
             return extracted.dataframe
     return None
+
+
+def _representative_sample(df: pd.DataFrame, max_rows: int) -> pd.DataFrame:
+    """P3.xxV.2K (Fix #8, DC-3): Trust's request schema caps assessed
+    records at max_rows (see app.schemas.trust.MAX_ASSESSMENT_RECORDS) --
+    a genuine, generic capacity limit, not a per-tenant/per-industry
+    concern. Before this fix, any dataset exceeding the cap raised a
+    pydantic ValidationError (a ValueError subclass) that the caller's
+    generic error handling silently turned into an unresolved trust
+    status, with NO distinction from a real data-quality failure. Rather
+    than lowering any rule threshold, this deterministically downsamples
+    to an evenly-spaced selection spanning the FULL dataset (not just the
+    head) so completeness/validity findings are not biased toward
+    early-inserted rows -- the same rule logic then runs, unmodified,
+    against a representative subset. Never used when the dataset already
+    fits under the cap; a no-op in that case (returns df unchanged, same
+    object, same order)."""
+    total = len(df)
+    if total <= max_rows:
+        return df
+    if max_rows <= 1:
+        return df.iloc[:max_rows]
+    step = (total - 1) / (max_rows - 1)
+    seen: set[int] = set()
+    indices: list[int] = []
+    for i in range(max_rows):
+        idx = round(i * step)
+        if idx not in seen:
+            seen.add(idx)
+            indices.append(idx)
+    return df.iloc[indices]
 
 
 def _field_profile_to_dict(profile: FieldProfile) -> dict[str, object]:
@@ -1161,13 +1192,15 @@ class AnalysisCaseOrchestrationService:
             trust_status = "not_assessed"
             trust_assessment_id: UUID | None = None
             if rule_config:
+                trust_sample = _representative_sample(raw_df, MAX_ASSESSMENT_RECORDS)
                 try:
                     assessment = trust_assessment_service.create_and_execute(
                         db,
                         organization_id,
                         case_dataset.dataset_id,
                         TrustAssessmentCreate(
-                            records=raw_df.to_dict("records"), rule_configurations=rule_config
+                            records=trust_sample.to_dict("records"),
+                            rule_configurations=rule_config,
                         ),
                     )
                     trust_assessment_id = assessment.id
@@ -1183,6 +1216,9 @@ class AnalysisCaseOrchestrationService:
                         {
                             "dataset_id": str(case_dataset.dataset_id),
                             "overall_score": str(assessment.overall_score),
+                            "total_row_count": len(raw_df),
+                            "assessed_row_count": len(trust_sample),
+                            "sampled": len(trust_sample) < len(raw_df),
                         },
                     )
                 except ValueError as exc:

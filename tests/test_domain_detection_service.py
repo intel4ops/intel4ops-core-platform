@@ -118,3 +118,90 @@ def test_candidate_domains_exposes_genuine_ties() -> None:
     evidence are all surfaced, not silently collapsed into one guess."""
     result = detect_domain(["asset_id"])
     assert set(result.candidate_domains) >= {"maintenance", "operations", "fuel_energy"}
+
+
+# ---------------------------------------------------------------------------
+# P3.xxV.2K (Fix #8, DC-4): a second, equally legitimate maintenance
+# evidence bundle -- asset + operational-event reference + an explicit
+# category of activity performed -- for maintenance data shaped as an
+# event/work log (no discrete failure-code or downtime-duration column).
+# See app/domain_registry.py's second "maintenance" DomainSignature.
+# ---------------------------------------------------------------------------
+
+
+def test_asset_work_order_and_activity_category_confirms_maintenance() -> None:
+    """A. asset + maintenance work order + an explicit category of work
+    performed -> maintenance recognized, industry-agnostic naming."""
+    result = detect_domain(["asset_id", "work_order_id", "event_type"])
+    assert result.domain == "maintenance"
+    assert result.status == DetectionStatus.CONFIRMED.value
+    assert set(result.basis) == {"asset_id", "work_order_id", "event_type"}
+
+
+def test_real_maintenance_event_log_shape_confirms_maintenance() -> None:
+    """B. The exact real-world shape this fix targets: an asset + work
+    order + activity-category log with scheduled/completed dates but no
+    discrete failure-code or downtime-hours column."""
+    result = detect_domain(
+        ["event_id", "asset_id", "work_order_id", "event_type", "scheduled_date", "completed_date"]
+    )
+    assert result.domain == "maintenance"
+    assert result.status == DetectionStatus.CONFIRMED.value
+
+
+def test_alternate_activity_category_aliases_all_confirm_maintenance() -> None:
+    """C. activity_type/service_type/maintenance_type/work_type must all
+    resolve identically -- generic vocabulary, not one lucky spelling."""
+    for alias in ("activity_type", "service_type", "maintenance_type", "work_type"):
+        result = detect_domain(["asset_id", "job_id", alias])
+        assert result.domain == "maintenance", alias
+        assert result.status == DetectionStatus.CONFIRMED.value, alias
+
+
+# --- negative / false-positive safety (mission Section 15) ---------------
+
+
+def test_work_order_without_activity_category_stays_operations() -> None:
+    """A. A generic work_order dataset with no activity/failure evidence
+    must not automatically become maintenance -- unchanged from the
+    pre-existing operations behavior (see
+    test_asset_id_and_dispatch_fields_confirms_operations above)."""
+    result = detect_domain(["asset_id", "work_order_id", "status", "opened_date", "closed_date"])
+    assert result.domain == "operations"
+    assert result.status == DetectionStatus.CONFIRMED.value
+
+
+def test_dispatch_only_stays_operations_not_maintenance() -> None:
+    """C. Dispatch/job execution data alone -> operations, never
+    automatically maintenance, even with a plausible-looking asset link."""
+    result = detect_domain(["asset_id", "dispatch_id", "dispatch_date", "return_date"])
+    assert result.domain == "operations"
+
+
+def test_invoice_with_asset_id_is_not_maintenance() -> None:
+    """D. Invoice/contract data is not maintenance merely because it also
+    references an asset -- resolves to revenue, on revenue's own evidence,
+    never coerced into maintenance."""
+    result = detect_domain(["invoice_id", "work_order_id", "asset_id", "invoice_date", "amount"])
+    assert result.domain != "maintenance"
+
+
+def test_activity_category_alone_with_asset_is_ambiguous_not_confirmed() -> None:
+    """E. Weak/ambiguous evidence (asset + a category label, but no
+    operational-event reference at all) must preserve uncertainty rather
+    than confirming maintenance on a partial 2-of-3 match. asset_id and
+    activity_category are both generic-only signals in combination (see
+    GENERIC_CANONICAL_FIELDS), so this resolves to UNKNOWN rather than a
+    silently-guessed maintenance NEEDS_REVIEW."""
+    result = detect_domain(["asset_id", "event_type"])
+    assert result.status != DetectionStatus.CONFIRMED.value
+    assert result.domain is None
+    assert result.status == DetectionStatus.UNKNOWN.value
+
+
+def test_event_type_column_alone_confirms_nothing() -> None:
+    """A bare activity-category-shaped column with no asset or event
+    reference at all is not, by itself, evidence of any domain."""
+    result = detect_domain(["event_type"])
+    assert result.domain is None
+    assert result.status == DetectionStatus.UNKNOWN.value
