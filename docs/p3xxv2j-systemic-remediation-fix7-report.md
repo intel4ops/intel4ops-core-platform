@@ -399,3 +399,222 @@ not fully eliminated.
 
 No Fix #8, FieldMaintenance remediation, XDOM-B remediation, capability expansion,
 Wave 2, E.6, E.7, or frontend work was started.
+
+## R. Full remediation chain review (Fix #1 through Fix #7)
+
+No application code was changed to produce Sections R-W. This is a read-only
+review of the existing `docs/p3xxv2a` through `docs/p3xxv2j` reports and the
+existing `docs/p3xxv2b` root-cause taxonomy (`DC-1` through `DC-8`), reconciled
+against Section P's live evidence.
+
+| Fix | Doc | Layer | Correction | Root cause(s) closed |
+|---|---|---|---|---|
+| #1 (P3.xxV.2A) | p3xxv2a | Semantic (`domain_registry` alias) | `dispatch.csv`-equivalent classified `domain:operations` via a new field alias | contributed to DC-1 |
+| #2 (P3.xxV.2C) | p3xxv2c | Model execution (XDOM-B) | Removed XDOM-B's Stage-0 dependency on the literal raw status string `"completed"`; consumes canonical status evidence instead | **DC-5** |
+| #3 (P3.xxV.2D) | p3xxv2d | Semantic/Entity evidence contract | Fixed the `operational_event_id`/alias evidence-completeness gap for governed publication | contributed to DC-1 |
+| #4 (P3.xxV.2F) | p3xxv2f | Entity/Semantic confidence | Broadened cross-dataset corroboration so FK-shaped/repeated identifiers reach `auto_accepted` confidence | **DC-2** |
+| #5 (P3.xxV.2H) | p3xxv2h | Entity/Intelligence-readiness alignment | Migrated XDOM-A execution from the legacy `matched_asset_keys` path onto canonical E.3 entities; aligned readiness and execution | the entity-population/readiness-vs-execution disconnect (P3.xxV.2G's own NEXT-3 finding) |
+| #6 (P3.xxV.2I) | p3xxv2i | Semantic/temporal evidence | Migrated XDOM-A's temporal input off the literal raw field name `event_date` onto governed canonical temporal evidence | the literal-field-name dependency blocking Rental's temporal authority |
+| #7 (P3.xxV.2J) | this file | Finding publication platform | Subject-aware `AFFECTED_RECORD` identity evidence prevents independent logical findings from collapsing under one deduplication key | a finding-identity-collapse defect discovered during Fix #4's own certification, orthogonal to DC-1..8 |
+
+**Still open, confirmed unchanged through Fix #7 (Section P):**
+
+| ID | Description | Status |
+|---|---|---|
+| DC-3 | `TRUST_SCALE_SENSITIVITY`/`TRUST_IMPLEMENTATION_DEFECT` — FIELDMAINT-005's `trust:operations` never established | Open (Section P.D: still `BLOCKED (trust:operations)`) |
+| DC-4 | `DOMAIN_CLASSIFICATION_GAP` — FieldMaintenance's operational dataset never classified `domain:maintenance` | Open (Section P.D/P.G: still `BLOCKED` on all 4 FieldMaintenance cases) |
+| DC-6 | `MODEL_MATCHING_DEFECT` (existence-vs-amount contract) — XDOM-B cannot detect amount-variance or timing-based revenue gaps | Open (Section P.F: live findings are all via the `XDOM-DATA-LINKAGE-ISSUE` no-match-key path, not an amount/timing match) |
+| DC-7 | `MODEL_COVERAGE_GAP` — no registered capability at all for 456/788 truth items | Open (untouched by any fix; explicitly out of scope for Fixes #1-7) |
+| DC-8 | `TRUTH_AUTHORING_GAP` — Rental `leakage_truth` missing `expected_detection_family`/`scenario_id` | Open (Simulation-Factory-side, not production) |
+
+**Resolved through Fixes #1-7:** DC-1 (Rental semantic-generator inconsistency),
+DC-2 (entity-identity formula too conservative for FK-shaped identifiers), DC-5
+(XDOM-B's status-literal Stage-0 blocker) — plus two defects discovered and
+closed during this chain that predate the original `p3xxv2b` taxonomy: the
+entity-population/readiness-execution disconnect (Fix #5) and the finding-
+identity collapse defect (Fix #7, this report).
+
+## S. Full-truth vs. capability-scoped recall (recalculated from current state)
+
+Per mission instruction: 0/788 is not used alone as the primary metric.
+
+- **Total expected findings** (truth untouched throughout the entire chain):
+  **788**, $2,285,738.56 (`p3xxv1b` Section J).
+- **PARTIALLY_IMPLEMENTED** (a registered capability's declared phenomenon at
+  least partially overlaps the truth mechanism, per `p3xxv2b`'s own
+  scenario-by-scenario trace): **263** (33.4%) — 76 `repeat_repair`
+  (MAINT-001) + 152 `unbilled_parts`/`unbilled_labor_hours`/
+  `missing_field_ticket_billing` (XDOM-B, FieldMaintenance) + 21
+  `delayed_invoicing` + 12 `late_return_leakage` + 2 `unbilled_rental_days`
+  (all XDOM-B, Rental).
+- **OUT_OF_SCOPE_NOT_IMPLEMENTED** (no registered capability addresses the
+  phenomenon at all): **456** (57.9%) — 401 FieldMaintenance
+  (`overtime_leakage`, `contract_rate_mismatch`, `preventive_maintenance_missed`,
+  `technician_idle_time`) + 55 Rental (`late_maintenance`, `rental_rate_mismatch`,
+  `fuel_discrepancy`).
+- **AMBIGUOUS** (truth schema does not resolve whether a registered capability's
+  contract even applies): **44** (5.6%) — `excessive_asset_downtime` (Rental);
+  `p3xxv2b` could not determine from the truth schema alone whether this is
+  generated as an XDOM-A-shaped window-overlap event or a simple duration
+  threshold.
+- **Unclassifiable** (no `scenario_id` recorded at all): **25** (3.2%) — Rental,
+  same population as DC-8.
+- Check: 263 + 456 + 44 + 25 = 788. Exact.
+
+**Full-truth recall is still not independently rescored against ground truth.**
+Fix #4's own certification (`p3xxv2f` Section 11) explicitly flagged TP/FP
+reconciliation against the frozen hidden truth corpus as an open,
+unmeasured follow-up — re-registering the fresh case IDs against the wave
+coordinator's ledger is a separate, heavier operation than this
+documentation-only mission performs. It remains unmeasured through Fix #7.
+
+What **is** confirmed: 4 real, governed, published findings exist post-Fix-#7,
+unchanged in count and composition from Fix #4 through Fix #7 (Section P.E) —
+all XDOM-B-family on FieldMaintenance (001: 2, 002: 1, 007: 1) — and all via
+the `XDOM-DATA-LINKAGE-ISSUE` secondary (no-shared-match-key) path rather than
+a primary matched-revenue-record path (Section P.F).
+
+**Capability-scoped recall, honestly bounded, not confirmed:** at most 4/263
+(≤1.5%) if every one of the 4 published findings is eventually confirmed a true
+positive against a `PARTIALLY_IMPLEMENTED` truth record — an upper bound, not a
+measured figure. Full-truth recall is correspondingly at most 4/788 (≤0.5%).
+Whether any of the 4 is actually a true positive requires the fresh
+validate-run this report does not perform.
+
+The original "0/788" framing from `p3xxv1b` is stale: it predates Fixes #1-7,
+and specifically predates DC-5's resolution (Fix #2) — the single
+highest-leverage blocker identified against the 263-item PARTIALLY_IMPLEMENTED
+scope. It should not be cited as the current system's recall without this
+update.
+
+## T. Four-bucket classification of remaining Wave 1 failures
+
+| Bucket | Item | Scope | Status |
+|---|---|---|---|
+| A. FOUNDATIONAL GENERALIZATION DEFECT | DC-4: FieldMaintenance never classified `domain:maintenance` | Blocks XDOM-A + MAINT-001 on all 4 FieldMaintenance cases (629 findings gated) | Open |
+| A. FOUNDATIONAL GENERALIZATION DEFECT | DC-3: FIELDMAINT-005 `trust:operations` never established | Blocks XDOM-B on that 1 case (387 of the 629 additionally gated) | Open |
+| B. INTELLIGENCE MODEL DEFECT | DC-6: XDOM-B existence-only contract, no amount-variance/timing detection | Caps the reachable ceiling of the 263 PARTIALLY_IMPLEMENTED items well below 263 even once Stage-0 (DC-5) is clear | Open |
+| B. INTELLIGENCE MODEL DEFECT | `repeat_repair` (76 items): truth is a temporal-proximity 2-occurrence pattern; MAINT-001 is a categorical ≥3-occurrence grouping requiring columns (`downtime_hours`/`repair_cost`) absent from this data | Same phenomenon family, different mechanism (`p3xxv2b` LK-2 trace) | Open |
+| C. INTELLIGENCE COVERAGE GAP | DC-7: no registered capability at all for 456/788 (57.9%) of expected findings | `overtime_leakage`, `contract_rate_mismatch`, `preventive_maintenance_missed`, `technician_idle_time`, `late_maintenance`, `rental_rate_mismatch`, `fuel_discrepancy` | Open — product-scope gap, not a bug |
+| D. SIMULATION/VALIDATION AUTHORING GAP | DC-8: 159/159 Rental `leakage_truth` records lack `expected_detection_family`; 25/159 also lack `scenario_id` | Simulation-Factory-side; reporting-fidelity only, does not affect production recall | Open, external |
+
+2 open foundational items, 2 open model-defect items, 1 open coverage-gap item
+(spanning 7 distinct unregistered phenomenon types), 1 open authoring-gap item.
+
+## U. Specific remaining items (mission Section 18) — reviewed, not fixed
+
+- **A. FieldMaintenance domain-classification gap** = DC-4 (Section T). Open.
+- **B. XDOM-B binary-existence vs. amount-shortfall/underbilling/timing** =
+  DC-6 (Section T). Open. `p3xxv2b` estimates this caps ~187 of the 263
+  PARTIALLY_IMPLEMENTED items even once DC-5/DC-4/DC-3 are all clear.
+- **C. MAINT-001 semantics vs. truth's repeat-repair mechanism** = the
+  `repeat_repair` item in bucket B (Section T, 76 findings). Open.
+- **D. Registered detection-family coverage vs. injected truth taxonomy** =
+  DC-7 (Section T). Open, bucket C.
+- **E. Rental truth records missing `expected_detection_family`** = DC-8
+  (Section T). Open, bucket D, external to this codebase.
+- **F. Remaining canonical/legacy execution dependencies** — not fully
+  re-audited this pass. Confirmed migrated to canonical E.3/semantic evidence:
+  XDOM-A's entity path (Fix #5) and temporal-field resolution (Fix #6). **Not**
+  independently re-verified this pass: whether MAINT-001's own asset/entity
+  population still depends on the legacy `AnalysisCaseEntityLink`/
+  `EntityResolutionService` path rather than canonical E.3 entities — Fix #5's
+  migration was explicitly scoped to XDOM-A only (that fix's own DO-NOT list
+  excluded XDOM-B, and MAINT-001 was outside its scope entirely); and whether
+  XDOM-B's own entity/asset-key resolution (distinct from the
+  `identity_references` Fix #7 added) still uses a legacy path. Flagged as an
+  open, unverified item for a future diagnosis pass — not investigated further
+  here, consistent with Section 3's application-code lock.
+
+## V. Dominant failure category
+
+- **FieldMaintenance (629/788, 79.8% of the wave):** still gated by 2 open
+  foundational defects (DC-3, DC-4), confirmed unchanged live through Fix #7
+  (Section P.D/P.G). Foundational-dominant for this half of the corpus.
+- **Rental (159/788, 20.2% of the wave):** foundational plumbing (DC-1, DC-2,
+  and the entity-population/temporal/identity chain Fixes #5-7 addressed) is
+  fully resolved. Rental's remaining zero-finding result is now attributable
+  entirely to bucket B/C causes — XDOM-A's real window-non-overlap outcome on
+  real data (Fix #6, confirmed live), XDOM-B's DC-6 existence-only contract,
+  and DC-7's coverage gap for `late_maintenance`/`rental_rate_mismatch`/
+  `fuel_discrepancy`. Coverage/model-dominant for this slice — a genuine
+  architectural transition completed by Fixes #5-7.
+
+**Verdict: MIXED.** The program has fully completed the foundational-to-coverage
+transition for Rental, but FieldMaintenance — the larger half of the wave by
+finding count — remains foundationally gated by DC-3/DC-4. This is not a
+stalemate: it is one well-scoped remaining foundational item (DC-4, with DC-3
+as a smaller adjunct) standing between the program and a full transition into
+capability-expansion territory wave-wide.
+
+## W. Recommended next milestone (not implemented)
+
+**Name:** Fix #8 (P3.xxV.2K) — FieldMaintenance Domain & Trust Classification
+Correction.
+
+**Goal:** close DC-4 (FieldMaintenance's operational dataset never classified
+`domain:maintenance`, blocking XDOM-A and MAINT-001 on all 4 FieldMaintenance
+Wave 1 cases) and DC-3 (FIELDMAINT-005's isolated `trust:operations` gap,
+blocking XDOM-B on that case specifically).
+
+**Why now:**
+- The last two open foundational-generalization defects in the entire chain;
+  closing them completes the transition FieldMaintenance already lags Rental
+  on (Section V).
+- Highest simulation-count leverage of any single remaining defect: gates
+  capability *access* (not just recall) on 4/10 (DC-4) plus 1/10 additional
+  (DC-3) Wave 1 simulations — 629/788 (79.8%) of the wave's expected findings.
+- Same class of correction as Fixes #1-6 (Semantic/Trust plumbing, not new
+  detection logic or new capability scope) — in scope for continued PRIMARY
+  ENGINEER execution without a prior product/capability-registry decision.
+- Clears the field so the milestone after this one can be scoped purely as
+  model/capability expansion (DC-6, DC-7) without an active foundational
+  confound on half the corpus.
+
+**Scope:**
+- Semantic domain-detection logic: why FieldMaintenance's operational dataset
+  classifies as `domain:operations` rather than `domain:maintenance`, and
+  whether the fix is an additional field-vocabulary signature (`p3xxv2b`'s own
+  DC-4 hypothesis: recognize `scheduled_date`/`completed_date` pairs as
+  duration evidence) or a broadened accepted-domain set on XDOM-A/MAINT-001.
+- FIELDMAINT-005's `trust:operations` establishment specifically — confirm or
+  refute the scale/density hypothesis (`p3xxv1b` Section M cluster 3; DC-3,
+  still "tentative, unconfirmed") via direct engineering log access, which the
+  live-only certification approach used through Fix #7 could not obtain.
+
+**Explicit exclusions:** no XDOM-A/XDOM-B/MAINT-001 rule-matching-logic
+changes (DC-6 stays open, future milestone); no new detection families (DC-7
+stays open, future milestone); no truth/simulation changes; no Rental changes
+(already foundationally resolved); no capability-registry expansion; no
+finding-identity/deduplication changes (Fix #7 already validated).
+
+**Success criteria:**
+- XDOM-A reaches READY on FieldMaintenance's 4 cases, or a documented,
+  evidence-based reason it correctly should not (mirroring how Rental's
+  zero-candidate outcome was confirmed correct rather than assumed a bug).
+- FIELDMAINT-005 XDOM-B reaches READY, or DC-3's root cause is conclusively
+  confirmed (no longer "tentative") even if not immediately fixable.
+- Zero regression on the other 9 Wave 1 cases and all previously-validated
+  Fix #1-7 behavior (full quality gate + live Wave 1 rerun, per the
+  established pattern).
+- No change to XDOM-B's own matching/amount logic (DC-6 remains explicit
+  future scope).
+
+**Evidence to collect:** per-dataset domain-classification trace before/after
+(mirroring Fix #1's own domain-reclassification evidence); XDOM-A/MAINT-001
+governed-activation status per FieldMaintenance case before/after;
+FIELDMAINT-005's trust-establishment trace/engineering log; live Wave 1
+finding-count delta (informational only — new findings still depend on
+DC-6/DC-7, which this milestone does not touch, so an unchanged finding count
+is an acceptable, correct outcome, not a failure, exactly as Rental's
+zero-candidate result was after Fixes #5/#6).
+
+**Naming note (mission Section 21):** recommend this one remaining item keep
+"Fix #N" naming (P3.xxV.2K / Fix #8) — it is architecturally identical in kind
+to Fixes #1-7, a foundational/plumbing correction, not new capability. Once
+DC-3/DC-4 close, Section V's own evidence shows the program will have fully
+crossed into intelligence-model/capability-coverage territory wave-wide (DC-6,
+DC-7 remain, both model-logic/product-scope decisions, not plumbing repairs).
+The milestone after Fix #8 should adopt a new phase name reflecting that
+shift — e.g. a `P3.xxW.1`-style series, explicitly not "Fix #9" — that naming
+decision belongs to the project owner, not to this report.
