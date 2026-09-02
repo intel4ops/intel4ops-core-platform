@@ -130,11 +130,31 @@ def _side_currency(lines: list[_AmountLine]) -> tuple[str | None, bool]:
     return None, True
 
 
+@dataclass(frozen=True)
+class _CollectedLines:
+    """P3.xxI.2A: carries not just the per-work-order line dicts but
+    whether EITHER side ever had a dataset in this case declare governed
+    evidence for its amount concept AT ALL -- the case-wide
+    NO_GOVERNED_EVIDENCE signal (Section 3). A work order absent from
+    `expected`/`actual` because its side never governed-resolved anywhere
+    in the case is categorically different from one absent because a
+    governed, resolved dataset simply has no matching row for it
+    (CONFIRMED_ZERO) -- see run_revenue_amount_variance's use of these two
+    flags before treating any empty side as zero."""
+
+    expected: dict[str, list[_AmountLine]]
+    actual: dict[str, list[_AmountLine]]
+    expected_side_has_governed_source: bool
+    actual_side_has_governed_source: bool
+
+
 def _collect_lines(
     datasets: list[DatasetConceptFields], eligible_work_order_keys: set[str]
-) -> tuple[dict[str, list[_AmountLine]], dict[str, list[_AmountLine]]]:
+) -> _CollectedLines:
     expected: dict[str, list[_AmountLine]] = {}
     actual: dict[str, list[_AmountLine]] = {}
+    expected_side_has_governed_source = False
+    actual_side_has_governed_source = False
     for ds in datasets:
         wo_field = ds.work_order_id_field
         if wo_field is None or wo_field not in ds.dataframe.columns:
@@ -182,6 +202,16 @@ def _collect_lines(
             or has_unit_price_as_flat_amount
         ):
             continue
+        # P3.xxI.2A Section 3/5/6: this dataset structurally resolved
+        # governed evidence for this side's amount concept -- recorded
+        # regardless of whether any row also happens to match an eligible
+        # work order below. This is what lets an empty expected/actual
+        # dict later be told apart from a side that never had governed
+        # evidence anywhere in the case at all.
+        if has_quantity_rate or has_cost_reference:
+            expected_side_has_governed_source = True
+        if has_invoice_amount or has_unit_price_as_flat_amount:
+            actual_side_has_governed_source = True
         for row_index, row in df.iterrows():
             raw_key = row[wo_field]
             if raw_key is None or (isinstance(raw_key, float) and pd.isna(raw_key)):
@@ -251,7 +281,12 @@ def _collect_lines(
                             "unit_price_as_flat_amount",
                         )
                     )
-    return expected, actual
+    return _CollectedLines(
+        expected=expected,
+        actual=actual,
+        expected_side_has_governed_source=expected_side_has_governed_source,
+        actual_side_has_governed_source=actual_side_has_governed_source,
+    )
 
 
 def _line_evidence(role: str, lines: list[_AmountLine]) -> list[EvidenceItemCreate]:
@@ -300,10 +335,27 @@ def run_revenue_amount_variance(
     primary (first) expected-amount line, since that is the dataset
     governed_finding_publisher.publish() judges readiness against for
     that specific finding (the same P3.xxV.2D correction path XDOM-A/B
-    already use, applied per contributing dataset instead of once)."""
+    already use, applied per contributing dataset instead of once).
+
+    P3.xxI.2A safety gate: if EITHER side never had any dataset in this
+    case resolve governed evidence for its amount concept at all, this
+    function returns [] immediately -- no per-work-order comparison is
+    ever attempted. This is the fix for the defect where an empty
+    per-work-order line list (because the side's concept never resolved
+    anywhere, not because a resolved dataset genuinely lacks a row) was
+    silently summed to Decimal("0") and treated as a confirmed zero
+    amount. A CONFIRMED_ZERO per work order (a resolved, governed dataset
+    that simply has no matching row for this specific work order) remains
+    valid and is still handled per-work-order below -- only the case-wide
+    "this side never resolved at all" state is now a hard stop."""
     if not datasets or not eligible_work_order_keys:
         return []
-    expected_by_wo, actual_by_wo = _collect_lines(datasets, eligible_work_order_keys)
+    collected = _collect_lines(datasets, eligible_work_order_keys)
+    if not collected.expected_side_has_governed_source:
+        return []  # NO_GOVERNED_EVIDENCE (expected side) -- never inferred as zero
+    if not collected.actual_side_has_governed_source:
+        return []  # NO_GOVERNED_EVIDENCE (actual side) -- never inferred as zero
+    expected_by_wo, actual_by_wo = collected.expected, collected.actual
 
     published: list[Finding] = []
     for wo_key in sorted(expected_by_wo.keys()):
@@ -315,11 +367,17 @@ def run_revenue_amount_variance(
         if not expected_ok or not actual_ok:
             continue  # internally mixed currency on one side -- unsafe
 
-        # No actual/billed record exists for this work order at all -- the
-        # sum over an empty set is trivially 0, in ANY currency, so it can
-        # never conflict with a known expected-side currency. This is
-        # different from a genuinely observed-but-uncertain currency
-        # (Section 6's mixed_known_unknown case), which stays blocked.
+        # P3.xxI.2A: this CONFIRMED_ZERO branch is only reached once the
+        # case-wide safety gate above has already established that some
+        # dataset in this case genuinely resolved governed actual-billing
+        # evidence -- so an empty actual_lines here means that governed,
+        # resolved dataset has no row for THIS specific work order, a
+        # legitimate zero, never a stand-in for "we don't understand
+        # billing in this case at all." The sum over an empty set is
+        # trivially 0, in ANY currency, so it can never conflict with a
+        # known expected-side currency -- distinct from a genuinely
+        # observed-but-uncertain currency (Section 6's mixed_known_unknown
+        # case), which stays blocked.
         if not actual_lines:
             comparability = (
                 CurrencyComparability.SAME_KNOWN
