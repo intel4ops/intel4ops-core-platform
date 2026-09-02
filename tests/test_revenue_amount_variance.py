@@ -359,6 +359,132 @@ def test_m_two_different_events_same_variance_two_findings(db: Session, tmp_path
     assert findings[0].id != findings[1].id
 
 
+# ---------------------------------------------------------------------------
+# P3.xxI.2A: three-state evidence contract (Section 16) -- NO_GOVERNED_EVIDENCE
+# must never be converted into a numeric zero. Distinguishes "this dataset
+# never resolved the amount concept at all" (must block) from "this dataset
+# resolved the amount concept and genuinely has no matching row" (Test C
+# above, CONFIRMED_ZERO, still valid).
+# ---------------------------------------------------------------------------
+
+
+def _unresolved_invoice_dataset(
+    dataset_id: UUID, trust_id: UUID, rows: list[tuple[str, float]]
+) -> DatasetConceptFields:
+    """Same physical shape as _invoice_dataset (a work-order-linked billing
+    dataset with real rows and a real 'amount' column) but with
+    invoice_amount_field/unit_price_field left None -- exactly what the
+    orchestration layer passes when semantic resolution never reached
+    AUTO_ACCEPTED/human-governed for that column, the shape confirmed live
+    on FIELDMAINT-002 pre-remediation (docs/p3xxi2a-governed-actual-billing-
+    evidence-remediation.md Section B): the dataset and its rows are real,
+    only the CONCEPT never resolved."""
+    df = pd.DataFrame({"work_order_id": [r[0] for r in rows], "amount": [r[1] for r in rows]})
+    return DatasetConceptFields(
+        dataset_id=dataset_id,
+        dataset_label="invoices.csv",
+        dataframe=df,
+        trust_assessment_id=trust_id,
+        work_order_id_field="work_order_id",
+        quantity_field=None,
+        unit_price_field=None,
+        invoice_amount_field=None,
+        cost_amount_field=None,
+        currency_field=None,
+    )
+
+
+def test_no_governed_evidence_actual_side_no_definitive_finding(
+    db: Session, tmp_path: Path
+) -> None:
+    """Section 16.B: the actual/billing side's amount concept never
+    resolved anywhere in the case (invoices.csv has real rows, but neither
+    invoice_amount_field nor unit_price_field was ever populated) -- must
+    never be silently summed to Decimal("0") and reported as a full
+    billing shortfall."""
+    org_id, actor, trust_id, dataset_id = _bootstrap_context(db, tmp_path, "revvar-no-evidence-a")
+    consumption = _consumption_dataset(
+        dataset_id, trust_id, [("WO-1", 10.0, 100.0)], currency="USD"
+    )
+    unresolved_invoices = _unresolved_invoice_dataset(dataset_id, trust_id, [("WO-1", 800.0)])
+    findings = run_revenue_amount_variance(
+        db, org_id, [consumption, unresolved_invoices], {"WO-1"}, actor
+    )
+    assert findings == []
+
+
+def test_no_governed_evidence_expected_side_no_definitive_finding(
+    db: Session, tmp_path: Path
+) -> None:
+    """Section 16.C: mirror of the above for the expected side -- neither
+    quantity+unit_price nor cost_amount ever resolved on any dataset."""
+    org_id, actor, trust_id, dataset_id = _bootstrap_context(db, tmp_path, "revvar-no-evidence-e")
+    df = pd.DataFrame({"work_order_id": ["WO-1"], "quantity": [10.0], "unit_price": [100.0]})
+    unresolved_consumption = DatasetConceptFields(
+        dataset_id=dataset_id,
+        dataset_label="parts_usage.csv",
+        dataframe=df,
+        trust_assessment_id=trust_id,
+        work_order_id_field="work_order_id",
+        quantity_field=None,
+        unit_price_field=None,
+        invoice_amount_field=None,
+        cost_amount_field=None,
+        currency_field=None,
+    )
+    invoices = _invoice_dataset(dataset_id, trust_id, [("WO-1", 800.0)], currency="USD")
+    findings = run_revenue_amount_variance(
+        db, org_id, [unresolved_consumption, invoices], {"WO-1"}, actor
+    )
+    assert findings == []
+
+
+def test_confirmed_zero_still_produces_a_finding_when_evidence_is_governed(
+    db: Session, tmp_path: Path
+) -> None:
+    """Section 16.D: the safety gate must not become so conservative it
+    also blocks the legitimate CONFIRMED_ZERO case -- re-asserts Test C's
+    own outcome explicitly as a three-state contrast against the two tests
+    immediately above (same physical emptiness, opposite cause)."""
+    org_id, actor, trust_id, dataset_id = _bootstrap_context(db, tmp_path, "revvar-confirmed-zero")
+    consumption = _consumption_dataset(
+        dataset_id, trust_id, [("WO-1", 10.0, 100.0)], currency="USD"
+    )
+    invoices = _invoice_dataset(dataset_id, trust_id, [], currency="USD")  # resolved, zero rows
+    findings = run_revenue_amount_variance(db, org_id, [consumption, invoices], {"WO-1"}, actor)
+    assert len(findings) == 1
+    assert findings[0].exposure_value == 1000
+
+
+def test_mass_false_positive_class_structurally_impossible(db: Session, tmp_path: Path) -> None:
+    """Section 14: generic regression fixture reproducing the live-observed
+    failure SHAPE (many work orders, each with real consumption evidence
+    and a real, row-populated invoice dataset whose amount concept simply
+    never resolved) -- never referencing any specific simulation. Before
+    P3.xxI.2A this produced one 'full billing shortfall' finding per work
+    order; after, it must produce zero, proving missing evidence != zero
+    at scale, not just for one work order."""
+    org_id, actor, trust_id, dataset_id = _bootstrap_context(db, tmp_path, "revvar-mass-fp")
+    n = 25
+    consumption = _consumption_dataset(
+        dataset_id,
+        trust_id,
+        [(f"WO-{i}", 10.0, 100.0) for i in range(n)],
+        currency="USD",
+    )
+    unresolved_invoices = _unresolved_invoice_dataset(
+        dataset_id, trust_id, [(f"WO-{i}", 900.0) for i in range(n)]
+    )
+    findings = run_revenue_amount_variance(
+        db,
+        org_id,
+        [consumption, unresolved_invoices],
+        {f"WO-{i}" for i in range(n)},
+        actor,
+    )
+    assert findings == []
+
+
 def test_unknown_currency_both_sides_proceeds_with_decimal_exposure(
     db: Session, tmp_path: Path
 ) -> None:

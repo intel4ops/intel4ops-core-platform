@@ -21,6 +21,19 @@ class EvidenceComponentType(StrEnum):
     DATASET_ROLE_COMPATIBILITY = "dataset_role_compatibility"
     NEIGHBOR_FIELD_CONTEXT = "neighbor_field_context"
     CROSS_DATASET_OVERLAP = "cross_dataset_overlap"
+    # P3.xxI.2A: distinct from NEIGHBOR_FIELD_CONTEXT -- that component
+    # corroborates via ROLE overlap between a candidate concept and
+    # whatever ANY sibling field happens to resolve to (deliberately
+    # coarse, so structurally-similar concepts like unit_price/
+    # invoice_amount/cost_amount -- which share nearly identical
+    # compatible_dataset_roles by design -- all receive it equally and it
+    # cannot break a tie between them). This component instead checks each
+    # concept's own declared EXACT required/excluded sibling concept codes
+    # (app/semantic/concept_registry.py's requires_sibling_concepts/
+    # excludes_sibling_concepts), so it can decisively favor exactly one
+    # of several alias-sharing concepts when the dataset's actual shape
+    # supports it, and favor none of them when it doesn't.
+    SIBLING_CONCEPT_CORROBORATION = "sibling_concept_corroboration"
     SEMANTIC_MEMORY = "semantic_memory"
     AI_PROPOSAL = "ai_proposal"
     DETERMINISTIC_COROBORATION = "deterministic_corroboration"

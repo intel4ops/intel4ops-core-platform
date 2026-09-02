@@ -35,6 +35,20 @@ class CanonicalConcept:
     compatible_entity_types: frozenset[str] = frozenset()
     version: str = "1.0"
     active: bool = True
+    # P3.xxI.2A: sibling-concept corroboration (app/semantic/
+    # sibling_concept_corroboration.py) -- generic, concept-declared,
+    # exact-match evidence distinguishing concepts that otherwise share
+    # aliases/roles too closely for DATASET_ROLE_COMPATIBILITY or
+    # NEIGHBOR_FIELD_CONTEXT to ever separate. requires_sibling_concepts:
+    # ALL must be present among OTHER fields' alias matches on the SAME
+    # dataset for this concept to receive the corroboration bonus.
+    # excludes_sibling_concepts: if ANY is present among siblings, the
+    # bonus is withheld even when requires_sibling_concepts is satisfied.
+    # Empty (the default) means this concept never participates -- most
+    # concepts have no ambiguous sibling to disambiguate from and don't
+    # need this.
+    requires_sibling_concepts: frozenset[str] = frozenset()
+    excludes_sibling_concepts: frozenset[str] = frozenset()
 
 
 class CanonicalConceptRegistry:
@@ -290,13 +304,27 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             # (service-contract labor-rate columns), mirroring the
             # event_timestamp precedent of adding evidenced spellings only.
             aliases=frozenset({"unit_price", "price", "rate", "amount", "labor_rate"}),
-            # P3.xxI.2: work_order/labor/contract added -- a rate quoted on
-            # a service contract or applied on a work-order-linked
-            # consumption record is generically a unit price, not just an
-            # invoice/inventory line.
-            compatible_dataset_roles=frozenset(
-                {"invoice", "inventory", "work_order", "labor", "contract"}
-            ),
+            # P3.xxI.2: labor/contract added -- a rate quoted on a service
+            # contract or applied on a labor-time record is generically a
+            # unit price, not just an invoice/inventory line.
+            # P3.xxI.2A: "work_order" deliberately REMOVED (was added in
+            # P3.xxI.2). Confirmed live (docs/p3xxi2a-governed-actual-
+            # billing-evidence-remediation.md Section D) that this blanket
+            # role grant made unit_price score identically to cost_amount
+            # on any work-order-linked dataset, including genuine
+            # invoice-shaped ones -- exactly the ambiguity this concept's
+            # own ANY-role NEIGHBOR_FIELD_CONTEXT can't break (that
+            # component corroborates via role overlap, which is symmetric
+            # across all three monetary concepts here by design). The
+            # PRECISE signal for "this is a per-unit rate, not a billed
+            # total" is requires_sibling_concepts below (a co-located
+            # quantity), not a blanket role grant.
+            compatible_dataset_roles=frozenset({"invoice", "inventory", "labor", "contract"}),
+            # P3.xxI.2A: the decisive, concept-specific signal Form A
+            # (quantity x unit_price) actually needs -- a rate is only
+            # legible as a RATE when a quantity to multiply it by is
+            # co-located on the same dataset.
+            requires_sibling_concepts=frozenset({"quantity"}),
         )
     )
     registry.register(
@@ -308,6 +336,17 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
                 {"invoice_amount", "total_amount", "amount_due", "bill_amount", "amount"}
             ),
             compatible_dataset_roles=frozenset({"invoice", "ledger"}),
+            # P3.xxI.2A: a billing document's own lifecycle field
+            # (open/closed/paid/...) co-located with a bare "amount" is
+            # reusable, generic evidence this is a billed total, not a
+            # per-unit rate or an internal cost reference -- observed live
+            # on real invoice-shaped Wave 1 data (invoice_id, work_order_id,
+            # status all present; no quantity/rate pair). Excludes quantity
+            # explicitly: a row that also carries its own quantity is Form
+            # A's territory (unit_price), never simultaneously this
+            # concept's, even if a status field happens to be present too.
+            requires_sibling_concepts=frozenset({"status"}),
+            excludes_sibling_concepts=frozenset({"quantity"}),
         )
     )
     registry.register(
@@ -316,7 +355,18 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Monetary cost incurred, in a specific currency.",
             aliases=frozenset({"cost_amount", "cost", "expense_amount", "amount"}),
-            compatible_dataset_roles=frozenset({"invoice", "ledger", "work_order"}),
+            # P3.xxI.2A: "work_order" role grant narrowed off the shared
+            # blanket set for the same reason as unit_price above -- see
+            # requires_sibling_concepts for the precise replacement signal.
+            compatible_dataset_roles=frozenset({"invoice", "ledger"}),
+            # P3.xxI.2A: a bare cost/expense reference tied directly to a
+            # work order, with neither a billing-document identity
+            # (invoice_id) nor a rate basis (quantity) alongside it, is the
+            # residual shape this concept represents -- an internal
+            # reference figure, not a customer-facing invoice total and not
+            # a per-unit rate.
+            requires_sibling_concepts=frozenset({"work_order_id"}),
+            excludes_sibling_concepts=frozenset({"invoice_id", "quantity"}),
         )
     )
     registry.register(

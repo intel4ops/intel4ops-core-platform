@@ -34,6 +34,9 @@ from app.semantic.role_classifier import (
     dataset_role_classifier,
 )
 from app.semantic.sampling import representative_sample
+from app.semantic.sibling_concept_corroboration import (
+    generate_sibling_concept_corroboration_evidence,
+)
 
 # ---------------------------------------------------------------------------
 # Section 14/30 item 14: the single orchestration-facing entry point.
@@ -198,12 +201,16 @@ def interpret_dataset(
         neighbor_candidates = generate_neighbor_context_evidence(
             dataset_id, profile, fp, candidate_concepts, concept_registry
         )
+        sibling_concept_candidates = generate_sibling_concept_corroboration_evidence(
+            dataset_id, profile, fp, candidate_concepts, concept_registry
+        )
         cross_dataset_candidates = generate_cross_dataset_evidence(
             dataset_id, fp, candidate_concepts, case_context, concept_registry
         )
         candidates = (
             deterministic_candidates
             + neighbor_candidates
+            + sibling_concept_candidates
             + cross_dataset_candidates
             + ai_proposals_by_field.get(fp.source_field, [])
         )
