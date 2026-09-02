@@ -63,6 +63,7 @@ from app.models.analysis_case import AnalysisCaseStageEvent
 from app.models.entities import Organization
 from app.models.entities_canonical import CanonicalCaseEntity
 from app.models.intelligence_activation import IntelligenceActivationDecision
+from app.models.semantic import SemanticInterpretationDecision
 from app.schemas.contracts import OrganizationCreate
 from app.services.analysis_case_command_service import analysis_case_command_service
 from app.services.analysis_case_orchestration_service import analysis_case_orchestration_service
@@ -567,3 +568,173 @@ def test_ablation_i_all_low_confidence_still_blocks(db: Session, tmp_path: Path)
     result = evaluate_readiness(_xdom_a_pack(), index)
     assert result.status == "PARTIAL"
     assert result.below_confidence_threshold == frozenset({"entity_identity.ASSET"})
+
+
+# ---------------------------------------------------------------------------
+# P3.xxV.2I (Fix #6): canonical event-time evidence. XDOM-A's two date
+# accesses (maintenance-side, operations-side) previously required a
+# literal raw column named "event_date" -- Rental's real corpus instead
+# spells these maintenance_date/dispatch_date, which never matched. This
+# section proves the fix live, through the real orchestrator: a
+# Rental-shaped fixture (identical structure to _positive_fixture_csvs(),
+# only the raw date column names changed) now resolves canonical temporal
+# evidence and advances XDOM-A's execution chain -- exactly the corpus
+# vocabulary that blocked it in production, not a synthetic stand-in.
+# ---------------------------------------------------------------------------
+
+
+def _rental_shaped_temporal_fixture_csvs() -> list[UploadedFile]:
+    maint_rows = "asset_id,work_order_id,failure_code,downtime_hours,repair_cost,maintenance_date\n"
+    for i in range(_N_ASSETS):
+        maint_rows += f"A-{i + 1},WO-{i + 1},brake,48,10000,2026-08-{i + 1:02d}T08:00:00\n"
+    ops_rows = "operational_event_id,asset_id,dispatch_date,operational_event_status\n"
+    for i in range(_N_ASSETS):
+        ops_rows += f"OE-{i + 1},A-{i + 1},2026-08-{i + 1:02d}T18:00:00,completed\n"
+    rev_rows = "transaction_amount,event_date,operational_event_id\n"
+    for i in range(_N_ASSETS):
+        rev_rows += f"{5000 + i * 100},2026-08-{i + 1:02d}T18:00:00,OE-{i + 1}\n"
+    return [
+        UploadedFile("maintenance_events.csv", maint_rows.encode()),
+        UploadedFile("operations_events.csv", ops_rows.encode()),
+        UploadedFile("revenue_events.csv", rev_rows.encode()),
+    ]
+
+
+def _unrelated_date_fixture_csvs() -> list[UploadedFile]:
+    """Negative A: maintenance.csv carries a date-shaped field, but one
+    that legitimately means something else (invoice_date) -- must never
+    satisfy XDOM-A's event_timestamp requirement merely because it looks
+    date-shaped."""
+    maint_rows = "asset_id,work_order_id,failure_code,downtime_hours,repair_cost,invoice_date\n"
+    for i in range(_N_ASSETS):
+        maint_rows += f"A-{i + 1},WO-{i + 1},brake,48,10000,2026-08-{i + 1:02d}T08:00:00\n"
+    ops_rows = "operational_event_id,asset_id,event_date,operational_event_status\n"
+    for i in range(_N_ASSETS):
+        ops_rows += f"OE-{i + 1},A-{i + 1},2026-08-{i + 1:02d}T18:00:00,completed\n"
+    rev_rows = "transaction_amount,event_date,operational_event_id\n"
+    for i in range(_N_ASSETS):
+        rev_rows += f"{5000 + i * 100},2026-08-{i + 1:02d}T18:00:00,OE-{i + 1}\n"
+    return [
+        UploadedFile("maintenance_events.csv", maint_rows.encode()),
+        UploadedFile("operations_events.csv", ops_rows.encode()),
+        UploadedFile("revenue_events.csv", rev_rows.encode()),
+    ]
+
+
+def _missing_date_fixture_csvs() -> list[UploadedFile]:
+    """Negative B: no date-shaped field on the maintenance side at all."""
+    maint_rows = "asset_id,work_order_id,failure_code,downtime_hours,repair_cost\n"
+    for i in range(_N_ASSETS):
+        maint_rows += f"A-{i + 1},WO-{i + 1},brake,48,10000\n"
+    ops_rows = "operational_event_id,asset_id,event_date,operational_event_status\n"
+    for i in range(_N_ASSETS):
+        ops_rows += f"OE-{i + 1},A-{i + 1},2026-08-{i + 1:02d}T18:00:00,completed\n"
+    rev_rows = "transaction_amount,event_date,operational_event_id\n"
+    for i in range(_N_ASSETS):
+        rev_rows += f"{5000 + i * 100},2026-08-{i + 1:02d}T18:00:00,OE-{i + 1}\n"
+    return [
+        UploadedFile("maintenance_events.csv", maint_rows.encode()),
+        UploadedFile("operations_events.csv", ops_rows.encode()),
+        UploadedFile("revenue_events.csv", rev_rows.encode()),
+    ]
+
+
+def _semantic_decisions(db: Session, run_id: UUID) -> list[SemanticInterpretationDecision]:
+    return list(
+        db.scalars(
+            select(SemanticInterpretationDecision).where(
+                SemanticInterpretationDecision.run_id == run_id
+            )
+        ).all()
+    )
+
+
+def test_temporal_a_maintenance_date_resolves_to_event_timestamp_auto_accepted(
+    db: Session, tmp_path: Path
+) -> None:
+    """Precondition + positive: maintenance_date and dispatch_date -- the
+    real raw field names that blocked Rental live -- both independently
+    resolve to the event_timestamp canonical concept at auto_accepted."""
+    org = _organization(db, "xdom-a-temporal-precondition")
+    _, run_id = _run_case(db, tmp_path, org.id, _rental_shaped_temporal_fixture_csvs())
+    decisions = {d.source_field: d for d in _semantic_decisions(db, run_id)}
+    assert decisions["maintenance_date"].selected_concept == "event_timestamp"
+    assert decisions["maintenance_date"].status == "auto_accepted"
+    assert decisions["dispatch_date"].selected_concept == "event_timestamp"
+    assert decisions["dispatch_date"].status == "auto_accepted"
+
+
+def test_temporal_b_xdom_a_execution_chain_advances_on_rental_shaped_fields(
+    db: Session, tmp_path: Path
+) -> None:
+    """Primary success criterion (Section 13): canonical temporal evidence
+    resolves and is recorded on the XDOM-A stage event -- the execution
+    chain advances past the point that previously collapsed solely because
+    maintenance_date != event_date. This is checked directly (not inferred
+    from finding count, which a later legitimate condition may still
+    eliminate)."""
+    org = _organization(db, "xdom-a-temporal-execution")
+    _, run_id = _run_case(db, tmp_path, org.id, _rental_shaped_temporal_fixture_csvs())
+    events = _stage_events(db, run_id)
+    assert events, "expected an XDOM-A cross_domain_intelligence stage event"
+    detail = events[0].detail
+    assert detail["maintenance_time_field"] == "maintenance_date"
+    # NOT "dispatch_date": domain_registry.py's own, independent alias
+    # table already renames "dispatch_date" -> "operational_event_start"
+    # in canonical_frames (an operational-event start-time field, for a
+    # reason unrelated to this fix) -- _resolve_canonical_temporal_field
+    # bridges the two canonicalization systems and returns the PHYSICAL
+    # column name the dataframe actually has, not the semantic layer's
+    # raw source_field. See the Fix #6 report, Section D, for the full
+    # trace of this real defect caught while building this test.
+    assert detail["operations_time_field"] == "operational_event_start"
+    # And, since this fixture's windows/values are identical in shape to
+    # the already-certified _positive_fixture_csvs(), findings are in fact
+    # produced -- advancing all the way through, not merely resolving
+    # evidence.
+    assert cast(int, detail["finding_count"]) >= 1
+
+
+def test_temporal_c_event_date_still_works_unchanged(db: Session, tmp_path: Path) -> None:
+    """Regression guard: the original _positive_fixture_csvs() (literal
+    event_date on both sides) is untouched by this fix -- same resolver,
+    same concept, same result."""
+    org = _organization(db, "xdom-a-temporal-regression")
+    _, run_id = _run_case(db, tmp_path, org.id, _positive_fixture_csvs())
+    events = _stage_events(db, run_id)
+    assert events
+    detail = events[0].detail
+    assert detail["maintenance_time_field"] == "event_date"
+    assert detail["operations_time_field"] == "event_date"
+    assert cast(int, detail["finding_count"]) >= 1
+
+
+def test_temporal_negative_a_unrelated_date_field_does_not_satisfy(
+    db: Session, tmp_path: Path
+) -> None:
+    """Negative A: invoice_date (a real but unrelated canonical concept)
+    must not satisfy XDOM-A's temporal requirement merely because it is
+    date-shaped."""
+    org = _organization(db, "xdom-a-temporal-neg-unrelated")
+    _, run_id = _run_case(db, tmp_path, org.id, _unrelated_date_fixture_csvs())
+    decisions = {d.source_field: d for d in _semantic_decisions(db, run_id)}
+    assert decisions["invoice_date"].selected_concept != "event_timestamp"
+    events = _stage_events(db, run_id)
+    assert events
+    assert events[0].detail["maintenance_time_field"] is None
+    assert events[0].detail["finding_count"] == 0
+
+
+def test_temporal_negative_b_missing_date_field_is_insufficient_evidence(
+    db: Session, tmp_path: Path
+) -> None:
+    """Negative B: no date-shaped field at all on the maintenance side --
+    XDOM-A must not fabricate a temporal anchor."""
+    org = _organization(db, "xdom-a-temporal-neg-missing")
+    case_id, run_id = _run_case(db, tmp_path, org.id, _missing_date_fixture_csvs())
+    events = _stage_events(db, run_id)
+    assert events
+    assert events[0].detail["maintenance_time_field"] is None
+    assert events[0].detail["finding_count"] == 0
+    priorities = analysis_case_command_service.priorities(db, org.id, case_id, run_id=run_id)
+    assert [p for p in priorities if p.finding.rule_id == _XDOM_A] == []
