@@ -95,10 +95,17 @@ def test_capability_shadow_evaluation_stage_completes_and_persists_decisions(
     )
     assert decisions, "expected at least one IntelligenceActivationDecision row"
     rule_codes = {d.rule_code for d in decisions}
-    assert rule_codes <= {"XDOM-A-ASSET-FAILURE-LOST-ACTIVITY", "XDOM-B-LOST-ACTIVITY-REVENUE-GAP"}
+    # P3.xxI.2: REVENUE-AMOUNT-VARIANCE is an additive third governed rule,
+    # evaluated through the same generic shadow/readiness machinery as
+    # XDOM-A/XDOM-B -- expected here, not a regression.
+    assert rule_codes <= {
+        "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
+        "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
+        "REVENUE-AMOUNT-VARIANCE",
+    }
     for decision in decisions:
         assert decision.governed_status in ("DISABLED", "READY", "PARTIAL", "BLOCKED")
-        # P3.xxE.5 Phase 2: both migrated rules are GOVERNED -- see
+        # P3.xxE.5 Phase 2 / P3.xxI.2: every migrated rule is GOVERNED -- see
         # _GOVERNED_RULE_CODES in analysis_case_orchestration_service.py.
         assert decision.mode == "governed"
 

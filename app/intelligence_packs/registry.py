@@ -229,4 +229,75 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             required_resolved_trust_domains=frozenset({"operations"}),
         )
     )
+    registry.register(
+        IntelligencePackDefinition(
+            pack_code="REV-VAR",
+            rule_code="REVENUE-AMOUNT-VARIANCE",
+            version="1.0",
+            # P3.xxI.2: deliberately NOT domain-coupled. This capability's
+            # true subject (a work order and its own linked consumption/
+            # billing records) does not reliably classify into one domain
+            # -- Fix #8's own certification showed a work-order-linked
+            # consumption dataset (parts/labor usage) can resolve to
+            # 'maintenance', 'operations', or no domain at all depending on
+            # which columns happen to co-occur. Readiness instead reads
+            # governed entity + measure evidence directly (below), which is
+            # domain-classification-independent by construction.
+            required_domains=frozenset(),
+            required_canonical_fields=frozenset(),
+            required_entities=frozenset(),
+            supported_industry_contexts=None,
+            currency_required=False,
+            output_domains=frozenset({"revenue"}),
+            # WORK_ORDER is the narrowest stable business subject for this
+            # capability (P3.xxI.2 mission Section 8) -- reuses the same
+            # E.3 canonical-entity contract XDOM-A already reuses for
+            # ASSET, never a new identity system.
+            required_canonical_entities=frozenset({EntityType.WORK_ORDER.value}),
+            minimum_entity_identity_confidence=0.70,
+            # P3.xxI.2: "max", mirroring XDOM-A's own identical precedent
+            # and its own stated reason -- this is a PER_ENTITY /
+            # candidate-local model (run_revenue_amount_variance iterates
+            # a pre-filtered, per-work-order eligible set, exactly like
+            # XDOM-A iterates a pre-filtered per-asset set), so readiness
+            # should ask "does at least one eligible work order exist,"
+            # never "does the entire case-global WORK_ORDER population
+            # clear the bar" -- the default coverage_above_threshold @
+            # ratio=1.0 would incorrectly block this capability on
+            # unrelated single-dataset tail work-order entities it would
+            # never evaluate as candidates anyway.
+            confidence_aggregation_policy="max",
+            # quantity and unit_price are this capability's PRIMARY,
+            # live-evidenced expected-amount form (same-row quantity x
+            # unit_price) -- a coarse case-level presence gate; this
+            # rule's own execution (see
+            # app/services/revenue_variance_intelligence_service.py)
+            # applies a stricter, AUTO_ACCEPTED-only evidence policy per
+            # candidate before ever computing a dollar figure. Deliberately
+            # does NOT also require invoice_amount here: unit_price,
+            # invoice_amount, and cost_amount share the raw alias "amount"
+            # (concept_registry.py's own documented ambiguity), so a
+            # dataset's actual-amount column may resolve to unit_price
+            # instead of invoice_amount depending on what else co-occurs
+            # in the case -- the execution layer already handles that
+            # ambiguity explicitly (unit_price on a quantity-less dataset
+            # is read as a flat billed amount), so gating readiness on the
+            # specific concept code that happens to win an inherent tie
+            # would incorrectly block a case that the rule can, in fact,
+            # still process.
+            required_canonical_measures=frozenset({"quantity", "unit_price"}),
+            # Currency comparability is judged per work order, inside the
+            # rule itself (same_known / unknown_both are both safe to
+            # compare; different_known / mixed_known_unknown are not,
+            # never bridged with an invented FX rate) -- a finer-grained
+            # decision than this case-level gate could make, so the gate
+            # itself never blocks on currency.
+            currency_behavior="currency_agnostic",
+            # Only same-row quantity x unit_price is ever multiplied --
+            # inherently unit-safe by construction (the rate is by
+            # definition "price per this row's own unit"), never a
+            # cross-record unit-of-measure assumption.
+            unit_behavior="unit_aware",
+        )
+    )
     return registry

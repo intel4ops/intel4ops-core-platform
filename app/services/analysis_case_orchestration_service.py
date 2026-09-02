@@ -74,6 +74,10 @@ from app.services.canonical_evidence_completeness import (
     RawFieldSemanticEvidence,
     evaluate_canonical_evidence_completeness,
 )
+from app.services.canonical_revenue_variance_evidence import (
+    RawConceptFieldCandidate,
+    resolve_canonical_concept_field,
+)
 from app.services.canonical_temporal_evidence import (
     RawTemporalFieldCandidate,
     resolve_canonical_temporal_evidence,
@@ -83,6 +87,10 @@ from app.services.cross_domain_intelligence_service import (
     run_lost_activity_to_revenue_gap,
 )
 from app.services.entity_resolution_service import DatasetEntityInput, entity_resolution_service
+from app.services.revenue_variance_intelligence_service import (
+    DatasetConceptFields,
+    run_revenue_amount_variance,
+)
 from app.services.trust_service import trust_assessment_service
 from app.storage.base import StorageBackend
 
@@ -151,7 +159,16 @@ def _required_canonical_fields(domain: str) -> frozenset[str]:
 # hold when the underlying evidence genuinely satisfies XDOM-A's real,
 # unmodified capability contract).
 _GOVERNED_RULE_CODES = frozenset(
-    {"XDOM-A-ASSET-FAILURE-LOST-ACTIVITY", "XDOM-B-LOST-ACTIVITY-REVENUE-GAP"}
+    {
+        "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
+        "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
+        # P3.xxI.2: additive third governed rule -- participates in the
+        # same generic readiness/activation-decision persistence XDOM-A/B
+        # already use (never a parallel execution system). Adding a set
+        # member here does not change how XDOM-A or XDOM-B are themselves
+        # evaluated; each pack is judged independently.
+        "REVENUE-AMOUNT-VARIANCE",
+    }
 )
 
 
@@ -939,6 +956,43 @@ class AnalysisCaseOrchestrationService:
             return None
         return canonicalize_field(winning_source_field) or winning_source_field
 
+    @staticmethod
+    def _resolve_canonical_concept_field(
+        case_dataset_id: UUID,
+        semantic_outcome: SemanticInterpretationOutcome | None,
+        concept: str,
+    ) -> str | None:
+        """P3.xxI.2: which COLUMN (if any) on this dataset's canonical_frames
+        dataframe carries governed evidence for the declared canonical
+        concept -- the same shape as _resolve_canonical_temporal_field
+        above (same authority contract, same domain_registry.py bridging
+        for the same reason: semantic evidence names the ORIGINAL raw
+        column, but domain_registry.py's own, unrelated alias table may
+        independently have already renamed that exact column in
+        canonical_frames -- e.g. a raw work_order_id column renamed to
+        operational_event_id for unrelated cross-domain-rule reasons),
+        generalized beyond TIMESTAMP-typed concepts to any concept code
+        (work_order_id, quantity, unit_price, invoice_amount, cost_amount,
+        currency_code). Deliberately a separate method, not a shared
+        helper with the temporal one -- P3.xxI.2 must never modify
+        XDOM-A's own dependency."""
+        if semantic_outcome is None:
+            return None
+        decisions = semantic_outcome.decisions_by_case_dataset.get(case_dataset_id, [])
+        candidates = [
+            RawConceptFieldCandidate(
+                source_field=decision.source_field,
+                machine_status=decision.status,
+                machine_selected_concept=decision.selected_concept,
+                machine_confidence=decision.confidence,
+            )
+            for decision in decisions
+        ]
+        winning_source_field = resolve_canonical_concept_field(concept, candidates).source_field
+        if winning_source_field is None:
+            return None
+        return canonicalize_field(winning_source_field) or winning_source_field
+
     def _evaluate_intelligence_capabilities(
         self,
         db: Session,
@@ -1001,6 +1055,10 @@ class AnalysisCaseOrchestrationService:
         migrated_rule_codes = {
             "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
             "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
+            # P3.xxI.2: additive -- evaluated through the same generic
+            # build_case_capability_index/evaluate_readiness path, never a
+            # rule-code branch. XDOM-A/XDOM-B's own evaluation is untouched.
+            "REVENUE-AMOUNT-VARIANCE",
         }
         evaluated = 0
         agree_count = 0
@@ -1676,6 +1734,114 @@ class AnalysisCaseOrchestrationService:
                         StageEventStatus.COMPLETED.value,
                         {"rule": "XDOM-B", "finding_count": len(findings)},
                     )
+
+        # --- P3.xxI.2: REVENUE-AMOUNT-VARIANCE ---
+        # Additive third governed capability, gated by the SAME generic
+        # readiness/activation mechanism XDOM-A/XDOM-B already use
+        # (governed_status_by_rule, computed once above by
+        # _evaluate_intelligence_capabilities). Spans ALL case datasets --
+        # never domain-grouped like MAINT-001/XDOM-A/XDOM-B -- because its
+        # true subject (a work order and its own linked consumption/
+        # billing records) does not reliably classify into one domain (see
+        # the pack's own registry comment). XDOM-A, XDOM-B, and
+        # run_lost_activity_to_revenue_gap/run_asset_failure_to_lost_activity
+        # above are not read, called, or modified by this block.
+        rev_var_governed_ready = governed_status_by_rule.get("REVENUE-AMOUNT-VARIANCE") == "READY"
+        if rev_var_governed_ready:
+            rev_var_pack = default_intelligence_pack_registry().get("REVENUE-AMOUNT-VARIANCE")
+            eligible_work_orders = (
+                eligible_entity_keys(
+                    entity_candidates,
+                    EntityType.WORK_ORDER.value,
+                    rev_var_pack.minimum_entity_identity_confidence,
+                )
+                if rev_var_pack is not None
+                else set()
+            )
+            dataset_concept_fields: list[DatasetConceptFields] = []
+            for cd in case_datasets:
+                df = canonical_frames.get(cd.id)
+                if df is None:
+                    continue
+                wo_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "work_order_id"
+                )
+                if wo_field is None:
+                    continue
+                resolved_concepts = {
+                    concept: self._resolve_canonical_concept_field(cd.id, semantic_outcome, concept)
+                    for concept in ("quantity", "unit_price", "invoice_amount", "cost_amount")
+                }
+                # P3.xxV.2D's existing correction path: prove THIS
+                # dataset's governed concept evidence -- work_order_id plus
+                # whichever amount-bearing concepts actually resolved here
+                # -- is independently complete, so a raw-field Trust block
+                # unrelated to this capability's own evidence never
+                # silently withholds publication (mirrors XDOM-A/B's own
+                # canonical_evidence_completeness usage exactly).
+                required_concepts = frozenset(
+                    {"work_order_id"}
+                    | {concept for concept, field in resolved_concepts.items() if field is not None}
+                )
+                decisions = (
+                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                    if semantic_outcome is not None
+                    else []
+                )
+                concept_evidence = [
+                    RawFieldSemanticEvidence(
+                        canonical_field=decision.selected_concept,
+                        source_field=decision.source_field,
+                        machine_status=decision.status,
+                        machine_selected_concept=decision.selected_concept,
+                        machine_confidence=decision.confidence,
+                    )
+                    for decision in decisions
+                    if decision.selected_concept in required_concepts
+                ]
+                rev_var_evidence_completeness = evaluate_canonical_evidence_completeness(
+                    required_concepts, concept_evidence
+                )
+                dataset_concept_fields.append(
+                    DatasetConceptFields(
+                        dataset_id=cd.dataset_id,
+                        dataset_label=cd.source_label,
+                        dataframe=df,
+                        trust_assessment_id=trust_assessment_ids.get(cd.id),
+                        work_order_id_field=wo_field,
+                        quantity_field=resolved_concepts["quantity"],
+                        unit_price_field=resolved_concepts["unit_price"],
+                        invoice_amount_field=resolved_concepts["invoice_amount"],
+                        cost_amount_field=resolved_concepts["cost_amount"],
+                        currency_field=self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, "currency_code"
+                        ),
+                        canonical_evidence_completeness=rev_var_evidence_completeness,
+                    )
+                )
+            findings = run_revenue_amount_variance(
+                db,
+                organization_id,
+                dataset_concept_fields,
+                eligible_work_orders,
+                actor_user_id,
+            )
+            for finding in findings:
+                published_finding_ids.add(finding.id)
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "cross_domain_intelligence",
+                StageEventStatus.COMPLETED.value,
+                {
+                    "rule": "REVENUE-AMOUNT-VARIANCE",
+                    "finding_count": len(findings),
+                    "eligible_work_order_count": len(eligible_work_orders),
+                    "candidate_dataset_count": len(dataset_concept_fields),
+                },
+            )
 
         for finding_id in published_finding_ids:
             db.add(
