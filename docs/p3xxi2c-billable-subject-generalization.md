@@ -2,8 +2,12 @@
 
 ## Status
 
-Implementation complete on the dedicated branch; local gates pass. Merge,
-deployment, and post-merge Rental live certification remain owner-gated.
+**P3.xxI.2C VALIDATED** (post-merge, live certification complete). See
+Section L for the full classification rationale.
+
+Merged: PR #115, merge SHA `22fc897da08826642d970091f852eefcb67d18be`.
+Local main synced and confirmed at that SHA; backend deployment confirmed
+live via the first post-merge production run (Section F).
 
 ## A. Baseline
 
@@ -284,46 +288,193 @@ test-ordering artifact, not a regression. A fresh `DROP SCHEMA public
 CASCADE; CREATE SCHEMA public;` reset before the run above produced the
 clean 83/83 result recorded here.)
 
-## I. Rental certification (post-merge, pending)
+## I. Live cases run (post-merge)
 
-Not yet performed — per the mission's own required sequencing, live
-Rental certification runs only after implementation PR review, CI, and
-owner-authorized merge/deployment. This section will be completed in a
-docs-only follow-up PR with live TP/FP/FN, precision/recall, and
-economic-value capture for Rental, FieldMaintenance, and combined,
-reported separately (Section 11's own requirement — domain/process
-differences never hidden behind one combined number).
+All runs executed against the live deployed backend (merge SHA
+`22fc897`, confirmed live via the first production run below), org
+"SOTRA Pilot" (`41f93780-1840-426b-95ed-31a5a4478765`).
 
-**Honest expectation, stated now rather than discovered silently later**:
-this milestone generalizes the SUBJECT (which entity type a finding is
-about) and proves that mechanism sound end-to-end. It does **not** add
-any new QUANTITY-evidence shape. Hand-verification against RENTAL-011's
-own hidden truth shows all four of its truth scenarios
-(`delayed_invoicing`, `late_return_leakage`, `rental_rate_mismatch`,
-`unbilled_rental_days`) compute their expected amount from `rental_days`
-— a value derived from a date interval (`dispatch_date`→`return_date`, or
-the contract's own `start_date`→`end_date`), which is never a stored
-column in any Rental CSV. `field_tickets.csv`'s own stored quantity
-(`hours_used`) is a real, resolvable, but economically UNRELATED metric
-to these four scenarios. Computing a quantity from a date interval is a
-new, separate evidence-derivation capability this milestone deliberately
-does not build (Section 1 of the mission: "the goal is NOT add Rental
-support"; building it now would also risk crossing into exactly the kind
-of new-capability-model territory the architectural stop gate exists to
-catch). Live certification is therefore expected to show the subject
-mechanism activating correctly and safely on Rental data (readiness
-reaching READY or PARTIAL via the CONTRACT alternative, zero fabricated
-findings) while producing few or zero genuine new TP against Rental's
-specific truth corpus — a capability-model gap distinct from, and not
-evidence against, the subject-generalization mechanism itself. This is
-reported as a prediction to be verified, not assumed; Section I will
-state the actual live numbers plainly, including if this expectation
-turns out wrong in either direction.
+**FieldMaintenance control** (regression check against the P3.xxI.2B
+certified baseline):
 
-## J. Generalization evidence
+| Case | Case ID | Run ID | REVENUE-AMOUNT-VARIANCE findings | Subject type(s) |
+|---|---|---|---:|---|
+| FIELDMAINT-001 | `64ee8eb9-00bf-43d3-a0a5-ac7a4c255946` | `98e94bbc-9434-442a-ba38-4a3bac3db8b3` | 61 | 100% `work_order` |
+| FIELDMAINT-002 | `2478d851-e4d6-4870-b62b-ab417e192995` | `59eb4543-c108-4fa9-9640-a66bcc5ace54` | 0 | — |
+| FIELDMAINT-005 | `4eab09b6-1314-4703-b223-581276f136b9` | `abb80d9c-110e-48a9-8f3c-ca4aebc2b55a` | 86 | 100% `work_order` |
+| FIELDMAINT-007 | `b9a6fb15-ed9e-4819-b4af-ef7f4725d59e` | `71955993-4a46-4982-93d4-44ac8e6c9857` | 26 | 100% `work_order` |
 
-Beyond Rental itself, Section E's Section 3 and Section 5 tests
-independently prove the mechanism generalizes through canonical
+Every count matches the P3.xxI.2B certified baseline exactly (61/0/86/26),
+and every finding is tagged `work_order` — zero contamination from the
+newly-reachable CONTRACT pass. This confirms Section F's pytest-level
+regression proof live, on the deployed backend, not just locally.
+
+**Rental** (the milestone's validation case):
+
+| Case | Case ID | Run ID | Governed status | Missing | CONTRACT entities | EVENT entities |
+|---|---|---|---|---|---:|---:|
+| RENTAL-001 | `d681c279-5722-48e9-9cd4-a6c18d2273eb` | `42581510-99a6-4cf9-bdf7-334eb6a47b6d` | BLOCKED | `measure:quantity` | 55 | 55 |
+| RENTAL-003 | `bdeceb7b-2647-4bd5-a93d-e779d4d3783d` | `cdf9e16d-0dee-409c-b66f-61896b126d7c` | BLOCKED | `measure:quantity` | 29 | 29 |
+| RENTAL-011 | `f03ae8d3-aef8-4d66-b6aa-c4dbbceee48b` | `cbdebb48-cc85-471b-9589-d02c0b98cd5a` | BLOCKED | `measure:quantity` | 67 | 67 |
+| RENTAL-012 | `ad408bdb-2b7f-4c18-8c25-c641192797c7` | `e4bec248-572f-4c3d-b563-a1c2951e8397` | BLOCKED | `measure:quantity` | 76 | 76 |
+| RENTAL-015 | `164e5600-e3a9-4f99-8d26-855dd09a69e5` | `62d26b47-e169-40a6-a02a-75fc396a8979` | BLOCKED | `measure:quantity` | 150 | 150 |
+| RENTAL-018 | `51f791bc-1923-4ee4-9a02-a0bf138703a3` | `ba139e42-8cd3-4efc-9fb7-629926f0e2b2` | BLOCKED | `measure:quantity` | 89 | 89 |
+
+All six terminal, all identical pattern, zero exceptions: `governed_
+missing_summary` reads **exactly `["measure:quantity"]`** — the entity
+side is never listed as missing. CONTRACT and EVENT entity counts are
+always exactly equal to each other on every case (matching the real
+1:1 contract↔dispatch structure confirmed pre-implementation), and match
+the raw contract/dispatch row counts in each fixture exactly (e.g.
+RENTAL-011: 67 contracts, 67 dispatches in the raw CSVs → 67 CONTRACT +
+67 EVENT entities resolved). RENTAL-011 also shows E.3 relationship
+discovery activating for the first time on this corpus: 334
+`CanonicalCaseRelationship` rows (201 `BELONGS_TO`, 66 `ASSOCIATED_WITH`,
+67 `REFERENCES`) — confirmed live, matching the pre-implementation
+diagnosis exactly (Section B: "no dataset ever had two entity-typed
+columns resolve simultaneously" — now several do).
+
+## J. Answers to the certification's primary questions
+
+**A. Does Rental now become reachable through governed CONTRACT/EVENT
+entities rather than failing because WORK_ORDER is absent?**
+
+Yes, unambiguously. Pre-P3.xxI.2C, every Rental case was BLOCKED with
+`missing_canonical_entities` including `WORK_ORDER` (no valid subject at
+all). Post-merge, `missing_canonical_entities` is empty on every one of
+the six cases — the entity/subject gate is fully satisfied via the
+CONTRACT alternative, with EVENT entities and real E.3 relationships
+resolving alongside it. The remaining `BLOCKED` status comes entirely
+from a different, later gate (`measure:quantity`), never from the entity
+side.
+
+**B. Does the existing P3.xxI.2B FieldMaintenance baseline remain
+intact?**
+
+Yes. Section I's FieldMaintenance control table shows all four cases
+producing exactly the certified baseline counts (61/0/86/26), every
+finding correctly tagged `work_order`, zero double-publication under the
+newly-reachable CONTRACT pass — confirmed live, on the deployed backend.
+
+**C. If Rental remains unable to detect its truth cases, is the
+remaining blocker the already-anticipated derived duration/rental_days
+evidence gap rather than subject/entity scope?**
+
+Yes, precisely confirmed, with one refinement over the pre-implementation
+prediction. The single missing item, on every case, is literally
+`measure:quantity` — not any entity, relationship, or subject-scope
+signal. Tracing why: `field_tickets.csv`'s `hours_used` resolves to the
+`duration_hours` concept (not the literal `quantity` concept), and
+`contracts.csv`'s `rate` resolves to `unit_price` (via its `contract_id`
+sibling alternative — not `hourly_rate`, whose alias set is `hourly_
+rate`/`labor_rate`/`rate_per_hour`, none of which match `rate`). Real
+Rental data's governed measure shape is therefore `{duration_hours,
+unit_price}` — a real, resolvable, cross-dataset-rate-capable pairing at
+the SERVICE layer (`_collect_lines` already accepts `duration_hours` as
+a `quantity_field` stand-in and already treats `unit_price` as a valid
+rate source) — but the READINESS gate's declared
+`alternative_canonical_measure_sets` only lists `{quantity, unit_price}`
+and `{duration_hours, hourly_rate}`, neither of which matches this exact
+combination. This is classified as
+**FOUNDATIONAL_CANONICAL_DURATION_EVIDENCE_GAP**, not
+CAPABILITY_MODEL_GAP: the dominant, decisive reason genuine truth-corpus
+recovery remains at zero is not this narrow readiness-declaration gap
+(which is mechanical and could in principle be closed by adding a third
+alternative set) but that Rental's own hidden truth (`unbilled_rental_
+days`, `late_return_leakage`) computes its expected amount from
+`rental_days` — a value derived from a date interval
+(`dispatch_date`→`return_date`), which exists nowhere as governed
+canonical duration evidence, stored or derived. `hours_used` is a real,
+governed, but economically UNRELATED metric to these two truth
+scenarios; even a hypothetical fix to the narrower readiness-declaration
+gap would not recover genuine truth-corpus TP, since the quantity it
+would admit (dispatch hours) is not what the truth's own expected-amount
+calculation uses. Neither gap is patched in this milestone, per the
+mission's explicit instruction; both are reported precisely rather than
+either silently worked around or conflated with a subject-generalization
+failure.
+
+## K. Metrics
+
+**FieldMaintenance** (own denominator: 152 in-family truth items —
+37+0+88+27 across FIELDMAINT-001/002/005/007):
+
+| Metric | Value |
+|---|---:|
+| TP | 150 |
+| FN | 2 (both FIELDMAINT-005, diagnosed in the P3.xxI.2B report as temporal-applicability abstention and materiality-threshold suppression — both correctly-functioning safety invariants, unchanged by this milestone) |
+| Mechanical/fabricated FP | 0 |
+| FP, strict single-family denominator (FIELDMAINT-001's 24 verified-genuine `contract_rate_mismatch` findings, out-of-family) | 24 |
+| Precision, strict single-family | 150/174 = 86.21% |
+| Precision, mechanical-correctness basis | 150/150 = 100.00% |
+| Recall | 150/152 = 98.68% |
+| Economic-value capture | $83,263.29 / ~$83,754.76 FieldMaintenance-own truth value ≈ 99.4% (unchanged from P3.xxI.2B) |
+
+**Rental** (own denominator: 14 in-family truth items — `unbilled_
+rental_days` + `late_return_leakage` across RENTAL-001/003/011/012/015/018;
+verified directly against each sim's own `hidden-truth/leakage_truth.json`
+this session: RENTAL-011 contributes 5, RENTAL-015 contributes 9, the
+other four contribute 0 — RENTAL-001/003 carry no `scenario_id`-labeled
+truth at all, RENTAL-012/018 carry only maintenance/fuel/timeliness
+scenarios outside this family):
+
+| Metric | Value |
+|---|---:|
+| TP | 0 |
+| FN | 14 |
+| FP (any kind) | 0 |
+| Precision | N/A (0 findings produced; not 0% — no denominator) |
+| Recall | 0/14 = 0.00% |
+| Economic-value capture | $0 / $241,050.00 = 0.00% |
+
+**Combined** (166 in-family truth items total, matching the P3.xxI.2A/2B
+denominator exactly):
+
+| Metric | Value | Delta vs. P3.xxI.2B |
+|---|---:|---:|
+| TP | 150 | unchanged |
+| FN | 16 | unchanged |
+| Mechanical/fabricated FP | 0 | unchanged |
+| FP, strict single-family | 24 | unchanged |
+| Precision, strict single-family | 150/174 = 86.21% | unchanged |
+| Recall | 150/166 = 90.36% | unchanged |
+| Economic-value capture | $83,263.29 / $324,804.76 = 25.63% | unchanged |
+
+The combined numbers are, deliberately, unchanged — Rental's TP was 0
+before this milestone and remains 0 now, for an entirely different and
+now precisely understood reason (Section J.C). Reporting FieldMaintenance
+and Rental separately (this section) rather than only the unchanged
+combined number is what actually shows this milestone's real effect,
+per the mission's own instruction not to hide domain/process differences
+behind one combined figure.
+
+**Additional required reporting:**
+
+- **Rental readiness improvement**: `missing_canonical_entities` went
+  from including `WORK_ORDER` (BLOCKED, no subject at all) to empty on
+  every one of six cases (BLOCKED only on `measure:quantity`) — a
+  structural improvement not visible in the recall number above.
+- **Subject/entity generalization result**: CONTRACT and EVENT entities
+  resolve correctly and consistently on 100% of live Rental cases (6/6),
+  entity counts matching the raw data exactly on every case.
+- **E.3 relationship activation**: live-confirmed on RENTAL-011 (334
+  relationships: 201 BELONGS_TO, 66 ASSOCIATED_WITH, 67 REFERENCES) —
+  the first live corpus-wide activation of this mechanism, exactly as
+  predicted pre-implementation (Section B).
+- **Stable finding identity behavior**: live-confirmed on the
+  FieldMaintenance control (173 findings across three cases, 100%
+  correctly tagged `work_order`) and pre-merge via
+  `test_p3xxi2c_billable_subject_generalization.py` Section 5 (6/6
+  correctly tagged `contract`, real orchestration run). Rental itself
+  produced no findings to inspect live (Section J.C), so subject-identity
+  behavior for a live CONTRACT-subject finding is proven via the merged
+  test suite's own real orchestration run, not via the Rental cases in
+  this certification pass specifically.
+
+## L. Generalization evidence
+
+Beyond Rental itself, the merged test suite's Section 3 and Section 5
+tests independently prove the mechanism generalizes through canonical
 semantics rather than recognizing either FieldMaintenance's or Rental's
 own literal column names:
 
@@ -340,18 +491,26 @@ own literal column names:
   literal `contract_id`/`hourly_rate`, still producing 6/6 correct
   findings purely through concept resolution.
 
-## K. Remaining limitations
+Live Rental certification (Section I) adds a further, larger-scale proof
+of the same point: real Rental data, using its own literal column names,
+resolves CONTRACT/EVENT entities and E.3 relationships correctly across
+six independent cases with zero exceptions.
 
-- The date-interval-as-quantity gap described in Section I — the
-  dominant reason live Rental recall is expected to be low regardless of
-  how well the subject mechanism itself performs.
-- Rental's own `field_tickets.csv`/`dispatch.csv` domain classification
-  depends on `domain_registry.py`'s pre-existing `dispatch_id`/
-  `dispatch_date`/`return_date` aliases (already present, added in an
-  earlier milestone) — confirmed necessary and sufficient in Section E's
-  Section 5 test, but this milestone does not extend or audit that
-  separate alias table beyond confirming it already covers Rental's
-  literal column names.
+## M. Remaining limitations
+
+- **FOUNDATIONAL_CANONICAL_DURATION_EVIDENCE_GAP** (Section J.C, the
+  dominant blocker): no governed canonical duration evidence exists for
+  a date-interval-derived quantity (`rental_days`), which is what
+  Rental's own truth corpus actually uses as its expected-amount basis.
+  Not patched in this milestone, per explicit instruction.
+- **Narrower readiness-declaration gap** (Section J.C, secondary):
+  `alternative_canonical_measure_sets` does not yet declare a
+  `{duration_hours, unit_price}` combination, even though the service
+  layer already mechanically supports it. Not patched in this milestone
+  either — and patching it alone would not recover genuine Rental TP
+  (Section J.C explains why), so it is reported as a precise, separate
+  observation rather than conflated with the dominant gap above or
+  treated as something worth fixing reflexively.
 - `EVENT`/`CONTRACT` entity resolution is now live wherever `dispatch_id`/
   `contract_id`-aliased columns appear in ANY case corpus-wide (not just
   Rental) — an intended, generic consequence of closing a documented gap,
@@ -359,11 +518,59 @@ own literal column names:
   as a corpus-wide behavior change to watch for in future live
   certifications of unrelated capabilities.
 
-## L. Final classification
+## N. Final classification
 
-**[Deferred — see Section I.]** Per the mission's own required sequencing,
-this milestone's final classification is stated only after live Rental
-certification runs post-merge. The implementation itself is complete,
-tested, and regression-clean; whether the overall milestone reaches
-VALIDATED / PARTIALLY VALIDATED / FAILED depends on live evidence not yet
-gathered, not on an assumption made here.
+### P3.xxI.2C VALIDATED
+
+The mission's own three primary questions (Section J) all resolve
+cleanly and consistently, with zero exceptions across six independent
+live Rental cases:
+
+- Rental is now reachable through governed CONTRACT/EVENT entities —
+  confirmed structurally (entity/relationship resolution) on every case.
+- The certified FieldMaintenance baseline is fully intact — confirmed
+  live, not just in pytest, with zero double-publication under the newly
+  reachable CONTRACT pass.
+- Rental's continued zero recall traces to a precisely diagnosed,
+  correctly out-of-scope evidence gap (derived duration), never to
+  subject/entity scope — confirmed identically on all six cases, not
+  merely plausible on one.
+
+Per the mission's own explicit guidance: "If the billable-subject
+architecture works but Rental remains blocked only by the independent
+duration/rental_days evidence gap, that can still support VALIDATED or
+PARTIALLY VALIDATED depending on the live evidence." The live evidence
+here is unusually clean — a single, identical, correctly-classified
+blocker on every case, no ambiguity, no partial or inconsistent behavior,
+zero mechanical/fabricated false positives anywhere, and the certified
+control population (FieldMaintenance) provably unaffected. This supports
+the stronger of the two allowed outcomes: VALIDATED, not PARTIALLY
+VALIDATED, because nothing about the subject-generalization mechanism
+itself was found lacking, ambiguous, or inconsistent — only a distinct,
+separately-scoped, already-anticipated capability gap remains, exactly
+as the mission's own pre-authorized interpretation describes.
+
+## O. Next recommendation
+
+Two independent, separately-scoped follow-up items, neither undertaken
+in this milestone:
+
+1. **FOUNDATIONAL_CANONICAL_DURATION_EVIDENCE_GAP**: a governed
+   capability to derive a canonical duration/quantity concept from a
+   date interval (e.g. `dispatch_date`→`return_date`), with the same
+   abstain-on-ambiguity discipline this codebase already applies
+   everywhere else (missing/malformed dates abstain, never a fabricated
+   duration). This is the actual prerequisite for Rental's own truth
+   corpus (`unbilled_rental_days`, `late_return_leakage`) to become
+   detectable at all.
+2. Optionally, and independently, declare a third
+   `alternative_canonical_measure_sets` entry
+   (`frozenset({"duration_hours", "unit_price"})`) on
+   `REVENUE-AMOUNT-VARIANCE`, since the service layer already supports
+   this combination mechanically. Recommended only together with, or
+   after, item 1 — declared alone it would let the capability reach
+   READY on Rental data using `hours_used` as the quantity basis, which
+   Section J.C already establishes is not what Rental's own truth
+   corpus's expected-amount calculation actually uses, so it would risk
+   producing plausible-looking but ECONOMICALLY INCORRECT findings
+   rather than genuine recall improvement.
