@@ -137,9 +137,40 @@ def evaluate_readiness(
     missing_domains = pack.required_domains - index.available_domains
     missing_fields = pack.required_canonical_fields - index.available_canonical_fields
     missing_entities = pack.required_entities - index.resolved_entity_types
-    missing_canonical_entities = (
-        pack.required_canonical_entities - index.canonical_entity_types_present
-    )
+    # P3.xxI.2C: mirrors alternative_canonical_measure_sets immediately
+    # below -- when alternatives are declared, readiness is satisfied by
+    # any ONE alternative entity-type set being fully present, not the
+    # primary required_canonical_entities set specifically. satisfied_
+    # canonical_entities is the SPECIFIC set that satisfied readiness (the
+    # primary set when no alternatives apply or none are satisfied),
+    # carried forward so the confidence-threshold check below evaluates
+    # the entity type(s) that actually matter for this case, never a
+    # type that happens to be absent merely because a different
+    # alternative won.
+    missing_canonical_entities: frozenset[str]
+    if pack.alternative_canonical_entity_sets:
+        satisfied_canonical_entities = next(
+            (
+                entity_set
+                for entity_set in pack.alternative_canonical_entity_sets
+                if entity_set <= index.canonical_entity_types_present
+            ),
+            None,
+        )
+        if satisfied_canonical_entities is not None:
+            missing_canonical_entities = frozenset()
+        else:
+            missing_canonical_entities = (
+                pack.required_canonical_entities - index.canonical_entity_types_present
+            )
+            satisfied_canonical_entities = (
+                pack.required_canonical_entities - missing_canonical_entities
+            )
+    else:
+        missing_canonical_entities = (
+            pack.required_canonical_entities - index.canonical_entity_types_present
+        )
+        satisfied_canonical_entities = pack.required_canonical_entities - missing_canonical_entities
     missing_relationships = pack.required_relationships - index.canonical_relationship_types_present
     missing_activities = pack.required_activities - index.activity_types_present
     missing_activity_sequences = pack.required_activity_sequences - index.precedes_pairs_present
@@ -161,7 +192,7 @@ def evaluate_readiness(
     )
 
     below_confidence_threshold: set[str] = set()
-    for entity_type in pack.required_canonical_entities - missing_canonical_entities:
+    for entity_type in satisfied_canonical_entities:
         distribution = index.canonical_entity_identity_confidence_by_type.get(
             entity_type, EMPTY_CONFIDENCE_DISTRIBUTION
         )

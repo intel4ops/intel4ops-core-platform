@@ -102,6 +102,22 @@ class CanonicalConceptRegistry:
             and (not c.compatible_dataset_roles or dataset_role in c.compatible_dataset_roles)
         ]
 
+    def identifier_concept_codes_for_entity_type(self, entity_type: str) -> frozenset[str]:
+        """P3.xxI.2C: every active IDENTIFIER concept whose
+        compatible_entity_types is EXACTLY {entity_type} -- the reverse of
+        entity_type_inference.infer_entity_type (same "exactly one value,
+        never a guessed ambiguity" rule), so an intelligence rule can ask
+        "which resolved column(s) would carry THIS entity type's own
+        identity" generically, without hardcoding a concept code per
+        entity type."""
+        return frozenset(
+            c.concept_code
+            for c in self._concepts.values()
+            if c.active
+            and c.concept_type == CanonicalConceptType.IDENTIFIER.value
+            and c.compatible_entity_types == frozenset({entity_type})
+        )
+
 
 def _normalize(name: str) -> str:
     return "".join(ch for ch in name.strip().lower() if ch.isalnum() or ch == "_")
@@ -194,11 +210,58 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             compatible_dataset_roles=frozenset(
                 {"contract", "work_order", "invoice", "transaction", "reference"}
             ),
+            # P3.xxI.2C: a governed commercial agreement is itself a stable
+            # billable operational subject (app/entities/entity_type.py's
+            # own CONTRACT value existed since P3.xxE.3 but had no backing
+            # concept -- an intentional, documented gap, not a new type).
+            # WORK_ORDER stays the narrowest/first-registered subject; this
+            # closes the one other gap the entity-type vocabulary already
+            # anticipated, generically -- any dataset whose contract_id
+            # resolves now also resolves a CONTRACT entity, regardless of
+            # domain, simulation, or industry.
+            compatible_entity_types=frozenset({"CONTRACT"}),
             alternative_sibling_concept_sets=(
                 frozenset({"work_order_id"}),
                 frozenset({"hourly_rate"}),
                 frozenset({"unit_price"}),
             ),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
+            concept_code="dispatch_id",
+            concept_type=CanonicalConceptType.IDENTIFIER.value,
+            description=(
+                "Identifier of a discrete billable operational event or "
+                "assignment (e.g. a dispatch, rental period, or service "
+                "event) that links usage/quantity evidence to its own "
+                "governing commercial agreement."
+            ),
+            # P3.xxI.2C: generic aliases only -- no simulation, filename,
+            # or industry term. "dispatch_id" is the Rental validation
+            # case's own column name; the other three are deliberately
+            # generic synonyms so a differently-shaped billable-event
+            # dataset (a service call, an assignment, a rental period)
+            # resolves through the exact same concept without a new
+            # registration.
+            aliases=frozenset(
+                {"dispatch_id", "assignment_id", "service_event_id", "rental_event_id"}
+            ),
+            compatible_dataset_roles=frozenset({"transaction", "event", "work_order", "reference"}),
+            # EVENT was forward-declared in EntityType (P3.xxE.3) with no
+            # backing concept -- same documented, anticipated gap CONTRACT
+            # above closes. A dispatch/assignment/service event is exactly
+            # what that value was reserved for: a discrete, dated,
+            # billable occurrence, distinct from the static agreement
+            # (CONTRACT) it is billed under.
+            compatible_entity_types=frozenset({"EVENT"}),
+            # P3.xxI.2C: a billable event/assignment inherently references
+            # the agreement it is billed under -- co-location with a
+            # contract reference on the same row is real, generic
+            # corroborating evidence (the same shape unit_price's own
+            # "{contract_id}" alternative already uses), not fixture- or
+            # simulation-specific.
+            alternative_sibling_concept_sets=(frozenset({"contract_id"}),),
         )
     )
     registry.register(
@@ -357,7 +420,10 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="duration_hours",
             concept_type=CanonicalConceptType.QUANTITY.value,
             description="A measured duration explicitly expressed in hours.",
-            aliases=frozenset({"hours", "hrs", "hours_reported", "labor_hours"}),
+            # P3.xxI.2C: "hours_used" added -- a generic spelling (any
+            # dataset recording consumed/used hours benefits, not just
+            # Rental's own field_tickets.csv column of that name).
+            aliases=frozenset({"hours", "hrs", "hours_reported", "labor_hours", "hours_used"}),
             compatible_dataset_roles=frozenset({"labor", "work_order", "measurement"}),
             expected_value_patterns=frozenset({"digits", "decimal"}),
         )
