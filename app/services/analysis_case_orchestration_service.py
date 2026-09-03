@@ -994,6 +994,159 @@ class AnalysisCaseOrchestrationService:
             return None
         return canonicalize_field(winning_source_field) or winning_source_field
 
+    def _resolve_identifier_bridge_map(
+        self,
+        case_datasets: list[AnalysisCaseDataset],
+        raw_dfs: dict[UUID, pd.DataFrame],
+        semantic_outcome: SemanticInterpretationOutcome | None,
+        bridge_concept: str,
+        subject_concept: str,
+    ) -> dict[str, str]:
+        """P3.xxI.2C: a governed, generic one-hop identifier bridge. Some
+        quantity-bearing datasets do not carry the case's chosen billable
+        subject identifier directly on their own row (e.g. a dispatch/
+        service-event id, not the contract it is billed under) -- but ANY
+        OTHER dataset in the case that carries BOTH that bridge identifier
+        AND the subject identifier on the SAME row (e.g. a dispatch table
+        keyed by both dispatch_id and contract_id) governs the
+        translation. Ambiguity-safe by construction: a bridge value
+        observed against more than one distinct subject value anywhere in
+        the case is dropped, never guessed -- the exact "1:1 survives,
+        ambiguous drops" rule revenue_variance_intelligence_service.py's
+        own work-order/contract bridge already applies, generalized to an
+        arbitrary concept pair. Concept-driven only: no dataset name,
+        domain, or simulation identity is read, so this applies equally
+        to any future subject/bridge concept pair, not just Rental's."""
+        candidates: dict[str, set[str]] = {}
+        for cd in case_datasets:
+            df = raw_dfs.get(cd.id)
+            if df is None:
+                continue
+            bridge_field = self._resolve_canonical_concept_field(
+                cd.id, semantic_outcome, bridge_concept
+            )
+            subject_field = self._resolve_canonical_concept_field(
+                cd.id, semantic_outcome, subject_concept
+            )
+            if (
+                bridge_field is None
+                or subject_field is None
+                or bridge_field not in df.columns
+                or subject_field not in df.columns
+            ):
+                continue
+            for _, row in df.iterrows():
+                bridge_value, subject_value = row[bridge_field], row[subject_field]
+                if pd.notna(bridge_value) and pd.notna(subject_value):
+                    candidates.setdefault(str(bridge_value), set()).add(str(subject_value))
+        return {
+            bridge_value: next(iter(subject_values))
+            for bridge_value, subject_values in candidates.items()
+            if len(subject_values) == 1
+        }
+
+    def _resolve_subject_field_for_dataset(
+        self,
+        cd: AnalysisCaseDataset,
+        df: pd.DataFrame,
+        case_datasets: list[AnalysisCaseDataset],
+        raw_dfs: dict[UUID, pd.DataFrame],
+        semantic_outcome: SemanticInterpretationOutcome | None,
+        subject_concept_codes: frozenset[str],
+        allow_bridge: bool = True,
+    ) -> tuple[pd.DataFrame, str | None, str | None]:
+        """P3.xxI.2C: resolves the column on THIS dataset carrying the
+        chosen subject's identity -- directly when one of
+        subject_concept_codes resolves here, or via a governed one-hop
+        bridge (_resolve_identifier_bridge_map) through any OTHER resolved
+        identifier concept on this same dataset when it doesn't. Returns
+        (dataframe, field_name, evidence_concept_code): the dataframe is
+        only ever a copy (with one added bridged column) when bridging
+        actually applied, never a mutation of the shared canonical_frames
+        dataframe other stages still read; evidence_concept_code is the
+        concept this dataset actually resolved -- the subject concept
+        itself when direct, or the BRIDGE concept when bridged (this
+        dataset never resolved the subject concept directly, so that is
+        the real governed evidence its own canonical_evidence_completeness
+        check must be judged against). field_name is None when this
+        dataset has no way, direct or bridged, to attribute evidence to
+        this subject.
+
+        allow_bridge=False keeps direct resolution but skips the bridge
+        fallback entirely -- used for a dataset the caller already
+        determined is rate-card-shaped (a governed reference/rate row,
+        not a per-row transactional record): bridging such a dataset
+        would wrongly attach a transient subject identity to a row whose
+        real role is a lookup rate, not a billable event, and could let
+        its own rate value be misread downstream as a flat billed
+        amount."""
+        for concept_code in subject_concept_codes:
+            direct_field = self._resolve_canonical_concept_field(
+                cd.id, semantic_outcome, concept_code
+            )
+            if direct_field is not None and direct_field in df.columns:
+                return df, direct_field, concept_code
+        if not allow_bridge:
+            return df, None, None
+        decisions = (
+            semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+            if semantic_outcome is not None
+            else []
+        )
+        other_resolved_concepts = {
+            decision.selected_concept
+            for decision in decisions
+            if decision.selected_concept is not None
+            and decision.selected_concept not in subject_concept_codes
+        }
+        for bridge_concept in sorted(other_resolved_concepts):
+            for subject_concept in sorted(subject_concept_codes):
+                bridge_map = self._resolve_identifier_bridge_map(
+                    case_datasets, raw_dfs, semantic_outcome, bridge_concept, subject_concept
+                )
+                if not bridge_map:
+                    continue
+                # Locating WHICH column on THIS dataset carries the bridge
+                # concept's raw values is a structural lookup, not an
+                # authoritative business assertion -- the strict
+                # AUTO_ACCEPTED-only resolver is deliberately NOT used
+                # here (mirrors E.4's own established tier split: a
+                # weaker-tier decision may support a structural/join
+                # purpose without being promoted to meaning-bearing
+                # evidence). The actual safety comes from bridge_map
+                # itself, which _resolve_identifier_bridge_map only ever
+                # builds from datasets where BOTH concepts independently
+                # reached full AUTO_ACCEPTED authority, plus the 1:1
+                # ambiguity-drop rule inside it.
+                bridge_raw_field = next(
+                    (
+                        decision.source_field
+                        for decision in decisions
+                        if decision.selected_concept == bridge_concept
+                    ),
+                    None,
+                )
+                if bridge_raw_field is None:
+                    continue
+                # domain_registry.py's own, unrelated alias table may have
+                # already renamed this exact column in the canonical_frames
+                # dataframe (df here) -- same translation
+                # _resolve_canonical_concept_field itself applies before
+                # indexing, required here too since bridge_raw_field is the
+                # ORIGINAL semantic source_field, not necessarily df's own
+                # column name.
+                bridge_field = canonicalize_field(bridge_raw_field) or bridge_raw_field
+                if bridge_field not in df.columns:
+                    continue
+                bridged_column = f"__p3xxi2c_bridged_subject__{bridge_concept}__{subject_concept}"
+                bridged_df = df.copy()
+                bridged_df[bridged_column] = bridged_df[bridge_field].map(
+                    lambda v: bridge_map.get(str(v)) if pd.notna(v) else None
+                )
+                if bridged_df[bridged_column].notna().any():
+                    return bridged_df, bridged_column, bridge_concept
+        return df, None, None
+
     def _evaluate_intelligence_capabilities(
         self,
         db: Session,
@@ -1736,180 +1889,283 @@ class AnalysisCaseOrchestrationService:
                         {"rule": "XDOM-B", "finding_count": len(findings)},
                     )
 
-        # --- P3.xxI.2: REVENUE-AMOUNT-VARIANCE ---
+        # --- P3.xxI.2 / P3.xxI.2C: REVENUE-AMOUNT-VARIANCE ---
         # Additive third governed capability, gated by the SAME generic
         # readiness/activation mechanism XDOM-A/XDOM-B already use
         # (governed_status_by_rule, computed once above by
         # _evaluate_intelligence_capabilities). Spans ALL case datasets --
         # never domain-grouped like MAINT-001/XDOM-A/XDOM-B -- because its
-        # true subject (a work order and its own linked consumption/
-        # billing records) does not reliably classify into one domain (see
-        # the pack's own registry comment). XDOM-A, XDOM-B, and
-        # run_lost_activity_to_revenue_gap/run_asset_failure_to_lost_activity
-        # above are not read, called, or modified by this block.
+        # true subject (a governed billable operational subject and its
+        # own linked consumption/billing records) does not reliably
+        # classify into one domain (see the pack's own registry comment).
+        # XDOM-A, XDOM-B, and run_lost_activity_to_revenue_gap/
+        # run_asset_failure_to_lost_activity above are not read, called,
+        # or modified by this block.
+        #
+        # P3.xxI.2C: the concrete subject entity type is no longer
+        # hardcoded to WORK_ORDER. The pack's own
+        # alternative_canonical_entity_sets (app/intelligence_packs/
+        # registry.py) is tried in DECLARED ORDER -- WORK_ORDER first
+        # (unchanged priority for the certified FieldMaintenance
+        # population), CONTRACT second. A dataset that resolves a subject
+        # field (direct or bridged) at one tier is "claimed" and never
+        # reconsidered by a later, coarser tier in the same run -- this is
+        # what prevents one work order's own evidence from ALSO being
+        # reprocessed at the CONTRACT grain now that contract_id carries
+        # an entity type too (FieldMaintenance's invoices.csv/
+        # service_contracts.csv already carry both work_order_id and
+        # contract_id; without this claim rule they would double-publish
+        # the same leak under two subject identities). Each subject type
+        # with >=1 eligible governed entity and >=1 unclaimed dataset able
+        # to attribute evidence to it runs as its own, independently-
+        # published call to run_revenue_amount_variance, so findings for
+        # genuinely different subject types are never collapsed into one
+        # identity (Fix #7).
         rev_var_governed_ready = governed_status_by_rule.get("REVENUE-AMOUNT-VARIANCE") == "READY"
         if rev_var_governed_ready:
             rev_var_pack = default_intelligence_pack_registry().get("REVENUE-AMOUNT-VARIANCE")
-            eligible_work_orders = (
-                eligible_entity_keys(
-                    entity_candidates,
-                    EntityType.WORK_ORDER.value,
-                    rev_var_pack.minimum_entity_identity_confidence,
+            if rev_var_pack is not None and rev_var_pack.alternative_canonical_entity_sets:
+                candidate_subject_entity_types = tuple(
+                    sorted(entity_set)[0]
+                    for entity_set in rev_var_pack.alternative_canonical_entity_sets
                 )
-                if rev_var_pack is not None
-                else set()
-            )
-            dataset_concept_fields: list[DatasetConceptFields] = []
-            rate_dataset_fields: list[RateDatasetFields] = []
-            for cd in case_datasets:
-                df = canonical_frames.get(cd.id)
-                if df is None:
+            elif rev_var_pack is not None:
+                candidate_subject_entity_types = tuple(
+                    sorted(rev_var_pack.required_canonical_entities)
+                )
+            else:
+                candidate_subject_entity_types = (EntityType.WORK_ORDER.value,)
+
+            claimed_rev_var_dataset_ids: set[UUID] = set()
+            rev_var_finding_count = 0
+            rev_var_eligible_subject_count = 0
+            rev_var_candidate_dataset_count = 0
+            for subject_entity_type in candidate_subject_entity_types:
+                eligible_subjects = (
+                    eligible_entity_keys(
+                        entity_candidates,
+                        subject_entity_type,
+                        rev_var_pack.minimum_entity_identity_confidence,
+                    )
+                    if rev_var_pack is not None
+                    else set()
+                )
+                if not eligible_subjects:
                     continue
-                contract_field = self._resolve_canonical_concept_field(
-                    cd.id, semantic_outcome, "contract_id"
+                subject_concept_codes = (
+                    default_canonical_concept_registry.identifier_concept_codes_for_entity_type(
+                        subject_entity_type
+                    )
                 )
-                unit_price_field = self._resolve_canonical_concept_field(
-                    cd.id, semantic_outcome, "unit_price"
-                )
-                hourly_rate_field = self._resolve_canonical_concept_field(
-                    cd.id, semantic_outcome, "hourly_rate"
-                )
-                decisions = (
-                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
-                    if semantic_outcome is not None
-                    else []
-                )
-                selected_concepts = {
-                    decision.selected_concept
-                    for decision in decisions
-                    if decision.selected_concept is not None
-                }
-                if contract_field is not None and (
-                    unit_price_field is not None or hourly_rate_field is not None
-                ):
-                    rate_dataset_fields.append(
-                        RateDatasetFields(
+                if not subject_concept_codes:
+                    continue
+                dataset_concept_fields: list[DatasetConceptFields] = []
+                rate_dataset_fields: list[RateDatasetFields] = []
+                newly_claimed: set[UUID] = set()
+                for cd in case_datasets:
+                    raw_df = canonical_frames.get(cd.id)
+                    if raw_df is None:
+                        continue
+                    contract_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "contract_id"
+                    )
+                    unit_price_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "unit_price"
+                    )
+                    hourly_rate_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "hourly_rate"
+                    )
+                    decisions = (
+                        semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                        if semantic_outcome is not None
+                        else []
+                    )
+                    selected_concepts = {
+                        decision.selected_concept
+                        for decision in decisions
+                        if decision.selected_concept is not None
+                    }
+                    # A dataset in exactly this shape -- a contract
+                    # reference plus an explicit rate -- is a governed
+                    # reference/rate ROW, not a billable transactional
+                    # one. It always feeds rate_dataset_fields regardless
+                    # of claim status (every subject-type pass may look up
+                    # a rate through it), and its own bridge fallback below
+                    # is disabled: bridging would wrongly attach a
+                    # transient subject identity to a lookup row, risking
+                    # its rate value being misread downstream as a flat
+                    # billed amount (see
+                    # _resolve_subject_field_for_dataset's own docstring).
+                    is_rate_card_shaped = contract_field is not None and (
+                        unit_price_field is not None or hourly_rate_field is not None
+                    )
+                    if is_rate_card_shaped:
+                        assert contract_field is not None  # narrows for RateDatasetFields below
+                        rate_dataset_fields.append(
+                            RateDatasetFields(
+                                dataset_id=cd.dataset_id,
+                                dataset_label=cd.source_label,
+                                dataframe=raw_df,
+                                contract_id_field=contract_field,
+                                rate_field=hourly_rate_field or unit_price_field or "",
+                                effective_from_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "effective_from_timestamp"
+                                ),
+                                effective_to_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "effective_to_timestamp"
+                                ),
+                                unit_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "unit_of_measure"
+                                ),
+                                currency_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "currency_code"
+                                ),
+                                implicit_unit="hour" if hourly_rate_field is not None else None,
+                                temporal_authority_unresolved=(
+                                    (
+                                        "effective_from_timestamp" in selected_concepts
+                                        and self._resolve_canonical_concept_field(
+                                            cd.id, semantic_outcome, "effective_from_timestamp"
+                                        )
+                                        is None
+                                    )
+                                    or (
+                                        "effective_to_timestamp" in selected_concepts
+                                        and self._resolve_canonical_concept_field(
+                                            cd.id, semantic_outcome, "effective_to_timestamp"
+                                        )
+                                        is None
+                                    )
+                                ),
+                            )
+                        )
+                    if cd.id in claimed_rev_var_dataset_ids:
+                        continue
+                    df, subject_field, subject_evidence_concept = (
+                        self._resolve_subject_field_for_dataset(
+                            cd,
+                            raw_df,
+                            case_datasets,
+                            canonical_frames,
+                            semantic_outcome,
+                            subject_concept_codes,
+                            allow_bridge=not is_rate_card_shaped,
+                        )
+                    )
+                    if subject_field is None or subject_evidence_concept is None:
+                        continue
+                    resolved_concepts = {
+                        concept: self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, concept
+                        )
+                        for concept in ("quantity", "unit_price", "invoice_amount", "cost_amount")
+                    }
+                    duration_hours_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "duration_hours"
+                    )
+                    # P3.xxV.2D's existing correction path: prove THIS
+                    # dataset's governed concept evidence -- the subject
+                    # concept that actually resolved here (direct, or the
+                    # bridge concept when bridged) plus whichever
+                    # amount-bearing concepts actually resolved here -- is
+                    # independently complete, so a raw-field Trust block
+                    # unrelated to this capability's own evidence never
+                    # silently withholds publication (mirrors XDOM-A/B's
+                    # own canonical_evidence_completeness usage exactly).
+                    optional_resolved_concepts = {
+                        "duration_hours": duration_hours_field,
+                        "contract_id": contract_field,
+                        "event_timestamp": self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, "event_timestamp"
+                        ),
+                        "unit_of_measure": self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, "unit_of_measure"
+                        ),
+                    }
+                    # subject_evidence_concept only joins the STRICT
+                    # required set when it independently clears the same
+                    # AUTO_ACCEPTED-only bar every other required concept
+                    # here already does -- true by construction for a
+                    # direct resolution, but a BRIDGED dataset's own
+                    # bridge-concept decision may sit at a weaker tier
+                    # (Section _resolve_subject_field_for_dataset's own
+                    # docstring: locating the join column is a structural
+                    # lookup, not itself an authoritative assertion). Such
+                    # a dataset's completeness is judged on its OTHER
+                    # governed evidence only, never inflated by a concept
+                    # that did not actually clear the bar here.
+                    subject_concept_strictly_resolved = (
+                        self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, subject_evidence_concept
+                        )
+                        is not None
+                    )
+                    required_concepts = frozenset(
+                        ({subject_evidence_concept} if subject_concept_strictly_resolved else set())
+                        | {
+                            concept
+                            for concept, field in resolved_concepts.items()
+                            if field is not None
+                        }
+                        | {
+                            concept
+                            for concept, field in optional_resolved_concepts.items()
+                            if field is not None
+                        }
+                    )
+                    concept_evidence = [
+                        RawFieldSemanticEvidence(
+                            canonical_field=decision.selected_concept,
+                            source_field=decision.source_field,
+                            machine_status=decision.status,
+                            machine_selected_concept=decision.selected_concept,
+                            machine_confidence=decision.confidence,
+                        )
+                        for decision in decisions
+                        if decision.selected_concept in required_concepts
+                    ]
+                    rev_var_evidence_completeness = evaluate_canonical_evidence_completeness(
+                        required_concepts, concept_evidence
+                    )
+                    dataset_concept_fields.append(
+                        DatasetConceptFields(
                             dataset_id=cd.dataset_id,
                             dataset_label=cd.source_label,
                             dataframe=df,
-                            contract_id_field=contract_field,
-                            rate_field=hourly_rate_field or unit_price_field or "",
-                            effective_from_field=self._resolve_canonical_concept_field(
-                                cd.id, semantic_outcome, "effective_from_timestamp"
-                            ),
-                            effective_to_field=self._resolve_canonical_concept_field(
-                                cd.id, semantic_outcome, "effective_to_timestamp"
-                            ),
-                            unit_field=self._resolve_canonical_concept_field(
-                                cd.id, semantic_outcome, "unit_of_measure"
-                            ),
+                            trust_assessment_id=trust_assessment_ids.get(cd.id),
+                            subject_id_field=subject_field,
+                            quantity_field=resolved_concepts["quantity"] or duration_hours_field,
+                            unit_price_field=resolved_concepts["unit_price"],
+                            invoice_amount_field=resolved_concepts["invoice_amount"],
+                            cost_amount_field=resolved_concepts["cost_amount"],
                             currency_field=self._resolve_canonical_concept_field(
                                 cd.id, semantic_outcome, "currency_code"
                             ),
-                            implicit_unit="hour" if hourly_rate_field is not None else None,
-                            temporal_authority_unresolved=(
-                                (
-                                    "effective_from_timestamp" in selected_concepts
-                                    and self._resolve_canonical_concept_field(
-                                        cd.id, semantic_outcome, "effective_from_timestamp"
-                                    )
-                                    is None
-                                )
-                                or (
-                                    "effective_to_timestamp" in selected_concepts
-                                    and self._resolve_canonical_concept_field(
-                                        cd.id, semantic_outcome, "effective_to_timestamp"
-                                    )
-                                    is None
-                                )
+                            contract_id_field=contract_field,
+                            event_timestamp_field=optional_resolved_concepts["event_timestamp"],
+                            unit_field=optional_resolved_concepts["unit_of_measure"],
+                            implicit_quantity_unit=(
+                                "hour" if duration_hours_field is not None else None
                             ),
+                            canonical_evidence_completeness=rev_var_evidence_completeness,
                         )
                     )
-                wo_field = self._resolve_canonical_concept_field(
-                    cd.id, semantic_outcome, "work_order_id"
+                    newly_claimed.add(cd.id)
+                findings = run_revenue_amount_variance(
+                    db,
+                    organization_id,
+                    dataset_concept_fields,
+                    eligible_subjects,
+                    actor_user_id,
+                    rate_dataset_fields,
+                    subject_entity_type=subject_entity_type.lower(),
                 )
-                if wo_field is None:
-                    continue
-                resolved_concepts = {
-                    concept: self._resolve_canonical_concept_field(cd.id, semantic_outcome, concept)
-                    for concept in ("quantity", "unit_price", "invoice_amount", "cost_amount")
-                }
-                duration_hours_field = self._resolve_canonical_concept_field(
-                    cd.id, semantic_outcome, "duration_hours"
-                )
-                # P3.xxV.2D's existing correction path: prove THIS
-                # dataset's governed concept evidence -- work_order_id plus
-                # whichever amount-bearing concepts actually resolved here
-                # -- is independently complete, so a raw-field Trust block
-                # unrelated to this capability's own evidence never
-                # silently withholds publication (mirrors XDOM-A/B's own
-                # canonical_evidence_completeness usage exactly).
-                optional_resolved_concepts = {
-                    "duration_hours": duration_hours_field,
-                    "contract_id": contract_field,
-                    "event_timestamp": self._resolve_canonical_concept_field(
-                        cd.id, semantic_outcome, "event_timestamp"
-                    ),
-                    "unit_of_measure": self._resolve_canonical_concept_field(
-                        cd.id, semantic_outcome, "unit_of_measure"
-                    ),
-                }
-                required_concepts = frozenset(
-                    {"work_order_id"}
-                    | {concept for concept, field in resolved_concepts.items() if field is not None}
-                    | {
-                        concept
-                        for concept, field in optional_resolved_concepts.items()
-                        if field is not None
-                    }
-                )
-                concept_evidence = [
-                    RawFieldSemanticEvidence(
-                        canonical_field=decision.selected_concept,
-                        source_field=decision.source_field,
-                        machine_status=decision.status,
-                        machine_selected_concept=decision.selected_concept,
-                        machine_confidence=decision.confidence,
-                    )
-                    for decision in decisions
-                    if decision.selected_concept in required_concepts
-                ]
-                rev_var_evidence_completeness = evaluate_canonical_evidence_completeness(
-                    required_concepts, concept_evidence
-                )
-                dataset_concept_fields.append(
-                    DatasetConceptFields(
-                        dataset_id=cd.dataset_id,
-                        dataset_label=cd.source_label,
-                        dataframe=df,
-                        trust_assessment_id=trust_assessment_ids.get(cd.id),
-                        work_order_id_field=wo_field,
-                        quantity_field=resolved_concepts["quantity"] or duration_hours_field,
-                        unit_price_field=resolved_concepts["unit_price"],
-                        invoice_amount_field=resolved_concepts["invoice_amount"],
-                        cost_amount_field=resolved_concepts["cost_amount"],
-                        currency_field=self._resolve_canonical_concept_field(
-                            cd.id, semantic_outcome, "currency_code"
-                        ),
-                        contract_id_field=contract_field,
-                        event_timestamp_field=optional_resolved_concepts["event_timestamp"],
-                        unit_field=optional_resolved_concepts["unit_of_measure"],
-                        implicit_quantity_unit=(
-                            "hour" if duration_hours_field is not None else None
-                        ),
-                        canonical_evidence_completeness=rev_var_evidence_completeness,
-                    )
-                )
-            findings = run_revenue_amount_variance(
-                db,
-                organization_id,
-                dataset_concept_fields,
-                eligible_work_orders,
-                actor_user_id,
-                rate_dataset_fields,
-            )
-            for finding in findings:
-                published_finding_ids.add(finding.id)
+                for finding in findings:
+                    published_finding_ids.add(finding.id)
+                claimed_rev_var_dataset_ids |= newly_claimed
+                rev_var_finding_count += len(findings)
+                rev_var_eligible_subject_count += len(eligible_subjects)
+                rev_var_candidate_dataset_count += len(dataset_concept_fields)
             self._record_stage(
                 db,
                 organization_id,
@@ -1919,9 +2175,10 @@ class AnalysisCaseOrchestrationService:
                 StageEventStatus.COMPLETED.value,
                 {
                     "rule": "REVENUE-AMOUNT-VARIANCE",
-                    "finding_count": len(findings),
-                    "eligible_work_order_count": len(eligible_work_orders),
-                    "candidate_dataset_count": len(dataset_concept_fields),
+                    "finding_count": rev_var_finding_count,
+                    "eligible_subject_count": rev_var_eligible_subject_count,
+                    "candidate_dataset_count": rev_var_candidate_dataset_count,
+                    "subject_entity_types_evaluated": list(candidate_subject_entity_types),
                 },
             )
 

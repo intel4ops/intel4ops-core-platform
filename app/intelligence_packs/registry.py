@@ -58,6 +58,18 @@ class IntelligencePackDefinition:
     # satisfied by any one set; this preserves explainable governed gating
     # for capabilities with multiple legitimate calculation forms.
     alternative_canonical_measure_sets: tuple[frozenset[str], ...] = ()
+    # P3.xxI.2C: the entity-side counterpart to alternative_canonical_
+    # measure_sets above, same convention -- when declared, readiness is
+    # satisfied by any ONE alternative entity-type set being present (not
+    # every set simultaneously). Lets a capability whose true subject is a
+    # GOVERNED BILLABLE OPERATIONAL SUBJECT (never "WORK_ORDER, always")
+    # accept a different concrete entity type per business process --
+    # e.g. WORK_ORDER for field-service work or CONTRACT for a
+    # rental/subscription-shaped process -- while required_canonical_entities
+    # stays the primary/legacy set (itself equal to the first alternative,
+    # mirroring required_canonical_measures's own convention) so every
+    # existing registration needs no change unless it opts in.
+    alternative_canonical_entity_sets: tuple[frozenset[str], ...] = ()
 
     # P3.xxE.5 corrected shadow certification: domains whose Trust
     # assessment must be RESOLVED (not merely present -- see
@@ -258,6 +270,18 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # E.3 canonical-entity contract XDOM-A already reuses for
             # ASSET, never a new identity system.
             required_canonical_entities=frozenset({EntityType.WORK_ORDER.value}),
+            # P3.xxI.2C: WORK_ORDER remains the primary/first-tried subject
+            # (unchanged priority for the certified FieldMaintenance
+            # population), CONTRACT the validated second -- a governed
+            # billable operational subject need not always be a work
+            # order. Declaring both here, rather than only in execution,
+            # keeps readiness and execution provably aligned on the same
+            # candidate set (mirrors alternative_canonical_measure_sets's
+            # own already-established precedent immediately below).
+            alternative_canonical_entity_sets=(
+                frozenset({EntityType.WORK_ORDER.value}),
+                frozenset({EntityType.CONTRACT.value}),
+            ),
             minimum_entity_identity_confidence=0.70,
             # P3.xxI.2: "max", mirroring XDOM-A's own identical precedent
             # and its own stated reason -- this is a PER_ENTITY /

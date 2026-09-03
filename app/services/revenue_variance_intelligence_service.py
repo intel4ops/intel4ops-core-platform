@@ -67,7 +67,14 @@ class DatasetConceptFields:
     dataset_label: str
     dataframe: pd.DataFrame
     trust_assessment_id: UUID | None
-    work_order_id_field: str | None
+    # P3.xxI.2C: the column (if any) on this dataset carrying the case's
+    # governed billable subject identity -- direct when the subject's own
+    # concept resolves here (e.g. work_order_id), or already translated by
+    # the orchestration layer through a governed one-hop identifier bridge
+    # when it doesn't (e.g. a dispatch/service-event id bridged to its
+    # contract). Either way this module treats it as one flat key; it
+    # never knows or cares which case applied.
+    subject_id_field: str | None
     quantity_field: str | None
     unit_price_field: str | None
     invoice_amount_field: str | None
@@ -159,7 +166,7 @@ class _CollectedLines:
 
 def _collect_lines(
     datasets: list[DatasetConceptFields],
-    eligible_work_order_keys: set[str],
+    eligible_subject_keys: set[str],
     rate_datasets: list[RateDatasetFields] | None = None,
 ) -> _CollectedLines:
     expected: dict[str, list[_AmountLine]] = {}
@@ -167,29 +174,29 @@ def _collect_lines(
     expected_side_has_governed_source = False
     actual_side_has_governed_source = False
     rate_datasets = rate_datasets or []
-    contracts_by_work_order: dict[str, set[str]] = {}
+    contracts_by_subject: dict[str, set[str]] = {}
     for relationship_ds in datasets:
-        relationship_wo_field = relationship_ds.work_order_id_field
+        relationship_subject_field = relationship_ds.subject_id_field
         relationship_contract_field = relationship_ds.contract_id_field
         if (
-            relationship_wo_field is not None
+            relationship_subject_field is not None
             and relationship_contract_field is not None
-            and relationship_wo_field in relationship_ds.dataframe.columns
+            and relationship_subject_field in relationship_ds.dataframe.columns
             and relationship_contract_field in relationship_ds.dataframe.columns
         ):
             for _, relationship_row in relationship_ds.dataframe.iterrows():
-                wo = relationship_row[relationship_wo_field]
+                subject = relationship_row[relationship_subject_field]
                 contract = relationship_row[relationship_contract_field]
-                if pd.notna(wo) and pd.notna(contract):
-                    contracts_by_work_order.setdefault(str(wo), set()).add(str(contract))
-    contract_by_work_order = {
-        wo: next(iter(contracts))
-        for wo, contracts in contracts_by_work_order.items()
+                if pd.notna(subject) and pd.notna(contract):
+                    contracts_by_subject.setdefault(str(subject), set()).add(str(contract))
+    contract_by_subject = {
+        subject: next(iter(contracts))
+        for subject, contracts in contracts_by_subject.items()
         if len(contracts) == 1
     }
     for ds in datasets:
-        wo_field = ds.work_order_id_field
-        if wo_field is None or wo_field not in ds.dataframe.columns:
+        subject_field = ds.subject_id_field
+        if subject_field is None or subject_field not in ds.dataframe.columns:
             continue
         df = ds.dataframe
         quantity_field = ds.quantity_field if ds.quantity_field in df.columns else None
@@ -247,18 +254,18 @@ def _collect_lines(
         if has_invoice_amount or has_unit_price_as_flat_amount:
             actual_side_has_governed_source = True
         for row_index, row in df.iterrows():
-            raw_key = row[wo_field]
+            raw_key = row[subject_field]
             if raw_key is None or (isinstance(raw_key, float) and pd.isna(raw_key)):
                 continue
-            wo_key = str(raw_key)
-            if wo_key not in eligible_work_order_keys:
+            subject_key = str(raw_key)
+            if subject_key not in eligible_subject_keys:
                 continue
             currency = _row_currency(row, ds.currency_field)
             if quantity_field is not None and unit_price_field is not None:
                 qty = _to_decimal(row[quantity_field])
                 price = _to_decimal(row[unit_price_field])
                 if qty is not None and price is not None:
-                    expected.setdefault(wo_key, []).append(
+                    expected.setdefault(subject_key, []).append(
                         _AmountLine(
                             ds.dataset_id,
                             ds.dataset_label,
@@ -275,12 +282,21 @@ def _collect_lines(
                 contract_field = ds.contract_id_field
                 timestamp_field = ds.event_timestamp_field
                 row_unit_field = ds.unit_field
+                # P3.xxI.2C: when this row carries no separate contract
+                # reference and no governed subject->contract bridge
+                # exists, the subject key ITSELF is tried as the contract
+                # key -- always correct when the case's chosen subject IS
+                # the contract (subject_key already equals the value
+                # rate_datasets are keyed by), and harmless otherwise: a
+                # work-order-shaped subject_key simply never matches any
+                # real contract_id row below, so resolve_applicable_rate
+                # still correctly returns None rather than a false match.
                 contract_key = (
                     str(row[contract_field])
                     if contract_field is not None
                     and contract_field in df.columns
                     and pd.notna(row[contract_field])
-                    else contract_by_work_order.get(wo_key)
+                    else contract_by_subject.get(subject_key, subject_key)
                 )
                 event_at = (
                     pd.to_datetime(str(row[timestamp_field]), errors="coerce", utc=True)
@@ -308,7 +324,7 @@ def _collect_lines(
                     else None
                 )
                 if qty is not None and rate is not None:
-                    expected.setdefault(wo_key, []).append(
+                    expected.setdefault(subject_key, []).append(
                         _AmountLine(
                             ds.dataset_id,
                             f"{ds.dataset_label} + {rate.dataset_label}",
@@ -324,7 +340,7 @@ def _collect_lines(
             if cost_amount_field is not None:
                 cost = _to_decimal(row[cost_amount_field])
                 if cost is not None:
-                    expected.setdefault(wo_key, []).append(
+                    expected.setdefault(subject_key, []).append(
                         _AmountLine(
                             ds.dataset_id,
                             ds.dataset_label,
@@ -339,7 +355,7 @@ def _collect_lines(
             if invoice_amount_field is not None:
                 billed = _to_decimal(row[invoice_amount_field])
                 if billed is not None:
-                    actual.setdefault(wo_key, []).append(
+                    actual.setdefault(subject_key, []).append(
                         _AmountLine(
                             ds.dataset_id,
                             ds.dataset_label,
@@ -354,7 +370,7 @@ def _collect_lines(
             elif has_unit_price_as_flat_amount and unit_price_field is not None:
                 billed = _to_decimal(row[unit_price_field])
                 if billed is not None:
-                    actual.setdefault(wo_key, []).append(
+                    actual.setdefault(subject_key, []).append(
                         _AmountLine(
                             ds.dataset_id,
                             ds.dataset_label,
@@ -401,18 +417,29 @@ def run_revenue_amount_variance(
     db: Session,
     organization_id: UUID,
     datasets: list[DatasetConceptFields],
-    eligible_work_order_keys: set[str],
+    eligible_subject_keys: set[str],
     actor_user_id: UUID,
     rate_datasets: list[RateDatasetFields] | None = None,
+    subject_entity_type: str = "work_order",
 ) -> list[Finding]:
-    """Rule: REVENUE-AMOUNT-VARIANCE. For each governed WORK_ORDER entity
-    (P3.xxE.3, same identity-confidence contract XDOM-A/MAINT-001 already
-    use), compares an expected amount (governed consumption/rate or
-    reference-cost evidence) against an actual amount (governed invoice
-    evidence) linked by the same canonical work_order_id concept. Never
-    invents an FX rate, never multiplies across an unverified unit basis,
-    never cross-sums incompatible currencies. XDOM-B is not read, called,
-    or modified by this function.
+    """Rule: REVENUE-AMOUNT-VARIANCE. For each governed BILLABLE OPERATIONAL
+    SUBJECT entity (P3.xxE.3, same identity-confidence contract XDOM-A/
+    MAINT-001 already use -- P3.xxI.2C generalized the concrete entity type
+    beyond WORK_ORDER-only; see app/intelligence_packs/registry.py's
+    alternative_canonical_entity_sets), compares an expected amount
+    (governed consumption/rate or reference-cost evidence) against an
+    actual amount (governed invoice evidence) linked by the same subject
+    key. Never invents an FX rate, never multiplies across an unverified
+    unit basis, never cross-sums incompatible currencies. XDOM-B is not
+    read, called, or modified by this function.
+
+    subject_entity_type names the CONCRETE entity type this call's
+    `datasets`/`eligible_subject_keys` were resolved against (e.g.
+    "work_order" or "contract") -- carried through verbatim into every
+    finding's title, entity reference, and stable identity below (Fix #7:
+    a finding against one subject type must never collapse into another's
+    identity key). This module itself never chooses or infers the type; it
+    only reflects whatever the orchestration layer already resolved.
 
     Unlike XDOM-A/B (one anchor dataset, one trust_assessment_id per call),
     this rule aggregates evidence across potentially many datasets in one
@@ -425,28 +452,29 @@ def run_revenue_amount_variance(
 
     P3.xxI.2A safety gate: if EITHER side never had any dataset in this
     case resolve governed evidence for its amount concept at all, this
-    function returns [] immediately -- no per-work-order comparison is
+    function returns [] immediately -- no per-subject comparison is
     ever attempted. This is the fix for the defect where an empty
-    per-work-order line list (because the side's concept never resolved
+    per-subject line list (because the side's concept never resolved
     anywhere, not because a resolved dataset genuinely lacks a row) was
     silently summed to Decimal("0") and treated as a confirmed zero
-    amount. A CONFIRMED_ZERO per work order (a resolved, governed dataset
-    that simply has no matching row for this specific work order) remains
-    valid and is still handled per-work-order below -- only the case-wide
+    amount. A CONFIRMED_ZERO per subject (a resolved, governed dataset
+    that simply has no matching row for this specific subject) remains
+    valid and is still handled per-subject below -- only the case-wide
     "this side never resolved at all" state is now a hard stop."""
-    if not datasets or not eligible_work_order_keys:
+    if not datasets or not eligible_subject_keys:
         return []
-    collected = _collect_lines(datasets, eligible_work_order_keys, rate_datasets)
+    collected = _collect_lines(datasets, eligible_subject_keys, rate_datasets)
     if not collected.expected_side_has_governed_source:
         return []  # NO_GOVERNED_EVIDENCE (expected side) -- never inferred as zero
     if not collected.actual_side_has_governed_source:
         return []  # NO_GOVERNED_EVIDENCE (actual side) -- never inferred as zero
-    expected_by_wo, actual_by_wo = collected.expected, collected.actual
+    expected_by_subject, actual_by_subject = collected.expected, collected.actual
+    subject_label = subject_entity_type.replace("_", " ")
 
     published: list[Finding] = []
-    for wo_key in sorted(expected_by_wo.keys()):
-        expected_lines = expected_by_wo[wo_key]
-        actual_lines = actual_by_wo.get(wo_key, [])
+    for subject_key in sorted(expected_by_subject.keys()):
+        expected_lines = expected_by_subject[subject_key]
+        actual_lines = actual_by_subject.get(subject_key, [])
 
         expected_currency, expected_ok = _side_currency(expected_lines)
         actual_currency, actual_ok = _side_currency(actual_lines)
@@ -530,7 +558,8 @@ def run_revenue_amount_variance(
                 definition_version="1.0",
                 rule_condition_code=shortfall_type,
                 affected_record_count=len(expected_lines) + len(actual_lines),
-                title=f"Work order {wo_key} billed amount is below the expected amount",
+                title=f"{subject_label.capitalize()} {subject_key} billed amount is below "
+                "the expected amount",
                 summary=(
                     f"Expected {expected_amount} "
                     f"{expected_currency or '(currency not confirmed)'} from "
@@ -544,13 +573,13 @@ def run_revenue_amount_variance(
                 finding_type=FindingType.LEAKAGE,
                 actor_user_id=actor_user_id,
                 contributing_datasets=[ContributingDataset(dataset_id=d) for d in contributing],
-                entities=[{"entity_type": "work_order", "canonical_key": wo_key}],
+                entities=[{"entity_type": subject_entity_type, "canonical_key": subject_key}],
                 identity_references=[
                     StableFindingIdentityReference(
                         identity_role="subject",
-                        reference_type="work_order",
-                        canonical_reference=wo_key,
-                        canonical_entity="work_order",
+                        reference_type=subject_entity_type,
+                        canonical_reference=subject_key,
+                        canonical_entity=subject_entity_type,
                     )
                 ],
                 domains=["revenue"],
