@@ -54,6 +54,17 @@ class CanonicalConcept:
     # (for example, a unit price beside quantity OR a governed rate beside a
     # contract reference) without weakening the confidence threshold.
     alternative_sibling_concept_sets: tuple[frozenset[str], ...] = ()
+    # P3.xxI.2B live-certification fix: per-alternative exclusions, parallel
+    # to alternative_sibling_concept_sets (same length when non-empty; empty
+    # means no per-alternative exclusion applies, preserving every existing
+    # concept's behavior unchanged). The single global excludes_sibling_concepts
+    # above is concept-wide and therefore too coarse once a concept has
+    # several alternatives with genuinely different exclusion needs -- e.g.
+    # unit_price's "quantity" alternative (Form A, same-row rate) must never
+    # be excluded by a co-located status field, while its "contract_id"
+    # alternative (a rate-card row) legitimately must be, since a real
+    # billing document (invoices.csv) also carries contract_id.
+    alternative_exclude_sibling_concept_sets: tuple[frozenset[str], ...] = ()
 
 
 class CanonicalConceptRegistry:
@@ -390,6 +401,27 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             alternative_sibling_concept_sets=(
                 frozenset({"quantity"}),
                 frozenset({"contract_id"}),
+            ),
+            # P3.xxI.2B live-certification fix: the "contract_id" alternative
+            # above (added for genuine rate-card datasets, e.g.
+            # service_contracts.csv keyed by contract_id) also matched real
+            # Wave 1 invoices.csv, which carries its OWN contract_id column
+            # alongside status -- silently re-tying unit_price against
+            # invoice_amount and regressing invoice_amount back to
+            # accepted_with_flag (confirmed live: FIELDMAINT-001 dropped
+            # from the P3.xxI.2A-certified 6 findings to 0). A genuine
+            # rate-card row never carries a document lifecycle field; that
+            # combination is invoices.csv's own shape, governed to
+            # invoice_amount instead, never this concept -- mirrors
+            # invoice_amount's own excludes={"quantity"} rule below,
+            # applied in the opposite direction. PER-ALTERNATIVE, not
+            # global: the "quantity" alternative (Form A, same-row rate)
+            # must win regardless of a co-located status field -- a
+            # consumption record that also happens to track its own
+            # lifecycle status is still legitimately Form A evidence.
+            alternative_exclude_sibling_concept_sets=(
+                frozenset(),  # "quantity" alternative: no exclusion
+                frozenset({"status"}),  # "contract_id" alternative: excluded by status
             ),
         )
     )
