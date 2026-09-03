@@ -87,6 +87,7 @@ from app.services.cross_domain_intelligence_service import (
     run_lost_activity_to_revenue_gap,
 )
 from app.services.entity_resolution_service import DatasetEntityInput, entity_resolution_service
+from app.services.governed_cross_dataset_rate import RateDatasetFields
 from app.services.revenue_variance_intelligence_service import (
     DatasetConceptFields,
     run_revenue_amount_variance,
@@ -1759,10 +1760,71 @@ class AnalysisCaseOrchestrationService:
                 else set()
             )
             dataset_concept_fields: list[DatasetConceptFields] = []
+            rate_dataset_fields: list[RateDatasetFields] = []
             for cd in case_datasets:
                 df = canonical_frames.get(cd.id)
                 if df is None:
                     continue
+                contract_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "contract_id"
+                )
+                unit_price_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "unit_price"
+                )
+                hourly_rate_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "hourly_rate"
+                )
+                decisions = (
+                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                    if semantic_outcome is not None
+                    else []
+                )
+                selected_concepts = {
+                    decision.selected_concept
+                    for decision in decisions
+                    if decision.selected_concept is not None
+                }
+                if contract_field is not None and (
+                    unit_price_field is not None or hourly_rate_field is not None
+                ):
+                    rate_dataset_fields.append(
+                        RateDatasetFields(
+                            dataset_id=cd.dataset_id,
+                            dataset_label=cd.source_label,
+                            dataframe=df,
+                            contract_id_field=contract_field,
+                            rate_field=hourly_rate_field or unit_price_field or "",
+                            effective_from_field=self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "effective_from_timestamp"
+                            ),
+                            effective_to_field=self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "effective_to_timestamp"
+                            ),
+                            unit_field=self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "unit_of_measure"
+                            ),
+                            currency_field=self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "currency_code"
+                            ),
+                            implicit_unit="hour" if hourly_rate_field is not None else None,
+                            temporal_authority_unresolved=(
+                                (
+                                    "effective_from_timestamp" in selected_concepts
+                                    and self._resolve_canonical_concept_field(
+                                        cd.id, semantic_outcome, "effective_from_timestamp"
+                                    )
+                                    is None
+                                )
+                                or (
+                                    "effective_to_timestamp" in selected_concepts
+                                    and self._resolve_canonical_concept_field(
+                                        cd.id, semantic_outcome, "effective_to_timestamp"
+                                    )
+                                    is None
+                                )
+                            ),
+                        )
+                    )
                 wo_field = self._resolve_canonical_concept_field(
                     cd.id, semantic_outcome, "work_order_id"
                 )
@@ -1772,6 +1834,9 @@ class AnalysisCaseOrchestrationService:
                     concept: self._resolve_canonical_concept_field(cd.id, semantic_outcome, concept)
                     for concept in ("quantity", "unit_price", "invoice_amount", "cost_amount")
                 }
+                duration_hours_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "duration_hours"
+                )
                 # P3.xxV.2D's existing correction path: prove THIS
                 # dataset's governed concept evidence -- work_order_id plus
                 # whichever amount-bearing concepts actually resolved here
@@ -1779,14 +1844,24 @@ class AnalysisCaseOrchestrationService:
                 # unrelated to this capability's own evidence never
                 # silently withholds publication (mirrors XDOM-A/B's own
                 # canonical_evidence_completeness usage exactly).
+                optional_resolved_concepts = {
+                    "duration_hours": duration_hours_field,
+                    "contract_id": contract_field,
+                    "event_timestamp": self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "event_timestamp"
+                    ),
+                    "unit_of_measure": self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "unit_of_measure"
+                    ),
+                }
                 required_concepts = frozenset(
                     {"work_order_id"}
                     | {concept for concept, field in resolved_concepts.items() if field is not None}
-                )
-                decisions = (
-                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
-                    if semantic_outcome is not None
-                    else []
+                    | {
+                        concept
+                        for concept, field in optional_resolved_concepts.items()
+                        if field is not None
+                    }
                 )
                 concept_evidence = [
                     RawFieldSemanticEvidence(
@@ -1809,12 +1884,18 @@ class AnalysisCaseOrchestrationService:
                         dataframe=df,
                         trust_assessment_id=trust_assessment_ids.get(cd.id),
                         work_order_id_field=wo_field,
-                        quantity_field=resolved_concepts["quantity"],
+                        quantity_field=resolved_concepts["quantity"] or duration_hours_field,
                         unit_price_field=resolved_concepts["unit_price"],
                         invoice_amount_field=resolved_concepts["invoice_amount"],
                         cost_amount_field=resolved_concepts["cost_amount"],
                         currency_field=self._resolve_canonical_concept_field(
                             cd.id, semantic_outcome, "currency_code"
+                        ),
+                        contract_id_field=contract_field,
+                        event_timestamp_field=optional_resolved_concepts["event_timestamp"],
+                        unit_field=optional_resolved_concepts["unit_of_measure"],
+                        implicit_quantity_unit=(
+                            "hour" if duration_hours_field is not None else None
                         ),
                         canonical_evidence_completeness=rev_var_evidence_completeness,
                     )
@@ -1825,6 +1906,7 @@ class AnalysisCaseOrchestrationService:
                 dataset_concept_fields,
                 eligible_work_orders,
                 actor_user_id,
+                rate_dataset_fields,
             )
             for finding in findings:
                 published_finding_ids.add(finding.id)

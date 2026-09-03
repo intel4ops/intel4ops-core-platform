@@ -144,9 +144,15 @@ def evaluate_readiness(
     missing_activities = pack.required_activities - index.activity_types_present
     missing_activity_sequences = pack.required_activity_sequences - index.precedes_pairs_present
     missing_states = pack.required_states - index.named_states_present
-    missing_canonical_measures = pack.required_canonical_measures - frozenset(
-        index.canonical_measures
-    )
+    available_measure_codes = frozenset(index.canonical_measures)
+    missing_canonical_measures: frozenset[str]
+    if pack.alternative_canonical_measure_sets and any(
+        measure_set <= available_measure_codes
+        for measure_set in pack.alternative_canonical_measure_sets
+    ):
+        missing_canonical_measures = frozenset()
+    else:
+        missing_canonical_measures = pack.required_canonical_measures - available_measure_codes
     unresolved_currency = pack.currency_required and index.currency_unresolved
     currency_violation = _evaluate_currency_safety(pack, index)
     unit_violation = _evaluate_unit_safety(pack, index)

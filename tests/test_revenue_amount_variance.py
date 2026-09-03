@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import Finding, Organization
 from app.models.intelligence_activation import IntelligenceActivationDecision
+from app.models.semantic import SemanticInterpretationDecision
 from app.models.trust import (
     AnalyticalLevel,
     AnalyticalReadinessDecision,
@@ -38,6 +39,7 @@ from app.schemas.findings import FindingType, FindingValueType
 from app.services.analysis_case_orchestration_service import analysis_case_orchestration_service
 from app.services.analysis_case_service import AnalysisCaseService, UploadedFile
 from app.services.canonical_revenue_variance_evidence import classify_currency_comparability
+from app.services.governed_cross_dataset_rate import RateDatasetFields
 from app.services.organization_service import OrganizationService
 from app.services.revenue_variance_intelligence_service import (
     DatasetConceptFields,
@@ -172,6 +174,66 @@ def test_b_multiple_invoice_lines_total_800_against_expected_1000(
         dataset_id, trust_id, [("WO-1", 500.0), ("WO-1", 300.0)], currency="USD"
     )
     findings = run_revenue_amount_variance(db, org_id, [consumption, invoices], {"WO-1"}, actor)
+    assert len(findings) == 1
+    assert findings[0].exposure_value == 200
+
+
+def test_cross_dataset_governed_rate_produces_expected_amount(db: Session, tmp_path: Path) -> None:
+    org_id, actor, trust_id, dataset_id = _bootstrap_context(db, tmp_path, "revvar-cross-rate")
+    bridge = DatasetConceptFields(
+        dataset_id=dataset_id,
+        dataset_label="work-subjects",
+        dataframe=pd.DataFrame({"work": ["WO-1"], "agreement": ["C-1"]}),
+        trust_assessment_id=trust_id,
+        work_order_id_field="work",
+        quantity_field=None,
+        unit_price_field=None,
+        invoice_amount_field=None,
+        cost_amount_field=None,
+        currency_field=None,
+        contract_id_field="agreement",
+    )
+    quantities = DatasetConceptFields(
+        dataset_id=dataset_id,
+        dataset_label="activity",
+        dataframe=pd.DataFrame(
+            {"work": ["WO-1"], "hours": [10], "at": ["2026-06-01"], "currency": ["USD"]}
+        ),
+        trust_assessment_id=trust_id,
+        work_order_id_field="work",
+        quantity_field="hours",
+        unit_price_field=None,
+        invoice_amount_field=None,
+        cost_amount_field=None,
+        currency_field="currency",
+        event_timestamp_field="at",
+        implicit_quantity_unit="hour",
+    )
+    invoices = _invoice_dataset(dataset_id, trust_id, [("WO-1", 800)], currency="USD")
+    rates = [
+        RateDatasetFields(
+            dataset_id=dataset_id,
+            dataset_label="rate-reference",
+            dataframe=pd.DataFrame(
+                {
+                    "agreement": ["C-1"],
+                    "rate": [100],
+                    "from": ["2026-01-01"],
+                    "to": ["2026-12-31"],
+                    "currency": ["USD"],
+                }
+            ),
+            contract_id_field="agreement",
+            rate_field="rate",
+            effective_from_field="from",
+            effective_to_field="to",
+            currency_field="currency",
+            implicit_unit="hour",
+        )
+    ]
+    findings = run_revenue_amount_variance(
+        db, org_id, [bridge, quantities, invoices], {"WO-1"}, actor, rates
+    )
     assert len(findings) == 1
     assert findings[0].exposure_value == 200
 
@@ -590,6 +652,54 @@ def test_orchestration_wiring_produces_activation_decision(db: Session, tmp_path
     decision = _decision(db, run_id)
     assert decision is not None
     assert decision.mode == "governed"
+
+
+def test_orchestration_cross_dataset_hourly_rate_end_to_end(db: Session, tmp_path: Path) -> None:
+    """Real orchestration proves semantic authority, relationship lookup,
+    temporal applicability, unit basis, actual billing, and publication as
+    one governed chain. Six subjects satisfy the existing entity-evidence
+    floor; no filename or customer-specific execution branch is involved.
+    """
+    org = _organization(db, "revvar-cross-rate-e2e")
+    work_orders = "work_order_id,contract_id,status\n"
+    labor = "work_order_id,hours,entry_date\n"
+    contracts = "contract_id,start_date,end_date,labor_rate\n"
+    invoices = "invoice_id,work_order_id,invoice_date,amount,status\n"
+    for i in range(_N_WORK_ORDERS):
+        n = i + 1
+        work_orders += f"WO-{n},C-{n},CLOSED\n"
+        labor += f"WO-{n},10,2026-06-01\n"
+        contracts += f"C-{n},2026-01-01,2026-12-31,100\n"
+        invoices += f"INV-{n},WO-{n},2026-06-02,800,CLOSED\n"
+    files = [
+        UploadedFile("work-subjects.csv", work_orders.encode()),
+        UploadedFile("labor-activity.csv", labor.encode()),
+        UploadedFile("commercial-reference.csv", contracts.encode()),
+        UploadedFile("billing.csv", invoices.encode()),
+    ]
+    _, run_id = _run_case(db, tmp_path, org.id, files, "Cross-dataset rate E2E")
+    decision = _decision(db, run_id)
+    assert decision is not None
+    assert decision.governed_status == "READY"
+    findings = list(
+        db.scalars(
+            select(Finding).where(
+                Finding.organization_id == org.id, Finding.definition_code == _RULE_CODE
+            )
+        ).all()
+    )
+    semantic_debug = list(
+        db.execute(
+            select(
+                SemanticInterpretationDecision.source_field,
+                SemanticInterpretationDecision.selected_concept,
+                SemanticInterpretationDecision.confidence,
+                SemanticInterpretationDecision.status,
+            ).where(SemanticInterpretationDecision.run_id == run_id)
+        ).all()
+    )
+    assert len(findings) == _N_WORK_ORDERS, semantic_debug
+    assert all(f.exposure_value == 200 for f in findings)
 
 
 def test_generalization_different_schema_same_invariant(db: Session, tmp_path: Path) -> None:
