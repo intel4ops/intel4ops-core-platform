@@ -57,12 +57,25 @@ def generate_sibling_concept_corroboration_evidence(
         required_sets = concept.alternative_sibling_concept_sets or (
             (concept.requires_sibling_concepts,) if concept.requires_sibling_concepts else ()
         )
-        satisfied_set = next(
-            (required for required in required_sets if required <= sibling_concept_codes), None
+        # P3.xxI.2B: per-alternative excludes, parallel-indexed to
+        # required_sets when declared (same length); otherwise every
+        # alternative falls back to the single concept-wide exclude set,
+        # exactly the pre-P3.xxI.2B behavior. A satisfied-but-excluded
+        # alternative is not a dead end -- the NEXT alternative (if any) is
+        # still tried, since each alternative is an independently
+        # sufficient, independently exclusive context.
+        exclude_sets = concept.alternative_exclude_sibling_concept_sets or tuple(
+            concept.excludes_sibling_concepts for _ in required_sets
         )
+        satisfied_set = None
+        for required, excluded in zip(required_sets, exclude_sets, strict=False):
+            if not required <= sibling_concept_codes:
+                continue
+            if excluded & sibling_concept_codes:
+                continue
+            satisfied_set = required
+            break
         if satisfied_set is None:
-            continue
-        if concept.excludes_sibling_concepts & sibling_concept_codes:
             continue
         pseudo_candidates.append(
             SemanticCandidate(
