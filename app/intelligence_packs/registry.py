@@ -314,9 +314,21 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # would incorrectly block a case that the rule can, in fact,
             # still process.
             required_canonical_measures=frozenset({"quantity", "unit_price"}),
+            # P3.xxI.3: two additional alternatives -- a GOVERNED elapsed
+            # duration (event_timestamp -> completed_timestamp, see
+            # app/services/governed_duration_evidence.py) paired with
+            # either rate concept satisfies readiness exactly like a
+            # stored quantity/duration_hours column already does. This
+            # does not lower any threshold or bypass semantic authority:
+            # both endpoint concepts must still independently reach
+            # AUTO_ACCEPTED (app/services/case_capability_index_service.py's
+            # own allow-listed measure visibility), and the derivation
+            # itself abstains on any missing/invalid/ambiguous endpoint.
             alternative_canonical_measure_sets=(
                 frozenset({"quantity", "unit_price"}),
                 frozenset({"duration_hours", "hourly_rate"}),
+                frozenset({"event_timestamp", "completed_timestamp", "unit_price"}),
+                frozenset({"event_timestamp", "completed_timestamp", "hourly_rate"}),
             ),
             # Currency comparability is judged per work order, inside the
             # rule itself (same_known / unknown_both are both safe to

@@ -35,6 +35,19 @@ from app.semantic.concept_registry import CanonicalConceptRegistry, CanonicalCon
 _MEASURE_CONCEPT_TYPES = frozenset(
     {CanonicalConceptType.QUANTITY.value, CanonicalConceptType.MONETARY_AMOUNT.value}
 )
+# P3.xxI.3: these TIMESTAMP-typed concepts, when BOTH halves of a
+# declared pair resolve on a case (see app/services/
+# governed_duration_evidence.py's DECLARED_INTERVAL_PAIRS), govern a
+# derivable elapsed-duration measure -- explicitly allow-listed here by
+# name rather than broadening _MEASURE_CONCEPT_TYPES to every TIMESTAMP
+# concept, which would let unrelated single timestamps (e.g.
+# effective_from_timestamp alone) register as bare "measures" with no
+# such meaning. A readiness check still requires the FULL declared pair
+# (plus a compatible rate concept) via alternative_canonical_measure_sets
+# -- this only makes each half individually visible to that check.
+_DURATION_ENDPOINT_CONCEPTS = frozenset(
+    {"event_timestamp", "scheduled_timestamp", "completed_timestamp"}
+)
 _CURRENCY_COLUMN_PATTERN = re.compile(r"currency", re.IGNORECASE)
 _UNIT_COLUMN_PATTERN = re.compile(r"unit(_of_measure)?$|^uom$", re.IGNORECASE)
 
@@ -200,7 +213,12 @@ def _measure_capabilities(
             if decision.selected_concept is None:
                 continue
             concept = concept_registry.get(decision.selected_concept)
-            if concept is None or concept.concept_type not in _MEASURE_CONCEPT_TYPES:
+            if concept is None:
+                continue
+            if (
+                concept.concept_type not in _MEASURE_CONCEPT_TYPES
+                and decision.selected_concept not in _DURATION_ENDPOINT_CONCEPTS
+            ):
                 continue
             by_measure.setdefault(decision.selected_concept, []).append(
                 (decision.confidence, currency_values, unit_values)

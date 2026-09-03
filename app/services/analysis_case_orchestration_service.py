@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
@@ -1147,6 +1148,102 @@ class AnalysisCaseOrchestrationService:
                     return bridged_df, bridged_column, bridge_concept
         return df, None, None
 
+    def _resolve_derived_duration_field(
+        self,
+        cd: AnalysisCaseDataset,
+        df: pd.DataFrame,
+        semantic_outcome: SemanticInterpretationOutcome | None,
+    ) -> tuple[pd.DataFrame, str | None, str | None, str | None]:
+        """P3.xxI.3: derives a governed elapsed-duration column for this
+        dataset, trying each DECLARED_INTERVAL_PAIRS entry (see
+        app/services/governed_duration_evidence.py) in declared order.
+        Returns (dataframe, hours_field, days_field, basis_label) --
+        dataframe is a copy carrying the two new derived columns only
+        when at least one row produced a governed duration; both
+        *_field values are None when no declared pair resolves at all on
+        this dataset. Per-row abstention (missing/unparseable/inverted
+        endpoint) leaves that row's derived cells NaN, never a
+        fabricated duration -- the same per-row abstention _collect_lines
+        already applies for any other missing quantity value.
+
+        Both endpoint fields are resolved through the SAME strict,
+        AUTO_ACCEPTED-only _resolve_canonical_concept_field every other
+        concept in this orchestration block uses -- an ambiguous or
+        review-required endpoint never reaches the derivation at all
+        (Section 9's "do not bypass resolve_effective_decision").
+
+        When more than one declared pair independently resolves on this
+        dataset and their results MATERIALLY DISAGREE on any row they
+        both cover, this abstains entirely (returns no derived columns)
+        rather than silently preferring one -- Section 14H's required
+        ambiguity behavior. When they agree (or simply don't overlap),
+        the first declared pair is used; declaration order is itself the
+        governed resolution policy here, the same convention
+        alternative_canonical_measure_sets/alternative_sibling_concept_sets
+        already establish elsewhere in this codebase."""
+        from app.services.governed_duration_evidence import (
+            DECLARED_INTERVAL_PAIRS,
+            DerivedDurationEvidence,
+            resolve_row_duration,
+        )
+
+        resolved_pairs: list[tuple[str, str, str, str]] = []
+        for pair in DECLARED_INTERVAL_PAIRS:
+            start_field = self._resolve_canonical_concept_field(
+                cd.id, semantic_outcome, pair.start_concept
+            )
+            end_field = self._resolve_canonical_concept_field(
+                cd.id, semantic_outcome, pair.end_concept
+            )
+            if (
+                start_field is not None
+                and end_field is not None
+                and start_field in df.columns
+                and end_field in df.columns
+            ):
+                resolved_pairs.append(
+                    (pair.start_concept, pair.end_concept, start_field, end_field)
+                )
+        if not resolved_pairs:
+            return df, None, None, None
+
+        computed: list[tuple[str, str, str, str, dict[object, DerivedDurationEvidence]]] = []
+        for start_concept, end_concept, start_field, end_field in resolved_pairs:
+            per_row: dict[object, DerivedDurationEvidence] = {}
+            for idx, row in df.iterrows():
+                evidence = resolve_row_duration(
+                    row, start_field, end_field, start_concept, end_concept, str(idx)
+                )
+                if evidence is not None:
+                    per_row[idx] = evidence
+            if per_row:
+                computed.append((start_concept, end_concept, start_field, end_field, per_row))
+        if not computed:
+            return df, None, None, None
+
+        if len(computed) > 1:
+            first_rows = computed[0][4]
+            for _, _, _, _, other_rows in computed[1:]:
+                shared = set(first_rows) & set(other_rows)
+                for idx in shared:
+                    if abs(first_rows[idx].elapsed_hours - other_rows[idx].elapsed_hours) > Decimal(
+                        "0.01"
+                    ):
+                        return df, None, None, None  # competing pairs disagree -- abstain
+
+        start_concept, end_concept, _start_field, _end_field, per_row = computed[0]
+        bridged_df = df.copy()
+        hours_col = f"__p3xxi3_derived_duration_hours__{start_concept}__{end_concept}"
+        days_col = f"__p3xxi3_derived_duration_days__{start_concept}__{end_concept}"
+        bridged_df[hours_col] = [
+            float(per_row[idx].elapsed_hours) if idx in per_row else None for idx in df.index
+        ]
+        bridged_df[days_col] = [
+            float(per_row[idx].elapsed_days) if idx in per_row else None for idx in df.index
+        ]
+        basis_label = f"{start_concept}->{end_concept}"
+        return bridged_df, hours_col, days_col, basis_label
+
     def _evaluate_intelligence_capabilities(
         self,
         db: Session,
@@ -1962,6 +2059,18 @@ class AnalysisCaseOrchestrationService:
                 dataset_concept_fields: list[DatasetConceptFields] = []
                 rate_dataset_fields: list[RateDatasetFields] = []
                 newly_claimed: set[UUID] = set()
+                # P3.xxI.3: (index into dataset_concept_fields, days
+                # column name) for every entry whose quantity defaulted
+                # to an hours-denominated DERIVED duration with no LOCAL
+                # governed day signal of its own -- resolved once, after
+                # this pass's rate_dataset_fields is fully known (a
+                # dataset processed early in this loop cannot yet see a
+                # rate dataset discovered later in the same pass). The
+                # authoritative "which unit should this duration be
+                # expressed in" signal is the APPLICABLE RATE's own
+                # governed unit, never guessed from the quantity side
+                # alone when it declares none itself.
+                pending_derived_duration_day_swap: list[tuple[int, str]] = []
                 for cd in case_datasets:
                     raw_df = canonical_frames.get(cd.id)
                     if raw_df is None:
@@ -2063,6 +2172,63 @@ class AnalysisCaseOrchestrationService:
                     duration_hours_field = self._resolve_canonical_concept_field(
                         cd.id, semantic_outcome, "duration_hours"
                     )
+                    # P3.xxI.3: only attempted as a LAST RESORT, after a
+                    # direct quantity/duration_hours column -- a derived
+                    # value never overrides a more directly governed one.
+                    # df is reassigned to the (possibly bridged, possibly
+                    # duration-derived) copy so every later reference in
+                    # this iteration sees both.
+                    derived_duration_start_concept: str | None = None
+                    derived_duration_end_concept: str | None = None
+                    if resolved_concepts["quantity"] is None and duration_hours_field is None:
+                        (
+                            df,
+                            derived_hours_field,
+                            derived_days_field,
+                            derived_duration_basis,
+                        ) = self._resolve_derived_duration_field(cd, df, semantic_outcome)
+                    else:
+                        derived_hours_field = None
+                        derived_days_field = None
+                        derived_duration_basis = None
+                    unit_of_measure_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "unit_of_measure"
+                    )
+                    # Which of the two derived columns to expose as THIS
+                    # dataset's quantity: default to hours (the smaller,
+                    # more universally governed base unit -- Section 6).
+                    # Only switches to days when this dataset carries its
+                    # OWN explicit, governed unit_of_measure evidence that
+                    # actually SAYS "day" -- never guessed from the rate
+                    # concept's own name or any other inference. A dataset
+                    # with no such explicit signal stays on hours, which
+                    # then correctly abstains downstream
+                    # (resolve_applicable_rate's own strict unit-equality
+                    # check) against a day-denominated rate rather than
+                    # silently guessing -- the honest UOM_GAP outcome,
+                    # never a fabricated match.
+                    derived_duration_field: str | None = None
+                    derived_duration_unit: str | None = None
+                    if derived_hours_field is not None:
+                        derived_duration_field = derived_hours_field
+                        derived_duration_unit = "hour"
+                        if (
+                            unit_of_measure_field is not None
+                            and unit_of_measure_field in df.columns
+                            and df[unit_of_measure_field]
+                            .astype(str)
+                            .str.strip()
+                            .str.lower()
+                            .isin({"day", "days"})
+                            .any()
+                        ):
+                            derived_duration_field = derived_days_field
+                            derived_duration_unit = "day"
+                        derived_duration_start_concept, derived_duration_end_concept = (
+                            derived_duration_basis.split("->")
+                            if derived_duration_basis is not None
+                            else (None, None)
+                        )
                     # P3.xxV.2D's existing correction path: prove THIS
                     # dataset's governed concept evidence -- the subject
                     # concept that actually resolved here (direct, or the
@@ -2078,8 +2244,28 @@ class AnalysisCaseOrchestrationService:
                         "event_timestamp": self._resolve_canonical_concept_field(
                             cd.id, semantic_outcome, "event_timestamp"
                         ),
-                        "unit_of_measure": self._resolve_canonical_concept_field(
-                            cd.id, semantic_outcome, "unit_of_measure"
+                        "unit_of_measure": unit_of_measure_field,
+                        # P3.xxI.3: only the endpoint pair the derivation
+                        # ACTUALLY used joins the evidence-completeness
+                        # ledger -- an unrelated resolved timestamp this
+                        # dataset happens to also carry (e.g. a
+                        # scheduled_timestamp that was tried but lost to
+                        # event_timestamp's higher declared priority)
+                        # never inflates completeness for a value that
+                        # was not actually used.
+                        "completed_timestamp": (
+                            self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "completed_timestamp"
+                            )
+                            if derived_duration_end_concept == "completed_timestamp"
+                            else None
+                        ),
+                        "scheduled_timestamp": (
+                            self._resolve_canonical_concept_field(
+                                cd.id, semantic_outcome, "scheduled_timestamp"
+                            )
+                            if derived_duration_start_concept == "scheduled_timestamp"
+                            else None
                         ),
                     }
                     # subject_evidence_concept only joins the STRICT
@@ -2127,6 +2313,14 @@ class AnalysisCaseOrchestrationService:
                     rev_var_evidence_completeness = evaluate_canonical_evidence_completeness(
                         required_concepts, concept_evidence
                     )
+                    if (
+                        derived_duration_field is not None
+                        and derived_duration_unit == "hour"
+                        and derived_days_field is not None
+                    ):
+                        pending_derived_duration_day_swap.append(
+                            (len(dataset_concept_fields), derived_days_field)
+                        )
                     dataset_concept_fields.append(
                         DatasetConceptFields(
                             dataset_id=cd.dataset_id,
@@ -2134,7 +2328,11 @@ class AnalysisCaseOrchestrationService:
                             dataframe=df,
                             trust_assessment_id=trust_assessment_ids.get(cd.id),
                             subject_id_field=subject_field,
-                            quantity_field=resolved_concepts["quantity"] or duration_hours_field,
+                            quantity_field=(
+                                resolved_concepts["quantity"]
+                                or duration_hours_field
+                                or derived_duration_field
+                            ),
                             unit_price_field=resolved_concepts["unit_price"],
                             invoice_amount_field=resolved_concepts["invoice_amount"],
                             cost_amount_field=resolved_concepts["cost_amount"],
@@ -2145,12 +2343,45 @@ class AnalysisCaseOrchestrationService:
                             event_timestamp_field=optional_resolved_concepts["event_timestamp"],
                             unit_field=optional_resolved_concepts["unit_of_measure"],
                             implicit_quantity_unit=(
-                                "hour" if duration_hours_field is not None else None
+                                "hour"
+                                if duration_hours_field is not None
+                                else (
+                                    derived_duration_unit
+                                    if derived_duration_field is not None
+                                    else None
+                                )
                             ),
                             canonical_evidence_completeness=rev_var_evidence_completeness,
+                            is_rate_card_shaped=is_rate_card_shaped,
                         )
                     )
                     newly_claimed.add(cd.id)
+                # P3.xxI.3: now that rate_dataset_fields for this pass is
+                # fully known, resolve any pending hours->days swap
+                # against the applicable rate's OWN governed unit
+                # evidence -- never against a business-name guess (e.g.
+                # "day_rate" as a column NAME is never treated as proof).
+                # A rate whose OWN unit_field resolved to a governed
+                # "day"/"days" value is the only signal this checks.
+                if pending_derived_duration_day_swap:
+                    any_rate_declares_day = any(
+                        rate.unit_field is not None
+                        and rate.unit_field in rate.dataframe.columns
+                        and rate.dataframe[rate.unit_field]
+                        .astype(str)
+                        .str.strip()
+                        .str.lower()
+                        .isin({"day", "days"})
+                        .any()
+                        for rate in rate_dataset_fields
+                    )
+                    if any_rate_declares_day:
+                        for index, days_field in pending_derived_duration_day_swap:
+                            dataset_concept_fields[index] = replace(
+                                dataset_concept_fields[index],
+                                quantity_field=days_field,
+                                implicit_quantity_unit="day",
+                            )
                 findings = run_revenue_amount_variance(
                     db,
                     organization_id,

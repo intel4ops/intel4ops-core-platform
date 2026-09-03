@@ -360,8 +360,29 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="completed_timestamp",
             concept_type=CanonicalConceptType.TIMESTAMP.value,
             description="When work or an event was actually completed.",
-            aliases=frozenset({"completed_date", "completed_at", "closed_date", "finished_at"}),
+            # P3.xxI.3: "return_date" added -- a generic "the activity
+            # this row represents came to an end" spelling (an asset
+            # being returned IS the activity completing), not specific to
+            # Rental's own file layout; no other frozen fixture uses this
+            # column name.
+            aliases=frozenset(
+                {"completed_date", "completed_at", "closed_date", "finished_at", "return_date"}
+            ),
             expected_value_patterns=frozenset({"iso_date"}),
+            # P3.xxI.3: the same sibling-corroboration mechanism
+            # event_timestamp already declares immediately above -- a
+            # completion timestamp co-located with a governed work-order
+            # or contract reference on the same row is exactly as real a
+            # corroborating signal for THIS concept as it already is for
+            # event_timestamp; without this, completed_timestamp had no
+            # path to AUTO_ACCEPTED at all (capped by alias+role+datatype
+            # evidence alone, just under the 0.90 bar), which would have
+            # silently blocked EVERY governed interval this milestone's
+            # duration primitive depends on, not just Rental's.
+            alternative_sibling_concept_sets=(
+                frozenset({"work_order_id"}),
+                frozenset({"contract_id"}),
+            ),
         )
     )
     registry.register(
@@ -390,6 +411,35 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_type=CanonicalConceptType.CODE.value,
             description="Unit governing a quantity or per-unit rate.",
             aliases=frozenset({"unit_of_measure", "uom", "unit", "rate_basis"}),
+            compatible_dataset_roles=frozenset(
+                {
+                    "invoice",
+                    "inventory",
+                    "labor",
+                    "contract",
+                    "work_order",
+                    "reference",
+                    "measurement",
+                }
+            ),
+            # P3.xxI.3: a bare "unit" column is genuinely ambiguous
+            # (could be a product SKU family, a packaging unit, anything)
+            # without more context -- co-location with the concept it
+            # actually governs the basis for (a quantity/duration it
+            # measures, or a rate it prices) is real, generic
+            # corroborating evidence, the same shape already established
+            # for unit_price/dispatch_id/completed_timestamp elsewhere in
+            # this registry. Without this, an explicit governed unit
+            # value could never reach AUTO_ACCEPTED, silently forcing
+            # every quantity x rate match onto this codebase's existing
+            # both-unknown fallback rather than the unit it was actually
+            # governed to declare.
+            alternative_sibling_concept_sets=(
+                frozenset({"quantity"}),
+                frozenset({"duration_hours"}),
+                frozenset({"unit_price"}),
+                frozenset({"hourly_rate"}),
+            ),
         )
     )
     registry.register(
