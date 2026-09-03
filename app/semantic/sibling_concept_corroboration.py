@@ -14,9 +14,9 @@ from app.semantic.profiler import DatasetProfile, FieldProfile
 # "amount") receive that corroboration equally and it can never separate
 # them.
 #
-# This module instead checks each concept's own declared EXACT
-# requires_sibling_concepts/excludes_sibling_concepts (app/semantic/
-# concept_registry.py) against the OTHER fields' alias-matched concept
+# This module instead checks each concept's own declared EXACT required or
+# alternative sibling sets and exclusions (app/semantic/concept_registry.py)
+# against the OTHER fields' alias-matched concept
 # codes on the SAME dataset -- entirely data-driven, no hard-coded field
 # names, filenames, or industry branch here. A concept with no such
 # requirement declared (the default for most concepts) never participates.
@@ -52,9 +52,15 @@ def generate_sibling_concept_corroboration_evidence(
     pseudo_candidates: list[SemanticCandidate] = []
     for concept_code in candidate_concepts:
         concept = registry.get(concept_code)
-        if concept is None or not concept.requires_sibling_concepts:
+        if concept is None:
             continue
-        if not concept.requires_sibling_concepts <= sibling_concept_codes:
+        required_sets = concept.alternative_sibling_concept_sets or (
+            (concept.requires_sibling_concepts,) if concept.requires_sibling_concepts else ()
+        )
+        satisfied_set = next(
+            (required for required in required_sets if required <= sibling_concept_codes), None
+        )
+        if satisfied_set is None:
             continue
         if concept.excludes_sibling_concepts & sibling_concept_codes:
             continue
@@ -70,7 +76,7 @@ def generate_sibling_concept_corroboration_evidence(
                         weight=SIBLING_CONCEPT_CORROBORATION_WEIGHT,
                         description=(
                             f"co-occurs with sibling field(s) resolving to "
-                            f"{sorted(concept.requires_sibling_concepts)}, exactly the context "
+                            f"{sorted(satisfied_set)}, exactly the context "
                             f"{concept_code!r} declares it needs"
                             + (
                                 f" (and none of {sorted(concept.excludes_sibling_concepts)}, "

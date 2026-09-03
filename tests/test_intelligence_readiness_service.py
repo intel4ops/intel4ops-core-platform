@@ -205,6 +205,27 @@ def test_single_currency_observed_does_not_violate() -> None:
     assert result.currency_violation is False
 
 
+def test_alternative_canonical_measure_contract_can_satisfy_readiness() -> None:
+    pack = replace(
+        _BASE_PACK,
+        required_canonical_measures=frozenset({"quantity", "unit_price"}),
+        alternative_canonical_measure_sets=(
+            frozenset({"quantity", "unit_price"}),
+            frozenset({"duration_hours", "hourly_rate"}),
+        ),
+    )
+    index = replace(
+        _BASE_INDEX,
+        canonical_measures={
+            code: MeasureCapability(measure_code=code, count=2, coverage=1.0)
+            for code in ("duration_hours", "hourly_rate")
+        },
+    )
+    result = evaluate_readiness(pack, index)
+    assert result.status == "READY"
+    assert result.missing_canonical_measures == frozenset()
+
+
 def test_currency_agnostic_pack_never_violates_currency_safety() -> None:
     pack = replace(
         _BASE_PACK,

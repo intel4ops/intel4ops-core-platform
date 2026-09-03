@@ -54,6 +54,10 @@ class IntelligencePackDefinition:
     required_canonical_measures: frozenset[str] = (
         frozenset()
     )  # concept codes for quantity/monetary_amount fields
+    # Alternative complete measure contracts. When declared, readiness is
+    # satisfied by any one set; this preserves explainable governed gating
+    # for capabilities with multiple legitimate calculation forms.
+    alternative_canonical_measure_sets: tuple[frozenset[str], ...] = ()
 
     # P3.xxE.5 corrected shadow certification: domains whose Trust
     # assessment must be RESOLVED (not merely present -- see
@@ -286,6 +290,10 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             # would incorrectly block a case that the rule can, in fact,
             # still process.
             required_canonical_measures=frozenset({"quantity", "unit_price"}),
+            alternative_canonical_measure_sets=(
+                frozenset({"quantity", "unit_price"}),
+                frozenset({"duration_hours", "hourly_rate"}),
+            ),
             # Currency comparability is judged per work order, inside the
             # rule itself (same_known / unknown_both are both safe to
             # compare; different_known / mixed_known_unknown are not,

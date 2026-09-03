@@ -49,6 +49,11 @@ class CanonicalConcept:
     # need this.
     requires_sibling_concepts: frozenset[str] = frozenset()
     excludes_sibling_concepts: frozenset[str] = frozenset()
+    # Alternative exact sibling contexts. Each inner set is independently
+    # sufficient; this lets one concept have more than one legitimate shape
+    # (for example, a unit price beside quantity OR a governed rate beside a
+    # contract reference) without weakening the confidence threshold.
+    alternative_sibling_concept_sets: tuple[frozenset[str], ...] = ()
 
 
 class CanonicalConceptRegistry:
@@ -147,6 +152,7 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
                 {"work_order", "transaction", "event", "labor", "invoice", "inventory"}
             ),
             compatible_entity_types=frozenset({"WORK_ORDER"}),
+            alternative_sibling_concept_sets=(frozenset({"contract_id"}),),
         )
     )
     registry.register(
@@ -166,6 +172,22 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             ),
             compatible_dataset_roles=frozenset({"master", "invoice", "contract"}),
             compatible_entity_types=frozenset({"CUSTOMER"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
+            concept_code="contract_id",
+            concept_type=CanonicalConceptType.IDENTIFIER.value,
+            description="Identifier of the commercial agreement governing a transaction.",
+            aliases=frozenset({"contract_id", "agreement_id", "rate_card_id"}),
+            compatible_dataset_roles=frozenset(
+                {"contract", "work_order", "invoice", "transaction", "reference"}
+            ),
+            alternative_sibling_concept_sets=(
+                frozenset({"work_order_id"}),
+                frozenset({"hourly_rate"}),
+                frozenset({"unit_price"}),
+            ),
         )
     )
     registry.register(
@@ -240,9 +262,14 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
                     "timestamp",
                     "maintenance_date",
                     "dispatch_date",
+                    "entry_date",
                 }
             ),
             expected_value_patterns=frozenset({"iso_date"}),
+            alternative_sibling_concept_sets=(
+                frozenset({"work_order_id"}),
+                frozenset({"contract_id"}),
+            ),
         )
     )
     registry.register(
@@ -265,15 +292,41 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
     )
     registry.register(
         CanonicalConcept(
+            concept_code="effective_from_timestamp",
+            concept_type=CanonicalConceptType.TIMESTAMP.value,
+            description="Start of a reference record's governed applicability interval.",
+            aliases=frozenset({"effective_from", "valid_from", "start_date"}),
+            expected_value_patterns=frozenset({"iso_date"}),
+            requires_sibling_concepts=frozenset({"contract_id"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
+            concept_code="effective_to_timestamp",
+            concept_type=CanonicalConceptType.TIMESTAMP.value,
+            description="End of a reference record's governed applicability interval.",
+            aliases=frozenset({"effective_to", "valid_to", "end_date"}),
+            expected_value_patterns=frozenset({"iso_date"}),
+            requires_sibling_concepts=frozenset({"contract_id"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
+            concept_code="unit_of_measure",
+            concept_type=CanonicalConceptType.CODE.value,
+            description="Unit governing a quantity or per-unit rate.",
+            aliases=frozenset({"unit_of_measure", "uom", "unit", "rate_basis"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
             concept_code="quantity",
             concept_type=CanonicalConceptType.QUANTITY.value,
             description="A counted or measured amount of something, not currency.",
-            # P3.xxI.2: hours/hrs added -- a logged labor duration is
-            # generically a measured quantity of time, the same category
-            # of fact as a counted part quantity, just a different unit.
-            # Not a blind unit-name pattern (days/miles/etc are NOT added
-            # here without their own observed evidence).
-            aliases=frozenset({"quantity", "qty", "count", "units", "hours", "hrs"}),
+            # Generic count/quantity spellings only. P3.xxI.2B models
+            # explicitly hourly duration separately so its unit meaning is
+            # preserved across a dataset boundary.
+            aliases=frozenset({"quantity", "qty", "count", "units"}),
             # P3.xxI.2: work_order/labor added -- a consumption record
             # (parts used, hours logged) linked to a work order is
             # generically quantity-bearing, not just literal inventory/
@@ -290,6 +343,16 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
     )
     registry.register(
         CanonicalConcept(
+            concept_code="duration_hours",
+            concept_type=CanonicalConceptType.QUANTITY.value,
+            description="A measured duration explicitly expressed in hours.",
+            aliases=frozenset({"hours", "hrs", "hours_reported", "labor_hours"}),
+            compatible_dataset_roles=frozenset({"labor", "work_order", "measurement"}),
+            expected_value_patterns=frozenset({"digits", "decimal"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
             concept_code="unit_price",
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Price per unit of a good or service, in a specific currency.",
@@ -300,10 +363,9 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             # (never resolved here), letting the ambiguity engine actually
             # exercise ACCEPTED_WITH_FLAG/REVIEW_REQUIRED on a tied score
             # rather than never seeing a multi-candidate field at all.
-            # P3.xxI.2: labor_rate added -- a specific, observed alias
-            # (service-contract labor-rate columns), mirroring the
-            # event_timestamp precedent of adding evidenced spellings only.
-            aliases=frozenset({"unit_price", "price", "rate", "amount", "labor_rate"}),
+            # Explicit hourly-rate spellings are modeled separately by
+            # P3.xxI.2B so the unit basis survives cross-dataset lookup.
+            aliases=frozenset({"unit_price", "price", "rate", "amount"}),
             # P3.xxI.2: labor/contract added -- a rate quoted on a service
             # contract or applied on a labor-time record is generically a
             # unit price, not just an invoice/inventory line.
@@ -325,6 +387,21 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             # legible as a RATE when a quantity to multiply it by is
             # co-located on the same dataset.
             requires_sibling_concepts=frozenset({"quantity"}),
+            alternative_sibling_concept_sets=(
+                frozenset({"quantity"}),
+                frozenset({"contract_id"}),
+            ),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
+            concept_code="hourly_rate",
+            concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
+            description="Monetary rate explicitly applicable per hour.",
+            aliases=frozenset({"hourly_rate", "labor_rate", "rate_per_hour"}),
+            expected_value_patterns=frozenset({"digits", "decimal"}),
+            compatible_dataset_roles=frozenset({"contract", "reference", "labor"}),
+            requires_sibling_concepts=frozenset({"contract_id"}),
         )
     )
     registry.register(

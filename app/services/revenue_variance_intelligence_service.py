@@ -21,6 +21,10 @@ from app.services.canonical_revenue_variance_evidence import (
     CurrencyComparability,
     classify_currency_comparability,
 )
+from app.services.governed_cross_dataset_rate import (
+    RateDatasetFields,
+    resolve_applicable_rate,
+)
 from app.services.governed_finding_publisher import (
     ContributingDataset,
     GovernedFindingRequest,
@@ -69,6 +73,10 @@ class DatasetConceptFields:
     invoice_amount_field: str | None
     cost_amount_field: str | None
     currency_field: str | None
+    contract_id_field: str | None = None
+    event_timestamp_field: str | None = None
+    unit_field: str | None = None
+    implicit_quantity_unit: str | None = None
     # P3.xxV.2D's existing correction path (see governed_finding_publisher.py):
     # when this dataset's raw-field Trust check is blocked (e.g. Trust's
     # early RawFieldCompletenessRule requires literal domain-registry
@@ -90,6 +98,7 @@ class _AmountLine:
     amount: Decimal
     currency: str | None
     basis: str
+    additional_dataset_ids: tuple[UUID, ...] = ()
 
 
 def _to_decimal(value: object) -> Decimal | None:
@@ -149,12 +158,35 @@ class _CollectedLines:
 
 
 def _collect_lines(
-    datasets: list[DatasetConceptFields], eligible_work_order_keys: set[str]
+    datasets: list[DatasetConceptFields],
+    eligible_work_order_keys: set[str],
+    rate_datasets: list[RateDatasetFields] | None = None,
 ) -> _CollectedLines:
     expected: dict[str, list[_AmountLine]] = {}
     actual: dict[str, list[_AmountLine]] = {}
     expected_side_has_governed_source = False
     actual_side_has_governed_source = False
+    rate_datasets = rate_datasets or []
+    contracts_by_work_order: dict[str, set[str]] = {}
+    for relationship_ds in datasets:
+        relationship_wo_field = relationship_ds.work_order_id_field
+        relationship_contract_field = relationship_ds.contract_id_field
+        if (
+            relationship_wo_field is not None
+            and relationship_contract_field is not None
+            and relationship_wo_field in relationship_ds.dataframe.columns
+            and relationship_contract_field in relationship_ds.dataframe.columns
+        ):
+            for _, relationship_row in relationship_ds.dataframe.iterrows():
+                wo = relationship_row[relationship_wo_field]
+                contract = relationship_row[relationship_contract_field]
+                if pd.notna(wo) and pd.notna(contract):
+                    contracts_by_work_order.setdefault(str(wo), set()).add(str(contract))
+    contract_by_work_order = {
+        wo: next(iter(contracts))
+        for wo, contracts in contracts_by_work_order.items()
+        if len(contracts) == 1
+    }
     for ds in datasets:
         wo_field = ds.work_order_id_field
         if wo_field is None or wo_field not in ds.dataframe.columns:
@@ -195,11 +227,13 @@ def _collect_lines(
             and unit_price_field is not None
             and quantity_field is None
         )
+        has_cross_dataset_rate_source = quantity_field is not None and bool(rate_datasets)
         if not (
             has_quantity_rate
             or has_cost_reference
             or has_invoice_amount
             or has_unit_price_as_flat_amount
+            or has_cross_dataset_rate_source
         ):
             continue
         # P3.xxI.2A Section 3/5/6: this dataset structurally resolved
@@ -208,7 +242,7 @@ def _collect_lines(
         # work order below. This is what lets an empty expected/actual
         # dict later be told apart from a side that never had governed
         # evidence anywhere in the case at all.
-        if has_quantity_rate or has_cost_reference:
+        if has_quantity_rate or has_cost_reference or has_cross_dataset_rate_source:
             expected_side_has_governed_source = True
         if has_invoice_amount or has_unit_price_as_flat_amount:
             actual_side_has_governed_source = True
@@ -234,6 +268,57 @@ def _collect_lines(
                             qty * price,
                             currency,
                             "quantity_x_unit_price",
+                        )
+                    )
+            elif quantity_field is not None and rate_datasets:
+                qty = _to_decimal(row[quantity_field])
+                contract_field = ds.contract_id_field
+                timestamp_field = ds.event_timestamp_field
+                row_unit_field = ds.unit_field
+                contract_key = (
+                    str(row[contract_field])
+                    if contract_field is not None
+                    and contract_field in df.columns
+                    and pd.notna(row[contract_field])
+                    else contract_by_work_order.get(wo_key)
+                )
+                event_at = (
+                    pd.to_datetime(str(row[timestamp_field]), errors="coerce", utc=True)
+                    if timestamp_field is not None and timestamp_field in df.columns
+                    else None
+                )
+                if event_at is not None and pd.isna(event_at):
+                    event_at = None
+                rate = (
+                    resolve_applicable_rate(
+                        rate_datasets,
+                        contract_key,
+                        event_at,
+                        ds.implicit_quantity_unit
+                        or (
+                            str(row[row_unit_field])
+                            if row_unit_field is not None
+                            and row_unit_field in df.columns
+                            and pd.notna(row[row_unit_field])
+                            else None
+                        ),
+                        currency,
+                    )
+                    if qty is not None and contract_key is not None
+                    else None
+                )
+                if qty is not None and rate is not None:
+                    expected.setdefault(wo_key, []).append(
+                        _AmountLine(
+                            ds.dataset_id,
+                            f"{ds.dataset_label} + {rate.dataset_label}",
+                            ds.trust_assessment_id,
+                            ds.canonical_evidence_completeness,
+                            f"{row_index}->{rate.row_reference}",
+                            qty * rate.amount,
+                            rate.currency or currency,
+                            "quantity_x_cross_dataset_rate",
+                            (rate.dataset_id,),
                         )
                     )
             if cost_amount_field is not None:
@@ -318,6 +403,7 @@ def run_revenue_amount_variance(
     datasets: list[DatasetConceptFields],
     eligible_work_order_keys: set[str],
     actor_user_id: UUID,
+    rate_datasets: list[RateDatasetFields] | None = None,
 ) -> list[Finding]:
     """Rule: REVENUE-AMOUNT-VARIANCE. For each governed WORK_ORDER entity
     (P3.xxE.3, same identity-confidence contract XDOM-A/MAINT-001 already
@@ -350,7 +436,7 @@ def run_revenue_amount_variance(
     "this side never resolved at all" state is now a hard stop."""
     if not datasets or not eligible_work_order_keys:
         return []
-    collected = _collect_lines(datasets, eligible_work_order_keys)
+    collected = _collect_lines(datasets, eligible_work_order_keys, rate_datasets)
     if not collected.expected_side_has_governed_source:
         return []  # NO_GOVERNED_EVIDENCE (expected side) -- never inferred as zero
     if not collected.actual_side_has_governed_source:
@@ -428,9 +514,11 @@ def run_revenue_amount_variance(
         primary_canonical_evidence_completeness = expected_lines[0].canonical_evidence_completeness
         if primary_trust_assessment_id is None:
             continue
-        contributing = {line.dataset_id for line in (*expected_lines, *actual_lines)} - {
-            primary_dataset_id
-        }
+        contributing = {
+            dataset_id
+            for line in (*expected_lines, *actual_lines)
+            for dataset_id in (line.dataset_id, *line.additional_dataset_ids)
+        } - {primary_dataset_id}
 
         finding = governed_finding_publisher.publish(
             db,
