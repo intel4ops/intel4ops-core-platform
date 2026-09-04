@@ -93,6 +93,20 @@ class DatasetConceptFields:
     # by the orchestration layer from the same semantic decisions
     # DatasetConceptFields itself was resolved from.
     canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None
+    # P3.xxI.3: True when the orchestration layer already determined this
+    # dataset is rate-card-shaped (a contract reference plus an explicit
+    # rate -- the same governed reference row that ALSO feeds
+    # rate_dataset_fields for this pass, never a per-row transactional
+    # one). Suppresses ONLY this module's own "no quantity/invoice/cost
+    # present, so read unit_price as a flat billed amount" fallback for
+    # this specific dataset -- that fallback exists for a genuinely
+    # different shape (an ambiguous bare "amount" column with no rate
+    # role at all) and was never meant to also re-read a governed RATE
+    # value a second time as an unrelated actual-billing total. A
+    # rate-card-shaped dataset that separately ALSO resolves a real
+    # invoice_amount or cost_amount concept is unaffected -- those paths
+    # do not depend on this flag.
+    is_rate_card_shaped: bool = False
 
 
 @dataclass(frozen=True)
@@ -228,11 +242,17 @@ def _collect_lines(
         # dataset, its value is treated as a flat billed amount, not a
         # per-unit rate -- the only interpretation left once "a rate
         # multiplying some quantity" is structurally ruled out.
+        # P3.xxI.3: a dataset the orchestration layer already identified
+        # as rate-card-shaped is excluded from this fallback -- its
+        # unit_price is a governed RATE (already feeding rate_datasets
+        # for this same pass), never re-read a second time as an
+        # unrelated flat billed total.
         has_unit_price_as_flat_amount = (
             not has_invoice_amount
             and not has_cost_reference
             and unit_price_field is not None
             and quantity_field is None
+            and not ds.is_rate_card_shaped
         )
         has_cross_dataset_rate_source = quantity_field is not None and bool(rate_datasets)
         if not (
