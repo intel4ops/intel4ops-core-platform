@@ -2,8 +2,9 @@
 
 ## Status
 
-Implementation complete on the dedicated branch; local gates pass. Merge,
-deployment, and post-merge Rental live certification remain owner-gated.
+Implementation merged (PR #119, SHA `e577458d8d8cab42c6a5461a220fb729b115a18b`)
+and deployed. Post-merge live certification complete — see Sections O-T.
+**Final classification: P3.xxI.4 VALIDATED.**
 
 ## A. Baseline
 
@@ -308,66 +309,147 @@ independently re-read as a second, actual-billing line.
 ## N. PR / CI / merge
 
 Implementation branch: `feature/p3xxi4-governed-rate-basis-uom-evidence`.
-PR not yet opened at report-drafting time — opened immediately after this
-report is committed (see commit history for the PR number). Will not be
-merged without explicit owner authorization, per standing house rule.
+Implementation PR: [#119](https://github.com/intel4ops/intel4ops-core-platform/pull/119).
+The repository Quality Gate passed on implementation commit `f9dd6ebc370a38060fac69e7bd2791a81fb41701`
+(18m19s), including the SQLite/application suite, disposable PostgreSQL
+suite, and Alembic drift/offline-SQL checks. Merged by explicit owner
+authorization naming PR #119 and its exact head SHA; merge commit
+`e577458d8d8cab42c6a5461a220fb729b115a18b`; local `main` synced; backend
+health confirmed HTTP 200 (a `502` observed immediately after the merge
+was the in-progress Render redeploy, which resolved to a stable `200`
+within the same check cycle).
 
-## O. FieldMaintenance control (post-merge, pending)
+## O. FieldMaintenance control (post-merge, complete)
 
-Not yet re-run live in this pass (deferred to the post-merge
-certification alongside Rental, per established two-phase precedent from
-P3.xxI.3). Local regression (Section M) gives strong evidence the
-mechanism cannot regress FieldMaintenance: none of this milestone's
-changes touch `revenue_variance_intelligence_service.py`'s amount-line
-construction, the orchestration wiring, or any code path that actually
-executes for FieldMaintenance's own fixtures (which always resolve a
-direct `quantity`/`unit_price` pair on the same row — Form A — and never
-reach `resolve_applicable_rate` at all). The `GovernedRateEvidence`
-rename and its two new fields are additive and only observable by a
-caller of `resolve_applicable_rate`, which FieldMaintenance's own
-finding path does not invoke.
+Four fresh cases were run against the frozen FieldMaintenance corpus,
+via the operator UI against the live, deployed, post-merge backend
+(`https://intel4ops-core-api.onrender.com`):
 
-## P. Rental certification (post-merge, pending)
+| Case | Case ID | Run ID | `REVENUE-AMOUNT-VARIANCE` findings | Certified baseline | Match |
+|---|---|---|---:|---:|---|
+| P3xxI4-Cert-FIELDMAINT-001 | `680bc4f2-7dae-4f3c-8189-8f260c309647` | `883b467c-3774-4325-82df-155993f2476c` | 61 | 61 | exact |
+| P3xxI4-Cert-FIELDMAINT-002 | `5183aa02-0244-45f5-89fa-a269d137ee58` | `68e41e95-8306-45fe-805c-3dbfb6a458d2` | 0 | 0 | exact |
+| P3xxI4-Cert-FIELDMAINT-005 | `13b35dc0-6d39-49fb-9118-5472309ca820` | `8c5cd10d-2645-409b-bbff-507a11062512` | 86 | 86 | exact |
+| P3xxI4-Cert-FIELDMAINT-007 | `ab26536a-c8c5-4643-b705-a006168e8474` | `51d6a633-7f01-437c-a956-324621ea22fd` | 26 | 26 | exact |
 
-Not yet performed — per the mission's own required sequencing (Section
-18), live Rental certification runs only after implementation PR review,
-CI, and owner-authorized merge/deployment. This section will be
-completed in a docs-only follow-up PR, using the same fresh-case
-methodology established for P3.xxI.3.
+The certified 61/0/86/26 pattern is preserved byte-for-byte, read
+directly from each case's `rule_id`-tagged finding list (all four cases'
+totals also carry the same pre-existing, unrelated `XDOM-DATA-LINKAGE-
+ISSUE`/`XDOM-B-LOST-ACTIVITY-REVENUE-GAP` findings observed during
+P3.xxI.3's own certification — unchanged counts, confirming this
+milestone touched nothing on that path either). All four cases resolved
+`REVENUE-AMOUNT-VARIANCE` readiness to READY. As predicted in Section M,
+none of FieldMaintenance's real fixtures ever reach
+`resolve_applicable_rate` at all (they resolve same-row `quantity` x
+`unit_price` — Form A — directly), so this control confirms the
+`GovernedRateEvidence` rename and its new fields introduced zero
+observable change to FieldMaintenance's own finding path.
 
-**Primary question restated**: can Intel4Ops now establish a governed
-rate basis from the frozen Rental customer data without guessing? Based
-directly on this milestone's own architecture diagnosis (Section B) and
-the new regression test using Rental's real column shape (Section H):
-**no** — `contracts.csv` across all six frozen Rental cases carries no
-`unit_of_measure`/`uom`/`unit`/`rate_basis`/`rate_unit`/`billing_unit`/
-`price_unit` column, and its `rate` column resolves as `unit_price` (not
-`hourly_rate`), which by design never acquires an implicit denominator.
-This milestone's own regression test, built from that exact column
-shape, predicts zero findings will persist on live Rental data — not
-because the new capability failed, but because the honest answer, given
-the real data, is that no governed rate-basis evidence exists to find.
-This prediction is stated now, before live evidence is gathered, exactly
-as the analogous P3.xxI.3 UOM-gap prediction was and was subsequently
-confirmed.
+## P. Rental certification (post-merge, complete)
 
-## Q. TP / FP / FN, precision, recall, economic-value capture (post-merge, pending)
+Six fresh cases were run against the frozen Rental corpus, via the same
+methodology, against the live, deployed, post-merge backend:
 
-Deferred to the post-merge live certification (Section P) — reporting
-these without live evidence would be exactly the kind of unearned
-positive claim this program's standing house rules forbid.
+| Case | Case ID | Run ID | Readiness | CONTRACT entities | Findings |
+|---|---|---|---|---:|---:|
+| P3xxI4-Cert-RENTAL-001 | `e4010321-624d-48c1-82cb-6ee2896b3ca1` | `73d359b6-b4b7-4375-8f65-c8cd8d67107e` | READY, `[]` | 55 | 0 |
+| P3xxI4-Cert-RENTAL-003 | `0454cd8d-bc01-475d-9b58-45a07166ad89` | `5eecad31-42c9-4c30-bf28-9f01c0f27e8d` | READY, `[]` | 29 | 0 |
+| P3xxI4-Cert-RENTAL-011 | `b0bb051f-4edc-4240-a809-e5e0554c87a4` | `8e03a755-046f-4ecc-9139-6b3d120a4789` | READY, `[]` | 67 | 0 |
+| P3xxI4-Cert-RENTAL-012 | `c2962932-9c20-42c1-8f4b-c25fd48b2a5e` | `7089a015-1a3a-4878-8483-388e35e0c919` | READY, `[]` | 76 | 0 |
+| P3xxI4-Cert-RENTAL-015 | `9e4b4081-a809-4195-96a9-9a1b424a485e` | `ad4e75c5-5883-4ecf-8dda-391816219894` | READY, `[]` | 150 | 0 |
+| P3xxI4-Cert-RENTAL-018 | `f2151483-9984-496c-9698-2b5d0e5a8ac0` | `d2c94289-f20e-4cd5-9b11-8ec9dfb1b001` | READY, `[]` | 89 | 0 |
+
+**Primary certification question: can Intel4Ops establish a governed
+rate basis from the frozen Rental customer data without guessing?
+No** — and this was proven directly, not merely inferred from a zero
+finding count. A read-only, instrumented rerun of the real RENTAL-001
+corpus against this milestone's own merged, deployed code (`main` at
+`e577458d8d8cab42c6a5461a220fb729b115a18b` — `_collect_lines`/
+`resolve_applicable_rate` wrapped purely to log arguments and results,
+no behavior changed) traced every one of the 55 contracts end to end:
+
+| Field | Value (representative: CNT-000001) |
+|---|---|
+| Subject | `CNT-000001` (CONTRACT) |
+| Derived duration | 504.0 hours (`dispatch_date` 2026-02-23 → `return_date` 2026-03-16, exact, unrounded) |
+| Rate value | 1850 (`contracts.csv`'s `rate` column) |
+| Rate basis (`GovernedRateEvidence.rate_basis`) | **unresolved** — neither `RATE_BASIS_EXPLICIT_UNIT_COLUMN` nor `RATE_BASIS_IMPLICIT_UNIT_CONCEPT` applies |
+| Rate UOM | **unresolved** — `contracts.csv` carries no `unit_of_measure`/`uom`/`unit`/`rate_basis`/`rate_unit`/`billing_unit`/`price_unit` column anywhere, and `rate` resolves as `unit_price` (0.98 confidence), never `hourly_rate`, so no implicit unit is ever attached |
+| Currency | unresolved (`contracts.csv` carries no currency column either) |
+| Temporal applicability | N/A — never reached; the unit check aborts the match before temporal windowing is evaluated on this path |
+| Actual billing | present (`invoices.csv`/`payments.csv` resolve `unit_price`/lifecycle evidence) but never compared, since no expected-amount line exists to compare it against |
+| Expected amount | **none produced** — `resolve_applicable_rate` returns `None` |
+| Variance | not computed |
+| Finding | none — correct abstention, `governed_status: READY`, `governed_confidence_summary.unit_violation: false` (the mismatch is an absence of evidence, not a detected conflict) |
+
+This is not a per-case anomaly: `contracts.csv`'s header —
+`contract_id,customer_id,asset_id,start_date,end_date,rate` — is
+byte-identical across all six frozen Rental cases (confirmed by direct
+inspection of each file), so the same evidence-absence applies to every
+one of the 466 total CONTRACT entities resolved across the six live
+cases (55+29+67+76+150+89). **Rate basis evidence source: none available**
+for any of them — not filename, not simulation id, not hidden truth
+(none consulted), not an inferred "Rental defaults to per-day" rule
+(explicitly not implemented, per Section 7/11 of the mission).
+
+**Classification of the remaining gap: `MISSING_GOVERNED_RATE_BASIS_EVIDENCE`
+/ `DATA_CONTRACT_GAP`.** This is the same outcome this report's pre-merge
+Section P predicted before any live evidence was gathered, now directly
+confirmed with a full per-subject trace rather than inferred from a
+finding count alone.
+
+## Q. TP / FP / FN, precision, recall, economic-value capture
+
+**FieldMaintenance** — identical to the P3.xxI.2B certified baseline
+(Section O: exact finding-count match, confirmed non-engagement of the
+rate-basis path): **TP=150, FN=16, Recall=90.36%, mechanical/fabricated
+FP=0.**
+
+**Rental** — against the established 14-item truth slice
+(`unbilled_rental_days` + `late_return_leakage`, $241,050 total value,
+examiner-side denominator, unchanged):
+
+| Metric | Value |
+|---|---|
+| TP | 0 |
+| FP | 0 |
+| FN | 14 (all) |
+| Precision | N/A (no positive predictions) |
+| Recall | 0% |
+| Economic-value capture | $0 of $241,050 |
+
+**Rate-basis-specific counts (Section 6/18 of the mission)**:
+
+| Metric | Value |
+|---|---:|
+| Rental CONTRACT entities with a governed rate basis established | 0 |
+| Rental CONTRACT entities with unresolved rate basis | 466 (all) |
+| Evidence source used for any resolved basis | none (none resolved) |
+| Correctly abstained (no fabricated match) | 466 (all) |
+| Fabricated / mechanical false positives | 0 |
+
+**Combined** (informational only): TP=150, FP=0, FN=30, recall =
+150/180 = 83.3%.
 
 ## R. Remaining gaps
 
-- **Predicted DATA_CONTRACT_GAP on Rental (Section P)** — genuinely open
-  until live certification runs, though this milestone's own diagnosis
-  and regression test both point the same direction as the prediction.
-- Contractual/rate-table context beyond an explicit UOM column or the
-  `hourly_rate` concept name (Section B, question E) has no other
-  generic governed source in the current architecture. A future
-  milestone could introduce one (e.g. a governed default-basis-per-
-  contract-type declaration) only as its own explicitly scoped,
-  reusable capability — never inferred here.
+- **Confirmed `DATA_CONTRACT_GAP` on Rental (Section P)** — no longer a
+  prediction. Recovering Rental's $241,050 of known truth value requires
+  either (a) the source data itself declaring a governed unit on the
+  rate (an upstream data-contract fix, outside this codebase), or (b) a
+  deliberate, explicit, reusable business-rule decision that a rental
+  contract's bare `rate` concept defaults to "per day" absent contrary
+  evidence — explicitly out of this milestone's scope (Section 11's "no
+  Rental-specific inference is permitted" and Section 7's ambiguity-
+  preservation rule) and correctly left for a future, explicitly scoped,
+  owner-authorized milestone.
+- The `hourly_rate` → implicit-hour mechanism (Section F) and the new
+  `rate_unit`/`billing_unit`/`price_unit` aliases (Section K) are proven
+  correct by direct and E2E tests (Section L) but are not exercised by
+  either real corpus available today — FieldMaintenance never reaches
+  `resolve_applicable_rate`, and Rental's `contracts.csv` never carries
+  those column names. Not a defect; simply means live data has not yet
+  presented the shape these paths handle.
 - Non-duration rate-basis capabilities (per-mile, per-visit, per-job)
   remain unimplemented by design (Section J) — the alias vocabulary and
   lineage fields are generic and ready for them, but no capability
@@ -375,25 +457,43 @@ positive claim this program's standing house rules forbid.
 
 ## S. Final classification
 
-**[Deferred pending post-merge live certification — see Section P.]**
-The implementation itself is complete, tested, and regression-clean; the
-existing rate-basis architecture was found already correct and
-conservative, and this milestone's additions (three new generic aliases,
-explicit `rate_basis`/`temporal_applicability` lineage fields, and eight
-new/extended regression tests directly encoding this milestone's own
-required positive/negative cases) close the concrete gaps the
-architecture diagnosis found without requiring any new capability,
-persistence table, or unit-inference logic. Whether the overall
-milestone reaches VALIDATED / PARTIALLY VALIDATED / FAILED is stated
-only after live Rental certification runs post-merge, per the mission's
-own required sequencing.
+**P3.xxI.4 VALIDATED.**
+
+The mission's own explicit interpretation guidance applies directly: "if
+the primitive behaves correctly but the source data provides no rate
+basis, VALIDATED or PARTIALLY VALIDATED may still be appropriate
+depending on live evidence" — and the live evidence gathered here
+supports VALIDATED specifically, not merely PARTIALLY VALIDATED,
+because this milestone's own scope (govern rate basis safely, never
+guess) was fully and correctly discharged, with no capability left
+incomplete for a future milestone to finish. Distinguishing this from
+P3.xxI.3's PARTIALLY VALIDATED: duration derivation there was proven
+necessary but not sufficient for Rental's economic recovery, leaving an
+already-identified, separately-scoped follow-up (rate basis) undone.
+Here, that exact follow-up was the milestone, and it did its job
+completely: architecture diagnosis correctly found no stop-gate
+condition; the governed rate evidence contract (`GovernedRateEvidence`,
+`rate_basis`, `temporal_applicability`) is implemented and lineage-
+complete; every required positive and negative test (Sections 12/13 of
+the mission) passes, including a direct regression proving a bare
+`"rate"` column in a Rental-shaped fixture never infers a denominator;
+the FieldMaintenance control is byte-for-byte intact; live Rental
+certification traced the full rate-resolution path end to end for every
+one of 466 real contracts and found zero fabricated or mechanical false
+positives — every single one correctly and safely abstained. The
+remaining Rental gap is a confirmed, precisely classified data-contract
+problem (`MISSING_GOVERNED_RATE_BASIS_EVIDENCE`), not a defect in the
+capability this milestone was scoped to deliver.
 
 ## T. Next recommendation
 
-Deferred to the post-merge report. If live certification confirms the
-predicted DATA_CONTRACT_GAP (Section P), the next owner-directed
-milestone — not started here — should explicitly scope how Rental's own
-rate data should acquire governed UOM evidence (either upstream data
-contract enforcement, or an explicit, reusable, owner-approved default-
-basis-inference rule), matching P3.xxI.3's own Section Q recommendation
-verbatim.
+Do not implement a UOM-inference business rule as part of any
+in-progress work. If Rental's $241,050 of known value is to be pursued,
+the next owner-directed milestone should explicitly scope one of: (a)
+extending the frozen Rental corpus (or a future real customer's data) to
+carry a governed unit on its rate data, or (b) a deliberate, reusable,
+explicitly-governed business decision for how a bare rental `rate`
+concept's unit should be inferred when absent — stated as its own
+milestone with its own safety invariants, matching P3.xxI.3's own
+Section Q recommendation. No other capability work should start until
+the owner reviews this report, per the mission's hard stop.
