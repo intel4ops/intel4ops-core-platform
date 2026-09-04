@@ -2,11 +2,14 @@
 
 ## P3.xxI.5 INTELLIGENCE BREADTH RECONCILIATION
 
-**Status:** Phase 1 complete; owner review required before capability implementation
+**Status:** Capability #1 implemented and live-certified; P3.xxI.5A FAILED
 
-**Reconciled baseline:** `origin/main` at `a9609e36b95df0d85fabf04cc51a6a1673eae0a5`
+**Reconciled baseline:** pre-implementation `origin/main` at
+`a9609e36b95df0d85fabf04cc51a6a1673eae0a5`; implementation merged at
+`cf25345411bbb11305503e45e0d290a7625ecbba`
 
-**Scope:** architecture, prioritization, and frozen Wave 1 evidence reconciliation only
+**Scope:** architecture, prioritization, frozen Wave 1 evidence reconciliation,
+and Capability #1 certification closeout only
 
 ## Executive decision
 
@@ -22,11 +25,13 @@ Contract/Rate Compliance is the strongest next capability because it:
 - has a known, safe Rental boundary: the 22 Rental truths cannot be evaluated while governed rate-basis evidence is absent, and the engine already abstains rather than fabricating a rate;
 - generalizes across labor, equipment, rental, and other governed rate schedules without Rental-specific logic.
 
-This is a recommendation only. No capability implementation is authorized by this report.
+That recommendation was subsequently implemented as P3.xxI.5A. Its live
+certification result is recorded below; no Capability #2 work is authorized
+by this closeout.
 
-## Reconciled current state
+## Reconciled pre-implementation state
 
-The capability registry currently contains four packs:
+Before P3.xxI.5A, the capability registry contained four packs:
 
 1. `MAINT-001-REPEATED-FAILURE`
 2. `XDOM-A-ASSET-FAILURE-LOST-ACTIVITY`
@@ -35,9 +40,9 @@ The capability registry currently contains four packs:
 
 Only Revenue Amount/Billing Variance has a clean, end-to-end graduation against a matching frozen truth family. The other three packs are reusable portfolio assets but should not be counted as fully graduated breadth for the ten-family program: XDOM-A has ambiguous alignment to the frozen downtime truth mechanism, while MAINT-001 and XDOM-B have no clean matching Wave 1 truth items.
 
-### Honest breadth measures
+### Honest pre-implementation breadth measures
 
-| Measure | Current result | Meaning |
+| Measure | Pre-implementation result | Meaning |
 |---|---:|---|
 | Registered/implemented portfolio breadth | 4/10 = **40.00%** | Four of the ten target areas have a registered pack with at least partial overlap. |
 | Graduated family breadth | 1/10 = **10.00%** | One target truth family has completed matching end-to-end certification. |
@@ -82,7 +87,7 @@ Status vocabulary is intentionally constrained to the program's required classif
 | 1 | Revenue Amount/Billing Variance | 166 | **GRADUATED** | Invoice linkage; governed duration/rate; amount, currency, UOM; readiness; stable identity; lineage | Rental governed rate-basis evidence remains absent | Medium | High | High | Low under current abstention rules | High for Rental rate basis | Can surface rate-driven amount differences | High; completed | Preserve baseline; use as control and shared arithmetic layer |
 | 2 | Revenue/Billing Timeliness | 21 | **FOUNDATIONAL_GAP_REQUIRED** | Event/completed timestamps; invoice entity; temporal linkage; lineage | Dedicated governed invoice/billing timestamp and governed allowed-delay policy | Medium | High | Medium | High if a delay threshold is invented | High | May share invoice/subject linkage with amount and existence | Low today | Add semantic and policy-evidence contracts before build |
 | 3 | Maintenance Repeat Visit/Rework | 76 | **FOUNDATIONAL_GAP_REQUIRED** | Asset/work-order identity; event timestamps; relationship graph; repeat detection patterns | Governed proximity window and evidence distinguishing rework from legitimate subsequent work | Medium-high | High | High | Medium-high | Related to MAINT-001, but not the same truth mechanism | Low today | Define policy evidence and intervention equivalence before build |
-| 4 | Contract/Rate Compliance | 48 | **READY_TO_BUILD** | Applicable-rate resolver; temporal windows; duration; quantity; amount; currency/UOM; invoice/contract linkage; lineage | Exact attributable billed scope for actual-rate derivation; Rental rate basis is a known data gap | Medium | High | High | Low with strict scope and abstention | Medium; high for Rental | Overlaps economically with amount variance but explains a distinct rate breach | High for FieldMaintenance; safe abstention test for Rental | **Capability #1** |
+| 4 | Contract/Rate Compliance | 48 | **PARTIALLY_IMPLEMENTED** | Registered pack; explicit actual-rate semantics; applicable-rate resolver; temporal windows; duration; quantity; currency/UOM; subject-aware identity; lineage | Live Wave 1 has no explicit actual-rate field; implementation omitted governed attributable amount/quantity derivation; Rental also lacks rate basis/UOM and currency | Medium | High | High | Low with strict abstention | High | Overlaps economically with amount variance but explains a distinct rate breach | Live certification completed at 0 TP / 48 FN | Do not graduate; owner review required |
 | 5 | Labor Productivity | 324 | **HIGH_DESIGN_RISK** | Person/work-order identity; duration; quantity; timestamps; relationship graph | Governed productive/nonproductive time, shift/capacity, overtime entitlement, work attribution | High | High | Very high | High | High | May share labor amounts with Revenue Amount | Medium-low | Defer until labor evidence model is governed |
 | 6 | Process Cycle-Time/Schedule Adherence | 77 | **FOUNDATIONAL_GAP_REQUIRED** | Scheduled/completed timestamps; asset/work-order linkage; duration arithmetic | Governed schedule tolerance, expected occurrence semantics, cancellation/deferral evidence | Medium-high | High | High | High | High | Shares temporal concepts with Timeliness and Repeat Visit | Low today | Establish a reusable policy/tolerance contract first |
 | 7 | Material/Inventory Reconciliation | 7 | **DEFER** | Part identity; quantity; UOM; work-order relationships | Governed movement types, independent book/physical quantities, location/custody, conversion rules | High | Medium | Low | High | High | Limited overlap with unbilled parts; different control objective | Low | Defer; low breadth return before material ledger evidence exists |
@@ -284,8 +289,47 @@ Revenue/Billing Timeliness should be reconsidered only after the platform has a 
 
 **Recommended Capability #1:** Contract/Rate Compliance
 
-**Implementation status:** NOT STARTED
+**Implementation status:** MERGED; LIVE CERTIFICATION FAILED
 
 **Owner gate:** REQUIRED
 
 P3.xxI.5 Phase 1 stops here. No application code, truth, semantic threshold, existing capability, frontend, Wave 2, E.6, or E.7 change is included or authorized.
+
+## Capability #1 post-merge scorecard
+
+P3.xxI.5A merged through PR #121 at
+`cf25345411bbb11305503e45e0d290a7625ecbba`. Production health returned
+HTTP 200. Ten fresh runs reused the exact certified orchestrated Wave 1
+cases; Revenue Amount remained 61/0/86/26 with zero mechanical regression.
+
+The Contract/Rate family denominator remained frozen at 48 items before
+scoring: 26 FieldMaintenance `contract_rate_mismatch` items worth $7,372.32
+and 22 Rental `rental_rate_mismatch` items worth $416,247.40. Every live
+case was structurally blocked on `measure:actual_applied_rate`, so no
+candidate and no dedicated finding was produced.
+
+| Measure | Before P3.xxI.5A | After P3.xxI.5A | Delta |
+|---|---:|---:|---:|
+| Registered portfolio breadth | 4/10 = **40.00%** | 5/10 = **50.00%** | +10.00 pp |
+| Graduated-family breadth | 1/10 = **10.00%** | 1/10 = **10.00%** | none |
+| Graduated truth-family addressability | 166/788 = **21.07%** | 166/788 = **21.07%** | none |
+| Certified TP coverage | 150/788 = **19.04%** | 150/788 = **19.04%** | none |
+| Observed authored-value capture | $83,263.29 / $2,285,738.56 = **3.64%** | $83,263.29 / $2,285,738.56 = **3.64%** | none |
+
+Capability #1 itself scored TP=0, FP=0, FN=48, recall=0%, precision N/A,
+economic-value capture $0/$423,619.72, and mechanical/fabricated FP=0.
+Registered breadth increased because the pack exists, but graduated and
+observed coverage did not increase because it did not activate on Wave 1.
+
+The dominant FieldMaintenance failure is `CAPABILITY_MODEL_GAP`: the
+architecture program called for an exact attributable billed-scope path,
+while the implementation accepts only an explicit actual-rate concept and
+does not derive an applied rate from governed invoice amount and billable
+scope. The Rental failure remains `SEMANTIC_EVIDENCE_GAP` /
+`DATA_CONTRACT_GAP`: no explicit actual rate, rate basis/UOM, or currency is
+present. Full evidence, per-case run IDs, and regression reconciliation are
+in `docs/p3xxi5a-contract-rate-compliance.md`.
+
+**P3.xxI.5A FAILED**
+
+Capability #2 must not start without a new owner authorization.
