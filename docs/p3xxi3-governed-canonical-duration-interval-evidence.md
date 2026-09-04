@@ -2,8 +2,38 @@
 
 ## Status
 
-Implementation complete on the dedicated branch; local gates pass. Merge,
-deployment, and post-merge Rental live certification remain owner-gated.
+Implementation merged (PR #117, SHA `98013e10fb1e21d58881b8907453c9291a7ed406`)
+and deployed. Post-merge live certification complete — see Sections L-Q.
+**Final classification: P3.xxI.3 PARTIALLY VALIDATED.**
+
+### Certification recovery note
+
+The first live-certification attempt on this milestone hit two apparent
+blockers left over from a deploy restart: five `AnalysisCaseRun` rows stuck
+`RUNNING`, and terminal Rental runs landing on `review_required` due to
+`DOMAIN_REVIEW_REQUIRED` on `payments.csv`/`field_tickets.csv`/`maintenance.csv`.
+Diagnosis (no code change) found both harmless to certification:
+
+- The stuck runs reconciled cleanly to the existing `INTERRUPTED` terminal
+  state via the pre-existing lease/heartbeat lazy-reconciliation path
+  (`mark_stale_if_needed`, triggered by polling `GET .../runs/{id}/status`)
+  — an existing, designed recovery mechanism, not a defect. One real but
+  non-blocking gap was found and is recorded in Section O: the parent
+  `AnalysisCase.status` is never updated when a run reconciles this way, so
+  it can show a stale `"running"` label after its run is already terminal.
+- `DOMAIN_REVIEW_REQUIRED` (`app/services/domain_detection_service.py`,
+  a stateless, case-local, deterministic function of column headers) does
+  **not** gate pipeline execution — `any_review_required` is read only once,
+  at the very end of `execute()`, purely to choose the cosmetic final
+  status label. Every stage (semantic interpretation, entity resolution,
+  relationship discovery, readiness, `REVENUE-AMOUNT-VARIANCE`) already ran
+  to completion before that flag is read. Confirmed empirically: terminal
+  `review_required` Rental runs showed `governed_status: READY` and fully
+  resolved entities, and a `review_required` FieldMaintenance control
+  produced 63 real findings under the identical label.
+
+Fresh certification cases were created per Section 1 of the recovery
+mission rather than reusing these partially-executed ones (Section L).
 
 ## A. Baseline
 
@@ -328,71 +358,200 @@ suite, Alembic drift/offline-SQL checks, and release-certification artifact.
 The PR will not be merged without explicit owner authorization, per standing
 house rule.
 
-## L. Live Rental certification (post-merge, pending)
+## L. Live Rental certification (post-merge, complete)
 
-Not yet performed — per the mission's own required sequencing, live
-Rental certification runs only after implementation PR review, CI, and
-owner-authorized merge/deployment. This section will be completed in a
-docs-only follow-up PR.
+Six fresh, single-mode-avoided (orchestrated) cases were created against
+the frozen Rental customer-data corpus (`assets.csv`, `contracts.csv`,
+`customers.csv`, `dispatch.csv`, `field_tickets.csv`, `fuel.csv`,
+`invoices.csv`, `maintenance.csv`, `payments.csv` per case) — the same
+files used for the P3.xxI.2C certification, none of the partially-executed
+cases from the recovery diagnosis were reused:
 
-**Primary question restated**: does `measure:quantity` cease to be the
-blocker because governed duration evidence is now available? Given the
-readiness-gate change is purely additive (two new `alternative_
-canonical_measure_sets` entries) and Rental's real `dispatch.csv`
-already carries `dispatch_id`/`contract_id`/`asset_id`/`dispatch_date`/
-`return_date` on one row — the same shape proven live in this
-milestone's own synthetic E2E tests (`occurred_at`/`completed_at`
-co-located with a contract reference) — readiness is expected to clear
-this specific gate. Whether EXECUTION then produces genuine TP against
-Rental's own truth corpus is a separate question this report does not
-assume the answer to.
+| Case | Case ID | Run ID | `REVENUE-AMOUNT-VARIANCE` readiness | Entities (CONTRACT/EVENT/ASSET/CUSTOMER) | Findings |
+|---|---|---|---|---|---|
+| P3xxI3-Cert-RENTAL-001 | `b3d92fcd-b6d3-4bb5-b509-8c5efd74ce82` | `e5b504f9-16dd-4b35-8f57-4bca66a0715e` | READY, `governed_missing_summary: []` | 55/55/41/24 | 0 |
+| P3xxI3-Cert-RENTAL-003 | `26a01e92-ac73-4cf5-a423-e6fcfce7c45b` | `07062dbf-9eb0-48a6-863e-9c408afda8dd` | READY, `[]` | 29/29/40/12 | 0 |
+| P3xxI3-Cert-RENTAL-011 | `eaf51ec0-6222-41d1-a6a1-80a20a532976` | `ee7684b6-c61e-4323-a493-17703538f264` | READY, `[]` | 67/67/45/30 | 0 |
+| P3xxI3-Cert-RENTAL-012 | `6fb5fb3d-3091-49f6-a265-7fcc303fa7ad` | `6637cd7d-fc3e-40a6-bca9-9254153cb302` | READY, `[]` | 76/76/45/30 | 0 |
+| P3xxI3-Cert-RENTAL-015 | `5b46a8e1-0830-4e5c-a919-2d54a2d657ea` | `01ce34cc-db06-417b-8b9b-8e19ce7845ba` | READY, `[]` | 150/150/351/60 | 0 |
+| P3xxI3-Cert-RENTAL-018 | `14ec0983-c25d-4af7-b7c6-7fe70d59d5d4` | `280c7f5b-6e26-4a8c-8921-8174484f161d` | READY, `[]` | 89/89/50/40 | 0 |
 
-**Honest expectation carried forward from P3.xxI.2C, now testable
-directly**: Rental's own hidden truth (`unbilled_rental_days`,
-`late_return_leakage`) computes its expected amount from `rental_days` —
-elapsed time between `dispatch_date` and `return_date`, exactly what
-this milestone's primitive derives. Whether the RATE side (`contracts.csv`,
-`contract_id,customer_id,asset_id,start_date,end_date,rate` — no
-explicit unit/UOM column anywhere) can supply the governed "day" signal
-Section E's swap logic requires is a genuinely open, previously-flagged
-question (P3.xxI.2C's own report named this exact UOM_GAP risk). If no
-governed day signal exists in Rental's real data, this milestone
-predicts execution will still correctly abstain (hours-denominated
-duration against an implicitly-day-priced rate, no fabricated match) —
-a UOM_GAP outcome, not a duration-evidence failure, and precisely the
-kind of "architecturally different outcome" Section 18's own taxonomy
-exists to classify. This is stated now, before live evidence is
-gathered, exactly as the analogous prediction was in P3.xxI.2C.
+**Primary question A — is `REVENUE-AMOUNT-VARIANCE` READY?** Yes, all six
+cases, `governed_missing_summary` empty on every one. `measure:quantity`
+has ceased to be the blocker P3.xxI.2C identified — CONTRACT/EVENT entity
+resolution (from P3.xxI.2C) and the new governed-duration measure path
+(this milestone) compose correctly.
+
+**Primary question B — is governed duration evidence actually created and
+consumed?** Yes, proven with a full per-row trace, not inferred from
+readiness alone. A local, read-only instrumented rerun of the real
+RENTAL-001 corpus (`app/services/analysis_case_orchestration_service.py`'s
+unmodified `execute()`, run against the identical frozen files, with the
+service's own `_collect_lines`/`resolve_applicable_rate` functions wrapped
+purely to log their arguments and return values — no behavior changed)
+shows:
+
+| contract_id | `dispatch_date` | `return_date` | derived duration (hours) |
+|---|---|---|---:|
+| CNT-000001 | 2026-02-23 | 2026-03-16 | 504.0 (= 21 days × 24, exact) |
+| CNT-000002 | 2026-08-10 | 2026-09-04 | 600.0 (= 25 days × 24, exact) |
+| CNT-000003 | 2026-04-19 | 2026-05-05 | 384.0 (= 16 days × 24, exact) |
+| CNT-000004 | 2026-08-01 | 2026-08-17 | 384.0 (= 16 days × 24, exact) |
+| CNT-000005 | 2026-04-03 | 2026-05-05 | 768.0 (= 32 days × 24, exact) |
+
+Every value is the exact, unrounded elapsed interval (Section E's "23
+hours ≠ 1 day" invariant holds — nothing here silently became a day
+count). `dispatch.csv`'s `DatasetConceptFields.quantity_field` resolves
+to the derived-duration column
+(`__p3xxi3_derived_duration_hours__event_timestamp__completed_timestamp`),
+`contract_id_field='contract_id'`, and `event_timestamp_field` resolves
+to `dispatch_date` — the derived quantity, its subject linkage, and its
+temporal-applicability anchor all thread correctly into
+`resolve_applicable_rate(rate_datasets, contract_key='CNT-000001',
+event_at=2026-02-23T00:00:00Z, unit='hour', currency=None)` for every one
+of the 55 contracts. **This is direct proof the primitive works live on
+real production-shaped data and that its output reaches the amount
+calculation** — the question is not whether duration evidence exists, but
+what happens next.
+
+**Primary question C — if READY but 0 findings, where exactly does
+candidate generation stop?** At the rate-unit safety check, on every
+single subject, for an identical reason across all six cases:
+`resolve_applicable_rate` returns `None` every time because
+`contracts.csv`'s `rate` column carries **no governed unit-of-measure
+anywhere** — `unit_field=None`, `implicit_unit=None` on the resolved
+`RateDatasetFields`. `governed_cross_dataset_rate.py`'s pre-existing,
+unmodified-by-this-milestone unit policy is strict-equality-or-abstain
+(`if expected_unit is None or rate_unit is None or expected_unit !=
+rate_unit: continue`) — unlike currency, "both sides unknown" is
+deliberately never treated as compatible for units. With `rate_unit`
+always `None` here, the gate abstains on every contract, regardless of
+what unit the duration side requests. This was independently confirmed
+structural, not an accident of one case: `contracts.csv`'s header —
+`contract_id,customer_id,asset_id,start_date,end_date,rate` — is
+byte-identical across all six frozen Rental cases (`RENTAL-001/003/011/
+012/015/018`); none of the six declares a `unit`/`day`/`days` column
+anywhere in the corpus, so the day-unit swap this milestone added
+(Section G) never has a governed signal to trigger on, and the fallback
+hour-denominated request can never match the rate's permanently-unknown
+unit.
+
+**Full traced path** (Section 4's required trace, RENTAL-001/CNT-000001):
+CONTRACT subject `CNT-000001` → interval endpoints `dispatch_date`=
+2026-02-23, `return_date`=2026-03-16 (both `event_timestamp`/
+`completed_timestamp`, AUTO_ACCEPTED) → derived duration 504.0 hours
+(exact) → quantity field wired to the derived column, requested unit
+`hour` (no day-swap trigger available) → applicable rate lookup against
+`contracts.csv`'s `rate=1850` for `CNT-000001` → **abstains**: rate's own
+unit is ungoverned, strict policy refuses to guess it → no expected-amount
+line produced → `actual` side (from `invoices.csv`/`payments.csv`) never
+gets compared against anything → no `_AmountLine` on either side for this
+subject → no finding. This is the same outcome, for the same reason, on
+every one of the 55+ contracts across all six cases — a systemic,
+corpus-wide gap in the RATE data's own governed evidence, not a per-case
+anomaly and not a defect in the duration primitive.
+
+This is precisely the outcome this report's pre-merge Section L predicted
+before any live evidence was gathered.
 
 ## M. FieldMaintenance control
 
-Not yet re-run live in this pass (deferred to the post-merge
-certification alongside Rental, per established two-phase precedent).
-Local regression (Section I) confirms the mechanism cannot regress
-FieldMaintenance: `is_rate_card_shaped` only suppresses a fallback that
-was never reachable for FieldMaintenance's own fixtures, and the derived-
-duration path is only ever attempted as the last resort after a direct
-`quantity`/`duration_hours` column is confirmed absent — FieldMaintenance
-always has one.
+Four fresh cases were run against the frozen FieldMaintenance corpus
+(`assets.csv`, `customers.csv`, `field_tickets.csv`, `invoices.csv`,
+`labor_entries.csv`, `maintenance_events.csv`, `parts_usage.csv`,
+`payments.csv`, `service_contracts.csv`, `sites.csv`, `technicians.csv`,
+`work_orders.csv`) and their `REVENUE-AMOUNT-VARIANCE`-specific finding
+counts read directly from each case's finding list (`rule_id` field),
+not the case's raw total finding count (which also includes unrelated
+cross-domain rules, see below):
+
+| Case | Case ID | Run ID | `REVENUE-AMOUNT-VARIANCE` findings | P3.xxI.2B certified baseline | Match |
+|---|---|---|---:|---:|---|
+| P3xxI3-Cert-FIELDMAINT-001 | `cfdcee5e-6304-44d0-b23c-f8c79262a950` | `903ccdf3-1e6b-42e0-856d-4d9c3408888e` | 61 | 61 | exact |
+| P3xxI3-Cert-FIELDMAINT-002 | `a5728fc4-ffe0-4b88-9e17-d2ee90f61178` | `dd6a2453-547d-45cc-9d32-08ba84ff5560` | 0 | 0 | exact |
+| P3xxI3-Cert-FIELDMAINT-005 | `49b76d10-b65b-4182-b66f-ae699fedb712` | `99738054-bb94-4191-bc2b-cc46a125bcf5` | 86 | 86 | exact |
+| P3xxI3-Cert-FIELDMAINT-007 | `a1246e06-ed50-4a3b-b4c4-d48d0c873ee5` | `72d429f3-b9c6-4ed3-bc3b-a83dc417fe83` | 26 | 26 | exact |
+
+The certified 61/0/86/26 pattern is preserved byte-for-byte. Each case's
+total finding count (as read from the case's full finding list, all
+rules combined) is 1-2 higher than these numbers — traced per-`rule_id`
+and confirmed to come entirely from `XDOM-DATA-LINKAGE-ISSUE` (all four
+cases) and, on FIELDMAINT-001 only, one additional
+`XDOM-B-LOST-ACTIVITY-REVENUE-GAP` finding. Both are unrelated
+cross-domain rules outside `REVENUE-AMOUNT-VARIANCE`'s scope and outside
+this milestone's change surface — not a regression, and not something
+this milestone touched. This matches the local regression evidence from
+Section I: `is_rate_card_shaped` only suppresses a fallback that was
+never reachable for FieldMaintenance's own fixtures, and the derived-
+duration path only engages as a last resort when a direct `quantity`/
+`duration_hours` column is absent — FieldMaintenance always has one, so
+the new P3.xxI.3 code paths are structurally never exercised for these
+four cases at all.
 
 ## N. TP / FP / FN, precision, recall, economic-value capture
 
-Deferred to the post-merge live certification (Section L) — reporting
-these without live evidence would be exactly the kind of unearned
-positive claim this program's standing house rules forbid.
+**FieldMaintenance** — `REVENUE-AMOUNT-VARIANCE` finding counts and
+subjects are identical to the P3.xxI.2B certified run (Section M); the
+new duration-evidence code paths are confirmed never exercised for this
+corpus (same reasoning as Section M). On that basis the certified
+P3.xxI.2B scoring stands unchanged: **TP=150, FN=16, Recall=90.36%,
+mechanical/fabricated FP=0**. This is carried forward from identical
+finding-set identity plus a proven non-engagement of this milestone's
+new code, not an independently re-run scoring pass against hidden truth
+in this session — stated explicitly rather than implied, per this
+program's standing rule against unearned positive claims.
+
+**Rental** — zero findings on all six cases (Section L) against the
+established 14-item truth slice (`unbilled_rental_days` +
+`late_return_leakage`, $241,050 total value, P3.xxI.2C's own examiner-
+side denominator, unchanged here):
+
+| Metric | Value |
+|---|---|
+| TP | 0 |
+| FP | 0 (no fabricated or mechanical false positives — the pipeline abstained everywhere, exactly as Section 4's safety invariant requires) |
+| FN | 14 (all) |
+| Precision | N/A (no positive predictions) |
+| Recall | 0% |
+| Economic-value capture | $0 of $241,050 |
+
+**Combined** (informational only, FieldMaintenance + Rental): TP=150,
+FP=0, FN=30, recall = 150/180 = 83.3%.
 
 ## O. Remaining gaps
 
-- The UOM_GAP risk named in Section L — genuinely open until live
-  certification runs.
+- **UOM_GAP on Rental's rate data (Section L, confirmed, not
+  hypothetical).** `contracts.csv`'s `rate` column carries no governed
+  unit anywhere in the frozen corpus. Recovering Rental's $241,050 of
+  known truth value requires either (a) the source data itself declaring
+  a governed unit on the rate, or (b) a deliberate, explicit, reusable
+  business-rule decision that a rental contract's bare `rate` concept
+  defaults to "per day" absent contrary evidence — the latter is an
+  explicit business-rule/UOM-inference decision squarely inside this
+  mission's own Section 12 boundary ("do NOT implement ... unless already
+  governed and reusable") and is correctly left for a future, explicitly
+  scoped milestone rather than invented here.
+- **`AnalysisCase.status` staleness after lazy stale-run reconciliation**
+  (found during recovery diagnosis, Section "Certification recovery
+  note"): `mark_stale_if_needed` updates `AnalysisCaseRun.status` but
+  never the parent `AnalysisCase.status`, so a case whose only run
+  reconciles via this path can show a stale `"running"` label
+  indefinitely. Does not affect any read API (all are `run_id`-scoped)
+  and does not block certification; recorded as a non-blocking platform
+  note per this session's explicit instruction, not fixed here.
+- **`review_required` status/messaging implies gating it doesn't do**
+  (same recovery note): `findings_availability()`'s message text ("Findings
+  not produced because ... review is required") can read as causal even
+  when review-required and finding-count are unrelated for that run, as
+  demonstrated directly in this certification. A future UI/messaging
+  clarification is a reasonable follow-up; not a P3.xxI.3 blocker.
 - Cross-dataset subject-linked duration (`resolve_cross_dataset_duration`)
   is implemented and unit-tested (Section H) but not wired into the live
   `REVENUE-AMOUNT-VARIANCE` orchestration path — Rental's own
   `dispatch.csv` carries both endpoints on one row, so same-row
   derivation is sufficient for the certification target; wiring the
   cross-dataset path into a live capability is deferred to whichever
-  future capability actually needs it (Section 13E's own "if supported
-  by existing architecture" framing, satisfied at the primitive level).
+  future capability actually needs it.
 - `DECLARED_INTERVAL_PAIRS` covers two pairs (event→completed,
   scheduled→completed). A future capability needing a different
   generic pairing (e.g. a dedicated "response received"/"response
@@ -401,15 +560,44 @@ positive claim this program's standing house rules forbid.
 
 ## P. Final classification
 
-**[Deferred — see Section L.]** Per the mission's own required
-sequencing, this milestone's final classification is stated only after
-live Rental certification runs post-merge. The implementation itself is
-complete, tested, and regression-clean; whether the overall milestone
-reaches VALIDATED / PARTIALLY VALIDATED / FAILED depends on live
-evidence not yet gathered.
+**P3.xxI.3 PARTIALLY VALIDATED.**
+
+The generic duration primitive itself is proven live, correct, and safe:
+it computes the exact, unrounded elapsed interval on real production-
+shaped data (Section L's per-row trace), correctly threads that value
+through governed subject linkage and temporal applicability into the
+existing rate-resolution path, eliminates the exact `measure:quantity`
+blocker P3.xxI.2C identified (readiness went from BLOCKED to READY with
+an empty missing-summary on all six Rental cases), and introduces zero
+regression on the FieldMaintenance control (Section M, byte-for-byte
+match) and zero fabricated or mechanical false positives anywhere
+(Section N). Every one of Section 4's safety invariants held under live
+production data: no case fabricated a duration, and every case that
+could not safely produce one abstained rather than guessed.
+
+It is not VALIDATED outright because a separate, reusable, correctly-
+diagnosed downstream gap (Section O's UOM_GAP on Rental's rate data —
+pre-existing infrastructure this milestone did not create and correctly
+did not bypass) prevents any material economic-value recovery for
+Rental in this pass: 0 of $241,050 known truth value, TP=0/FN=14. Per
+this mission's own Section 8 definitions, that combination — the
+primitive works live, but a reusable downstream model gap prevents
+material recovery — is PARTIALLY VALIDATED, not VALIDATED, and the zero
+Rental recall is not itself grounds for FAILED given it stems entirely
+from an explainable, upstream-data gap outside this milestone's
+boundary rather than any defect in the duration evidence contract,
+temporal semantics, or safety invariants this milestone owns.
 
 ## Q. Next recommendation
 
-Deferred to the post-merge report, once live Rental evidence
-(specifically: does a governed day-unit signal exist anywhere in
-Rental's real rate data) is known.
+Do not implement a UOM-inference business rule as part of any
+in-progress work. If Rental's $241,050 of known value is to be pursued,
+the next owner-directed milestone should explicitly scope one of: (a)
+extending the frozen Rental corpus (or a future real customer's data) to
+carry a governed unit on its rate data, or (b) a deliberate, reusable,
+explicitly-governed business decision for how a bare rental `rate`
+concept's unit should be inferred when absent — stated as its own
+milestone with its own safety invariants, not folded into a duration-
+evidence primitive that has now done its job correctly. No other
+capability work should start until the owner reviews this report, per
+the mission's hard stop.
