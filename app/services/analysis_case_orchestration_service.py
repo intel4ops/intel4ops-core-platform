@@ -83,6 +83,10 @@ from app.services.canonical_temporal_evidence import (
     RawTemporalFieldCandidate,
     resolve_canonical_temporal_evidence,
 )
+from app.services.contract_rate_compliance_service import (
+    AppliedRateDatasetFields,
+    run_contract_rate_compliance,
+)
 from app.services.cross_domain_intelligence_service import (
     run_asset_failure_to_lost_activity,
     run_lost_activity_to_revenue_gap,
@@ -170,6 +174,7 @@ _GOVERNED_RULE_CODES = frozenset(
         # member here does not change how XDOM-A or XDOM-B are themselves
         # evaluated; each pack is judged independently.
         "REVENUE-AMOUNT-VARIANCE",
+        "CONTRACT-RATE-COMPLIANCE",
     }
 )
 
@@ -1310,6 +1315,7 @@ class AnalysisCaseOrchestrationService:
             # build_case_capability_index/evaluate_readiness path, never a
             # rule-code branch. XDOM-A/XDOM-B's own evaluation is untouched.
             "REVENUE-AMOUNT-VARIANCE",
+            "CONTRACT-RATE-COMPLIANCE",
         }
         evaluated = 0
         agree_count = 0
@@ -2409,6 +2415,274 @@ class AnalysisCaseOrchestrationService:
                     "finding_count": rev_var_finding_count,
                     "eligible_subject_count": rev_var_eligible_subject_count,
                     "candidate_dataset_count": rev_var_candidate_dataset_count,
+                    "subject_entity_types_evaluated": list(candidate_subject_entity_types),
+                },
+            )
+
+        # --- P3.xxI.5A: CONTRACT-RATE-COMPLIANCE ---
+        # Independent sibling to REVENUE-AMOUNT-VARIANCE. It compares an
+        # explicit governed actual_applied_rate directly with one
+        # governed applicable contract rate. No invoice total is divided,
+        # and no amount-variance finding is relabeled.
+        rate_comp_governed_ready = (
+            governed_status_by_rule.get("CONTRACT-RATE-COMPLIANCE") == "READY"
+        )
+        if rate_comp_governed_ready:
+            rate_comp_pack = default_intelligence_pack_registry().get("CONTRACT-RATE-COMPLIANCE")
+            if rate_comp_pack is not None and rate_comp_pack.alternative_canonical_entity_sets:
+                candidate_subject_entity_types = tuple(
+                    sorted(entity_set)[0]
+                    for entity_set in rate_comp_pack.alternative_canonical_entity_sets
+                )
+            elif rate_comp_pack is not None:
+                candidate_subject_entity_types = tuple(
+                    sorted(rate_comp_pack.required_canonical_entities)
+                )
+            else:
+                candidate_subject_entity_types = (EntityType.WORK_ORDER.value,)
+
+            claimed_actual_rate_dataset_ids: set[UUID] = set()
+            rate_comp_finding_count = 0
+            rate_comp_eligible_subject_count = 0
+            rate_comp_candidate_dataset_count = 0
+            rate_comp_abstention_scope_count = 0
+
+            for subject_entity_type in candidate_subject_entity_types:
+                eligible_subjects = (
+                    eligible_entity_keys(
+                        entity_candidates,
+                        subject_entity_type,
+                        rate_comp_pack.minimum_entity_identity_confidence,
+                    )
+                    if rate_comp_pack is not None
+                    else set()
+                )
+                if not eligible_subjects:
+                    continue
+                subject_concept_codes = (
+                    default_canonical_concept_registry.identifier_concept_codes_for_entity_type(
+                        subject_entity_type
+                    )
+                )
+                if not subject_concept_codes:
+                    continue
+
+                applied_rate_datasets: list[AppliedRateDatasetFields] = []
+                contract_rate_datasets: list[RateDatasetFields] = []
+                newly_claimed_actual_rate_ids: set[UUID] = set()
+
+                for cd in case_datasets:
+                    raw_df = canonical_frames.get(cd.id)
+                    if raw_df is None:
+                        continue
+                    contract_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "contract_id"
+                    )
+                    unit_price_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "unit_price"
+                    )
+                    hourly_rate_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "hourly_rate"
+                    )
+                    actual_rate_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "actual_applied_rate"
+                    )
+                    unit_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "unit_of_measure"
+                    )
+                    currency_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "currency_code"
+                    )
+                    event_timestamp_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "event_timestamp"
+                    )
+                    invoice_id_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "invoice_id"
+                    )
+                    status_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "status"
+                    )
+                    decisions = (
+                        semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                        if semantic_outcome is not None
+                        else []
+                    )
+                    selected_concepts = {
+                        decision.selected_concept
+                        for decision in decisions
+                        if decision.selected_concept is not None
+                    }
+
+                    # An explicit hourly_rate is reference-rate evidence
+                    # by semantic definition. A generic unit_price is
+                    # accepted as a contract rate only on a non-billing,
+                    # non-actual-rate row; this prevents an invoice line's
+                    # own unit price from being recycled as both sides of
+                    # the comparison.
+                    is_contract_rate_shaped = contract_field is not None and (
+                        hourly_rate_field is not None
+                        or (
+                            unit_price_field is not None
+                            and actual_rate_field is None
+                            and invoice_id_field is None
+                            and status_field is None
+                        )
+                    )
+                    if is_contract_rate_shaped:
+                        assert contract_field is not None
+                        contract_rate_datasets.append(
+                            RateDatasetFields(
+                                dataset_id=cd.dataset_id,
+                                dataset_label=cd.source_label,
+                                dataframe=raw_df,
+                                contract_id_field=contract_field,
+                                rate_field=hourly_rate_field or unit_price_field or "",
+                                effective_from_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "effective_from_timestamp"
+                                ),
+                                effective_to_field=self._resolve_canonical_concept_field(
+                                    cd.id, semantic_outcome, "effective_to_timestamp"
+                                ),
+                                unit_field=unit_field,
+                                currency_field=currency_field,
+                                implicit_unit="hour" if hourly_rate_field is not None else None,
+                                temporal_authority_unresolved=(
+                                    (
+                                        "effective_from_timestamp" in selected_concepts
+                                        and self._resolve_canonical_concept_field(
+                                            cd.id,
+                                            semantic_outcome,
+                                            "effective_from_timestamp",
+                                        )
+                                        is None
+                                    )
+                                    or (
+                                        "effective_to_timestamp" in selected_concepts
+                                        and self._resolve_canonical_concept_field(
+                                            cd.id,
+                                            semantic_outcome,
+                                            "effective_to_timestamp",
+                                        )
+                                        is None
+                                    )
+                                ),
+                            )
+                        )
+
+                    if cd.id in claimed_actual_rate_dataset_ids and actual_rate_field is not None:
+                        continue
+                    df, subject_field, subject_evidence_concept = (
+                        self._resolve_subject_field_for_dataset(
+                            cd,
+                            raw_df,
+                            case_datasets,
+                            canonical_frames,
+                            semantic_outcome,
+                            subject_concept_codes,
+                            allow_bridge=actual_rate_field is not None,
+                        )
+                    )
+                    if subject_field is None or subject_evidence_concept is None:
+                        continue
+
+                    quantity_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "quantity"
+                    )
+                    if quantity_field is None:
+                        quantity_field = self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, "duration_hours"
+                        )
+
+                    rate_required_concepts = {
+                        concept
+                        for concept, field in {
+                            "actual_applied_rate": actual_rate_field,
+                            "unit_of_measure": unit_field,
+                            "currency_code": currency_field,
+                            "contract_id": contract_field,
+                            "event_timestamp": event_timestamp_field,
+                            "quantity": quantity_field,
+                        }.items()
+                        if field is not None
+                    }
+                    if (
+                        self._resolve_canonical_concept_field(
+                            cd.id, semantic_outcome, subject_evidence_concept
+                        )
+                        is not None
+                    ):
+                        rate_required_concepts.add(subject_evidence_concept)
+                    concept_evidence = [
+                        RawFieldSemanticEvidence(
+                            canonical_field=decision.selected_concept,
+                            source_field=decision.source_field,
+                            machine_status=decision.status,
+                            machine_selected_concept=decision.selected_concept,
+                            machine_confidence=decision.confidence,
+                        )
+                        for decision in decisions
+                        if decision.selected_concept in rate_required_concepts
+                    ]
+                    evidence_completeness = evaluate_canonical_evidence_completeness(
+                        frozenset(rate_required_concepts), concept_evidence
+                    )
+                    applied_rate_datasets.append(
+                        AppliedRateDatasetFields(
+                            dataset_id=cd.dataset_id,
+                            dataset_label=cd.source_label,
+                            dataframe=df,
+                            trust_assessment_id=trust_assessment_ids.get(cd.id),
+                            subject_id_field=subject_field,
+                            actual_rate_field=actual_rate_field,
+                            contract_id_field=contract_field,
+                            unit_field=unit_field,
+                            currency_field=currency_field,
+                            event_timestamp_field=event_timestamp_field,
+                            quantity_field=quantity_field,
+                            canonical_evidence_completeness=evidence_completeness,
+                        )
+                    )
+                    if actual_rate_field is not None:
+                        newly_claimed_actual_rate_ids.add(cd.id)
+
+                findings = run_contract_rate_compliance(
+                    db,
+                    organization_id,
+                    applied_rate_datasets,
+                    eligible_subjects,
+                    actor_user_id,
+                    contract_rate_datasets,
+                    subject_entity_type=subject_entity_type.lower(),
+                )
+                for finding in findings:
+                    published_finding_ids.add(finding.id)
+                claimed_actual_rate_dataset_ids |= newly_claimed_actual_rate_ids
+                rate_comp_finding_count += len(findings)
+                rate_comp_eligible_subject_count += len(eligible_subjects)
+                rate_comp_candidate_dataset_count += len(applied_rate_datasets)
+                rate_comp_abstention_scope_count += max(
+                    0,
+                    sum(
+                        len(dataset.dataframe)
+                        for dataset in applied_rate_datasets
+                        if dataset.actual_rate_field is not None
+                    )
+                    - len(findings),
+                )
+
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "cross_domain_intelligence",
+                StageEventStatus.COMPLETED.value,
+                {
+                    "rule": "CONTRACT-RATE-COMPLIANCE",
+                    "finding_count": rate_comp_finding_count,
+                    "eligible_subject_count": rate_comp_eligible_subject_count,
+                    "candidate_dataset_count": rate_comp_candidate_dataset_count,
+                    "abstention_scope_count": rate_comp_abstention_scope_count,
                     "subject_entity_types_evaluated": list(candidate_subject_entity_types),
                 },
             )
