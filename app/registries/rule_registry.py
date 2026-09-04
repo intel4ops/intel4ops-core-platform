@@ -193,5 +193,15 @@ def default_rule_registry() -> RuleRegistry:
                 ("expected_minus_actual_amount", "tolerance"),
                 analytical_level="arithmetic",
             ),
+            RuleDefinition(
+                "CONTRACT-RATE-COMPLIANCE",
+                "1.0",
+                "Contract rate mismatch",
+                "An explicitly applied transaction rate differs from the uniquely applicable "
+                "governed contract rate for the same subject, UOM, currency, and time.",
+                RuleOperator.NOT_EQUALS,
+                ("actual_applied_rate", "applicable_contract_rate"),
+                analytical_level="arithmetic",
+            ),
         ]
     )

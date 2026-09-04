@@ -344,4 +344,49 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             unit_behavior="unit_aware",
         )
     )
+    registry.register(
+        IntelligencePackDefinition(
+            pack_code="RATE-COMP",
+            rule_code="CONTRACT-RATE-COMPLIANCE",
+            version="1.0",
+            required_domains=frozenset(),
+            required_canonical_fields=frozenset(),
+            required_entities=frozenset(),
+            supported_industry_contexts=None,
+            currency_required=False,
+            output_domains=frozenset({"revenue", "contract"}),
+            # The governed billable subject contract is shared with
+            # REVENUE-AMOUNT-VARIANCE, but this pack has independent
+            # readiness, execution, finding identity, and certification.
+            required_canonical_entities=frozenset({EntityType.WORK_ORDER.value}),
+            alternative_canonical_entity_sets=(
+                frozenset({EntityType.WORK_ORDER.value}),
+                frozenset({EntityType.CONTRACT.value}),
+            ),
+            minimum_entity_identity_confidence=0.70,
+            confidence_aggregation_policy="max",
+            # A structural case-level gate: an explicit actual applied
+            # rate and one governed contract-rate concept must exist.
+            # Candidate execution below remains stricter and abstains
+            # unless linkage, rate basis/UOM, currency, and temporal
+            # applicability are compatible on the same comparison.
+            required_canonical_measures=frozenset({"actual_applied_rate", "unit_price"}),
+            alternative_canonical_measure_sets=(
+                frozenset({"actual_applied_rate", "unit_price"}),
+                frozenset({"actual_applied_rate", "hourly_rate"}),
+            ),
+            currency_behavior="currency_agnostic",
+            unit_behavior="unit_aware",
+            evidence_requirements=frozenset(
+                {
+                    "governed_subject_linkage",
+                    "governed_contract_rate",
+                    "governed_actual_applied_rate",
+                    "compatible_rate_basis",
+                    "compatible_currency",
+                    "unambiguous_temporal_applicability",
+                }
+            ),
+        )
+    )
     return registry

@@ -27,6 +27,7 @@ _PRODUCTION_CAPABILITY_FILES = [
     _REPO_ROOT / "app" / "intelligence_packs" / "shadow_comparison.py",
     _REPO_ROOT / "app" / "services" / "intelligence_readiness_service.py",
     _REPO_ROOT / "app" / "services" / "case_capability_index_service.py",
+    _REPO_ROOT / "app" / "services" / "contract_rate_compliance_service.py",
     _REPO_ROOT / "app" / "models" / "intelligence_activation.py",
 ]
 

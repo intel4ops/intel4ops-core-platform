@@ -458,6 +458,7 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
                 frozenset({"duration_hours"}),
                 frozenset({"unit_price"}),
                 frozenset({"hourly_rate"}),
+                frozenset({"actual_applied_rate"}),
             ),
         )
     )
@@ -573,6 +574,34 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
     )
     registry.register(
         CanonicalConcept(
+            concept_code="actual_applied_rate",
+            concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
+            description=(
+                "Rate explicitly billed, charged, invoiced, or otherwise applied to a "
+                "transaction; distinct from a contract, reference, or standard rate."
+            ),
+            # P3.xxI.5A: deliberately explicit aliases only. A bare
+            # "rate", "price", "amount", or "unit_price" remains under
+            # the pre-existing concepts and can never become actual-rate
+            # evidence merely because a new capability wants one.
+            aliases=frozenset(
+                {
+                    "actual_applied_rate",
+                    "applied_rate",
+                    "billed_rate",
+                    "charged_rate",
+                    "invoiced_rate",
+                    "invoice_unit_rate",
+                }
+            ),
+            expected_value_patterns=frozenset({"digits", "decimal"}),
+            compatible_dataset_roles=frozenset(
+                {"invoice", "ledger", "transaction", "labor", "work_order"}
+            ),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
             concept_code="invoice_amount",
             concept_type=CanonicalConceptType.MONETARY_AMOUNT.value,
             description="Total monetary amount billed on a document, in a specific currency.",
@@ -619,6 +648,29 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_type=CanonicalConceptType.CODE.value,
             description="ISO-style currency code governing an adjacent monetary amount.",
             aliases=frozenset({"currency", "currency_code", "ccy"}),
+            compatible_dataset_roles=frozenset(
+                {
+                    "invoice",
+                    "ledger",
+                    "contract",
+                    "reference",
+                    "labor",
+                    "inventory",
+                    "transaction",
+                    "work_order",
+                }
+            ),
+            # P3.xxI.5A: a currency code beside a monetary amount/rate is
+            # governed local semantic evidence for which value it
+            # qualifies. This is generic financial-document structure,
+            # not a source or capability-specific shortcut.
+            alternative_sibling_concept_sets=(
+                frozenset({"actual_applied_rate"}),
+                frozenset({"unit_price"}),
+                frozenset({"hourly_rate"}),
+                frozenset({"invoice_amount"}),
+                frozenset({"cost_amount"}),
+            ),
         )
     )
     registry.register(
