@@ -28,15 +28,37 @@ class RateDatasetFields:
     temporal_authority_unresolved: bool = False
 
 
+#: The only two governed sources this module accepts for a rate's
+#: denominator unit: an explicit unit_of_measure-concept column present
+#: on the rate dataset's own row, or a caller-supplied `implicit_unit`
+#: (today, the orchestration layer supplies this only from the strongly-
+#: governed hourly_rate concept's own name inherently encoding "hour" --
+#: this module itself stays agnostic to which concept the caller derived
+#: it from). Never filename, simulation id, customer/domain name, or an
+#: assumption based on expected findings.
+RATE_BASIS_EXPLICIT_UNIT_COLUMN = "EXPLICIT_UNIT_COLUMN"
+RATE_BASIS_IMPLICIT_UNIT_CONCEPT = "IMPLICIT_UNIT_CONCEPT"
+
+
 @dataclass(frozen=True)
-class ApplicableRate:
+class GovernedRateEvidence:
+    """One governed, applicable rate observation -- provenance-complete by
+    construction. P3.xxI.4: renamed from ApplicableRate and extended with
+    `rate_basis` (WHICH governed evidence source supplied the denominator
+    -- never left implicit) and `temporal_applicability` (the exact
+    effective-date window this rate row itself declared, or None when the
+    row declares no boundary at all) so a caller building finding lineage
+    never has to re-derive either fact from the raw dataframe."""
+
     dataset_id: UUID
     dataset_label: str
     row_reference: str
     amount: Decimal
     unit: str | None
+    rate_basis: str | None
     currency: str | None
     contract_key: str
+    temporal_applicability: tuple[pd.Timestamp | None, pd.Timestamp | None] | None
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -88,15 +110,19 @@ def resolve_applicable_rate(
     at: pd.Timestamp | None,
     quantity_unit: str | None,
     quantity_currency: str | None,
-) -> ApplicableRate | None:
-    """Return exactly one safe applicable rate, otherwise abstain.
+) -> GovernedRateEvidence | None:
+    """Return exactly one safe, governed applicable rate, otherwise abstain.
 
     Missing temporal evidence is allowed only when the rate row declares no
     temporal boundary.  Multiple equally applicable rows, unknown/mismatched
-    units, and known currency mismatch all abstain.
+    units, and known currency mismatch all abstain. A denominator unit that
+    resolves from neither the row's own explicit unit column nor the
+    dataset's governed `implicit_unit` is `None` and therefore never
+    matches -- RATE VALUE WITHOUT GOVERNED RATE BASIS is never a usable
+    economic rate.
     """
 
-    matches: list[ApplicableRate] = []
+    matches: list[GovernedRateEvidence] = []
     expected_unit = _normalized_unit(quantity_unit)
     for dataset in rate_datasets:
         if dataset.temporal_authority_unresolved:
@@ -129,11 +155,19 @@ def resolve_applicable_rate(
                 (start is not None and at < start) or (end is not None and at > end)
             ):
                 continue
-            rate_unit = _normalized_unit(
+            explicit_unit_text = (
                 _text(row[unit_field])
                 if unit_field is not None and unit_field in frame.columns
-                else dataset.implicit_unit
+                else None
             )
+            rate_basis = (
+                RATE_BASIS_EXPLICIT_UNIT_COLUMN
+                if explicit_unit_text is not None
+                else (
+                    RATE_BASIS_IMPLICIT_UNIT_CONCEPT if dataset.implicit_unit is not None else None
+                )
+            )
+            rate_unit = _normalized_unit(explicit_unit_text or dataset.implicit_unit)
             if expected_unit is None or rate_unit is None or expected_unit != rate_unit:
                 continue
             raw_currency = (
@@ -154,14 +188,16 @@ def resolve_applicable_rate(
             if amount is None or amount < 0:
                 continue
             matches.append(
-                ApplicableRate(
+                GovernedRateEvidence(
                     dataset.dataset_id,
                     dataset.dataset_label,
                     str(index),
                     amount,
                     rate_unit,
+                    rate_basis,
                     rate_currency,
                     contract_key,
+                    (start, end) if start is not None or end is not None else None,
                 )
             )
     return matches[0] if len(matches) == 1 else None

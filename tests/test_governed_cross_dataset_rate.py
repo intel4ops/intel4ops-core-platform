@@ -3,7 +3,9 @@ from uuid import uuid4
 import pandas as pd
 
 from app.services.governed_cross_dataset_rate import (
-    ApplicableRate,
+    RATE_BASIS_EXPLICIT_UNIT_COLUMN,
+    RATE_BASIS_IMPLICIT_UNIT_CONCEPT,
+    GovernedRateEvidence,
     RateDatasetFields,
     resolve_applicable_rate,
 )
@@ -24,7 +26,7 @@ def _rates(rows: list[dict[str, object]], *, implicit_unit: str | None = None) -
     )
 
 
-def _resolve(datasets: list[RateDatasetFields], **overrides: object) -> ApplicableRate | None:
+def _resolve(datasets: list[RateDatasetFields], **overrides: object) -> GovernedRateEvidence | None:
     arguments: dict[str, object] = {
         "contract_key": "C-1",
         "at": pd.Timestamp("2026-06-01", tz="UTC"),
@@ -54,6 +56,43 @@ def test_b_cross_dataset_quantity_and_applicable_rate_resolves() -> None:
     )
     assert rate is not None
     assert rate.amount == 125
+    # P3.xxI.4 positive test E: full lineage preserved -- WHICH governed
+    # source supplied the denominator, and the exact effective-date window
+    # this specific row declared, both survive on the returned evidence
+    # rather than requiring the caller to re-derive them from the raw
+    # dataframe.
+    assert rate.rate_basis == RATE_BASIS_EXPLICIT_UNIT_COLUMN
+    assert rate.temporal_applicability == (
+        pd.Timestamp("2026-01-01", tz="UTC"),
+        pd.Timestamp("2026-12-31", tz="UTC"),
+    )
+    assert rate.dataset_id is not None
+    assert rate.row_reference == "0"
+
+
+def test_rate_basis_implicit_unit_concept_recorded_as_such() -> None:
+    # P3.xxI.4 positive test C: a strongly-governed concept whose own name
+    # inherently encodes the denominator (the orchestration layer's
+    # hourly_rate -> "hour" wiring) is recorded as IMPLICIT_UNIT_CONCEPT,
+    # never silently indistinguishable from an explicit column.
+    row = {"agreement": "C-1", "price": 125, "currency": "USD"}
+    rate = _resolve([_rates([row], implicit_unit="hour")])
+    assert rate is not None
+    assert rate.rate_basis == RATE_BASIS_IMPLICIT_UNIT_CONCEPT
+    assert rate.temporal_applicability is None
+
+
+def test_no_unit_anywhere_abstains_with_no_rate_basis() -> None:
+    # P3.xxI.4 negative test A: a bare rate with no UOM evidence anywhere
+    # (no explicit column value, no implicit_unit) never resolves.
+    dataset = RateDatasetFields(
+        dataset_id=uuid4(),
+        dataset_label="bare-rate-reference",
+        dataframe=pd.DataFrame([{"agreement": "C-1", "price": 125, "currency": "USD"}]),
+        contract_id_field="agreement",
+        rate_field="price",
+    )
+    assert _resolve([dataset]) is None
 
 
 def test_c_multiple_equally_applicable_rates_abstain() -> None:

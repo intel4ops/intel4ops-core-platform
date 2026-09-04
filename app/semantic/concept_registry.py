@@ -410,7 +410,26 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             concept_code="unit_of_measure",
             concept_type=CanonicalConceptType.CODE.value,
             description="Unit governing a quantity or per-unit rate.",
-            aliases=frozenset({"unit_of_measure", "uom", "unit", "rate_basis"}),
+            # P3.xxI.4: rate_unit/billing_unit/price_unit added -- generic
+            # spellings for a rate table's own denominator column (e.g. a
+            # rate card's "billing_unit" or "price_unit" field), never a
+            # capability-specific alias. Safe for the same reason the
+            # original four aliases are: AUTO_ACCEPTED still requires
+            # co-location with a quantity/duration/rate concept via
+            # alternative_sibling_concept_sets below -- a bare column
+            # named "price_unit" with no such neighbor still can't clear
+            # the confidence bar on its own.
+            aliases=frozenset(
+                {
+                    "unit_of_measure",
+                    "uom",
+                    "unit",
+                    "rate_basis",
+                    "rate_unit",
+                    "billing_unit",
+                    "price_unit",
+                }
+            ),
             compatible_dataset_roles=frozenset(
                 {
                     "invoice",
