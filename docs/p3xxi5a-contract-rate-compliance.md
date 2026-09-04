@@ -247,7 +247,7 @@ Rental remains expected to abstain where the customer/source data lacks governed
 ## Implementation PR and CI state
 
 - Branch: `feature/p3xxi5a-contract-rate-compliance`
-- Implementation commit: pending
+- Implementation commit: `4863a56`
 - Pull request: pending
 - CI: pending
 - Merge authorization: not granted
