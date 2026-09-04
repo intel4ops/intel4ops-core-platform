@@ -320,8 +320,13 @@ reset produces a clean result, recorded in Section J below).
 ## K. PR / CI / merge
 
 Implementation branch: `feature/p3xxi3-governed-duration-evidence`.
-Implementation PR is not yet open. It will not be merged without explicit
-owner authorization, per standing house rule.
+Implementation PR: [#117](https://github.com/intel4ops/intel4ops-core-platform/pull/117).
+The repository Quality Gate passed on implementation commit `007eddc`
+([run 33819620029](https://github.com/intel4ops/intel4ops-core-platform/actions/runs/33819620029))
+in 20m36s, including the SQLite/application suite, disposable PostgreSQL
+suite, Alembic drift/offline-SQL checks, and release-certification artifact.
+The PR will not be merged without explicit owner authorization, per standing
+house rule.
 
 ## L. Live Rental certification (post-merge, pending)
 
