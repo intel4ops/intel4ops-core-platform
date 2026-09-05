@@ -97,12 +97,14 @@ def test_capability_shadow_evaluation_stage_completes_and_persists_decisions(
     rule_codes = {d.rule_code for d in decisions}
     # P3.xxI.2: REVENUE-AMOUNT-VARIANCE is an additive third governed rule,
     # evaluated through the same generic shadow/readiness machinery as
-    # XDOM-A/XDOM-B -- expected here, not a regression.
+    # XDOM-A/XDOM-B. P3.xxI.5B adds MAINTENANCE-REPEAT-VISIT through that
+    # same governed machinery -- both are expected here, not regressions.
     assert rule_codes <= {
         "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
         "XDOM-B-LOST-ACTIVITY-REVENUE-GAP",
         "REVENUE-AMOUNT-VARIANCE",
         "CONTRACT-RATE-COMPLIANCE",
+        "MAINTENANCE-REPEAT-VISIT",
     }
     for decision in decisions:
         assert decision.governed_status in ("DISABLED", "READY", "PARTIAL", "BLOCKED")

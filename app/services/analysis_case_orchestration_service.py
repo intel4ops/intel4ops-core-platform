@@ -93,6 +93,11 @@ from app.services.cross_domain_intelligence_service import (
 )
 from app.services.entity_resolution_service import DatasetEntityInput, entity_resolution_service
 from app.services.governed_cross_dataset_rate import RateDatasetFields
+from app.services.maintenance_repeat_visit_service import (
+    InterventionDatasetFields,
+    build_repeat_visit_pairs,
+    run_maintenance_repeat_visit,
+)
 from app.services.revenue_variance_intelligence_service import (
     DatasetConceptFields,
     run_revenue_amount_variance,
@@ -175,6 +180,7 @@ _GOVERNED_RULE_CODES = frozenset(
         # evaluated; each pack is judged independently.
         "REVENUE-AMOUNT-VARIANCE",
         "CONTRACT-RATE-COMPLIANCE",
+        "MAINTENANCE-REPEAT-VISIT",
     }
 )
 
@@ -1316,6 +1322,7 @@ class AnalysisCaseOrchestrationService:
             # rule-code branch. XDOM-A/XDOM-B's own evaluation is untouched.
             "REVENUE-AMOUNT-VARIANCE",
             "CONTRACT-RATE-COMPLIANCE",
+            "MAINTENANCE-REPEAT-VISIT",
         }
         evaluated = 0
         agree_count = 0
@@ -1803,6 +1810,32 @@ class AnalysisCaseOrchestrationService:
             if cd.id in canonical_frames and cd.detected_domain:
                 by_domain.setdefault(cd.detected_domain, []).append(cd)
 
+        # Governed capability readiness is evaluated once before any
+        # governed domain or cross-domain capability executes.
+        governed_status_by_rule: dict[str, str] = {}
+        try:
+            governed_status_by_rule = self._evaluate_intelligence_capabilities(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                by_domain,
+                trust_assessment_ids,
+                canonical_frames,
+                semantic_outcome,
+                raw_dfs_for_semantic,
+            )
+        except Exception as exc:  # noqa: BLE001 -- safe default is no governed activation
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "capability_shadow_evaluation",
+                StageEventStatus.FAILED.value,
+                {"error": str(exc)},
+            )
+
         published_finding_ids: set[UUID] = set()
         for cd in by_domain.get("maintenance", []):
             trust_id = trust_assessment_ids.get(cd.id)
@@ -1839,40 +1872,124 @@ class AnalysisCaseOrchestrationService:
                     {"pack": "MAINT", "error": str(exc)},
                 )
 
-        # --- CROSS-DOMAIN INTELLIGENCE ---
-        maint_datasets = by_domain.get("maintenance", [])
-        ops_datasets = by_domain.get("operations", [])
-        revenue_datasets = by_domain.get("revenue", [])
+        # --- P3.xxI.5B: MAINTENANCE REPEAT VISIT / REWORK ---
+        # Independent from MAINT-001. This path pairs governed interventions
+        # by asset + exact activity category and reports only their observed
+        # interval; no repeat-policy window or violation is invented.
+        repeat_visit_ready = governed_status_by_rule.get("MAINTENANCE-REPEAT-VISIT") == "READY"
+        if repeat_visit_ready:
+            repeat_pack = default_intelligence_pack_registry().get("MAINTENANCE-REPEAT-VISIT")
+            repeat_eligible_assets = (
+                eligible_entity_keys(
+                    entity_candidates,
+                    EntityType.ASSET.value,
+                    repeat_pack.minimum_entity_identity_confidence,
+                )
+                if repeat_pack is not None
+                else set()
+            )
+            intervention_datasets: list[InterventionDatasetFields] = []
+            for cd in by_domain.get("maintenance", []):
+                trust_id = trust_assessment_ids.get(cd.id)
+                frame = canonical_frames.get(cd.id)
+                if trust_id is None or frame is None:
+                    continue
+                subject_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "asset_id"
+                )
+                intervention_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "work_order_id"
+                )
+                timestamp_concept = "completed_timestamp"
+                timestamp_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, timestamp_concept
+                )
+                if timestamp_field is None:
+                    timestamp_concept = "event_timestamp"
+                    timestamp_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, timestamp_concept
+                    )
+                activity_category_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "activity_category"
+                )
+                if (
+                    subject_field is None
+                    or intervention_field is None
+                    or timestamp_field is None
+                    or activity_category_field is None
+                ):
+                    continue
+                repeat_required_concepts = {
+                    "asset_id",
+                    "work_order_id",
+                    timestamp_concept,
+                    "activity_category",
+                }
+                decisions = (
+                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                    if semantic_outcome is not None
+                    else []
+                )
+                evidence_completeness = evaluate_canonical_evidence_completeness(
+                    frozenset(repeat_required_concepts),
+                    [
+                        RawFieldSemanticEvidence(
+                            canonical_field=decision.selected_concept,
+                            source_field=decision.source_field,
+                            machine_status=decision.status,
+                            machine_selected_concept=decision.selected_concept,
+                            machine_confidence=decision.confidence,
+                        )
+                        for decision in decisions
+                        if decision.selected_concept in repeat_required_concepts
+                    ],
+                )
+                intervention_datasets.append(
+                    InterventionDatasetFields(
+                        dataset_id=cd.dataset_id,
+                        dataset_label=cd.source_label,
+                        dataframe=frame,
+                        trust_assessment_id=trust_id,
+                        subject_id_field=subject_field,
+                        intervention_id_field=intervention_field,
+                        timestamp_field=timestamp_field,
+                        activity_category_field=activity_category_field,
+                        canonical_evidence_completeness=evidence_completeness,
+                    )
+                )
 
-        # P3.xxE.5 Phase 2: capability readiness is evaluated HERE, before
-        # any cross-domain execution decision below, so a GOVERNED rule's
-        # gate (see _GOVERNED_RULE_CODES) can actually use the result.
-        # Failure-safe: any exception degrades to "no rule ready" -- never
-        # silently falls back to running a governed rule -- and never fails
-        # the run, matching this file's established additive-stage pattern.
-        governed_status_by_rule: dict[str, str] = {}
-        try:
-            governed_status_by_rule = self._evaluate_intelligence_capabilities(
+            repeat_pairs = build_repeat_visit_pairs(intervention_datasets, repeat_eligible_assets)
+            repeat_findings = run_maintenance_repeat_visit(
                 db,
                 organization_id,
-                analysis_case_id,
-                run_id,
-                by_domain,
-                trust_assessment_ids,
-                canonical_frames,
-                semantic_outcome,
-                raw_dfs_for_semantic,
+                intervention_datasets,
+                repeat_eligible_assets,
+                actor_user_id,
             )
-        except Exception as exc:  # noqa: BLE001 -- safe default is NOT ACTIVATED, never fail the run
+            for finding in repeat_findings:
+                published_finding_ids.add(finding.id)
             self._record_stage(
                 db,
                 organization_id,
                 analysis_case_id,
                 run_id,
-                "capability_shadow_evaluation",
-                StageEventStatus.FAILED.value,
-                {"error": str(exc)},
+                "domain_intelligence",
+                StageEventStatus.COMPLETED.value,
+                {
+                    "pack": "MAINT-REPEAT",
+                    "eligible_subject_count": len(repeat_eligible_assets),
+                    "candidate_dataset_count": len(intervention_datasets),
+                    "pair_count": len(repeat_pairs),
+                    "finding_count": len(repeat_findings),
+                    "policy_window_applied": False,
+                },
             )
+
+        # --- CROSS-DOMAIN INTELLIGENCE ---
+        maint_datasets = by_domain.get("maintenance", [])
+        ops_datasets = by_domain.get("operations", [])
+        revenue_datasets = by_domain.get("revenue", [])
+
         xdom_a_governed_ready = (
             governed_status_by_rule.get("XDOM-A-ASSET-FAILURE-LOST-ACTIVITY") == "READY"
         )

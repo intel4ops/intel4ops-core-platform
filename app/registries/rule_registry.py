@@ -153,6 +153,17 @@ def default_rule_registry() -> RuleRegistry:
                 analytical_level="arithmetic",
             ),
             RuleDefinition(
+                "MAINTENANCE-REPEAT-VISIT",
+                "1.0",
+                "Related repeat maintenance intervention observed",
+                "A governed asset has a subsequent intervention with the same governed "
+                "activity category; the observed recurrence interval is reported without "
+                "asserting a policy violation when no policy window exists.",
+                RuleOperator.GREATER_THAN,
+                ("related_intervention_count", "threshold"),
+                analytical_level="arithmetic",
+            ),
+            RuleDefinition(
                 "XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
                 "1.0",
                 "Asset failure interrupted operational activity",
