@@ -203,5 +203,23 @@ def default_rule_registry() -> RuleRegistry:
                 ("actual_applied_rate", "applicable_contract_rate"),
                 analytical_level="arithmetic",
             ),
+            # P3.xxI.5A-R: additive sibling version -- the same rule, evaluated
+            # against an actual applied rate DERIVED from attributable billed
+            # amount, governed non-target components, and governed target
+            # quantity, when no explicit actual_applied_rate column exists.
+            # "1.0" is never modified or superseded; a subject with a valid
+            # explicit rate always uses "1.0" and never also "1.1".
+            RuleDefinition(
+                "CONTRACT-RATE-COMPLIANCE",
+                "1.1",
+                "Contract rate mismatch (derived actual rate)",
+                "A derived actual applied rate -- attributable billed amount minus governed "
+                "non-target components, divided by governed target quantity -- differs from "
+                "the uniquely applicable governed contract rate for the same subject, UOM, "
+                "currency, and time.",
+                RuleOperator.NOT_EQUALS,
+                ("derived_actual_applied_rate", "applicable_contract_rate"),
+                analytical_level="arithmetic",
+            ),
         ]
     )

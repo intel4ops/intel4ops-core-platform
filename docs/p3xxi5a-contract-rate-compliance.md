@@ -9,6 +9,215 @@
 
 **P3.xxI.5A FAILED**
 
+**P3.xxI.5A-R remediation implementation:** complete on branch
+`feature/p3xxi5ar-derived-actual-rate`; local quality gates pass. See the
+`P3.xxI.5A-R REMEDIATION IMPLEMENTATION` section at the end of this document.
+Merge and post-merge live certification remain owner-gated.
+
+## P3.xxI.5A FAILURE RECONCILIATION
+
+This reconciliation is diagnosis only. It does not change the frozen truth,
+semantic thresholds, application code, or the certified `0 / 0 / 48` result.
+It answers why the dedicated capability found nothing even though Revenue
+Amount Variance had previously surfaced 24 genuine FieldMaintenance
+`contract_rate_mismatch` items.
+
+### Exact FN distribution
+
+| Slice | FN | Authored exposure | Mechanically rate-derivable from customer data | Still unsupported |
+|---|---:|---:|---:|---:|
+| FieldMaintenance, single-cause rate mismatch | 24 | $7,022.26 | 24 | 0 |
+| FieldMaintenance, rate mismatch plus unbilled labor | 2 | $350.06 | 0 | 2 |
+| Rental | 22 | $416,247.40 | 0 under the governed evidence contract | 22 |
+| **Total** | **48** | **$423,619.72** | **24** | **24** |
+
+The exact 24 directly derivable FieldMaintenance truth IDs are `LK-1`,
+`LK-2`, `LK-5`, `LK-6`, `LK-8`, `LK-10`, `LK-16`, `LK-18`, `LK-20`,
+`LK-22`, `LK-25`, `LK-26`, `LK-28`, `LK-30`, `LK-31`, `LK-32`,
+`LK-34`, `LK-36`, `LK-37`, `LK-39`, `LK-40`, `LK-42`, `LK-45`, and
+`LK-52`.
+
+The two unsupported FieldMaintenance truth items are:
+
+- `LK-14`, WO-000043, $206.35: 8 logged labor hours include 3 unbilled
+  hours. Hidden truth uses 5 billed hours and an invoiced rate of $98.73/hr.
+  Dividing the invoice labor residual by all 8 source hours instead produces
+  $61.71/hr.
+- `LK-49`, WO-000171, $143.71: 11 logged labor hours include 4 unbilled
+  hours. Hidden truth uses 7 billed hours and an invoiced rate of $74.47/hr.
+  Dividing the invoice labor residual by all 11 source hours instead produces
+  $47.39/hr.
+
+The customer files do not identify billed versus unbilled labor quantity.
+Using the hidden billed-hour counts would leak examiner truth into production.
+The two records must therefore abstain until governed billed-quantity or
+invoice-line allocation evidence exists.
+
+This also corrects an imprecise value statement in the earlier breadth
+summary: $7,372.32 is the value of all 26 FieldMaintenance rate-mismatch
+truths. The 24 individually reproducible items total $7,022.26; the two
+mixed-cause items total $350.06.
+
+### Evidence path used by the prior 24 findings
+
+The earlier detections were **total Revenue Amount comparisons**, not actual
+rate detections. Their governed path was:
+
+1. Link `invoices.work_order_id` to one work order and
+   `invoices.contract_id` to one service contract.
+2. Sum `labor_entries.hours` for the work order.
+3. Resolve the applicable `service_contracts.labor_rate` through the exact
+   contract link and effective window; `labor_rate` supplies the governed
+   hourly rate basis.
+4. Compute governed labor value as `hours * labor_rate`.
+5. Add every same-work-order `parts_usage.quantity * parts_usage.unit_price`.
+6. Compare that expected work-order total with `invoices.amount`.
+
+For WO-000011, the calculation was `(10 hr * $95/hr) + $211 parts =
+$1,161.00 expected`; invoice INV-000011 was $867.10; the $293.90 amount
+variance exactly matched `LK-1`. The Revenue capability did not calculate or
+publish the hidden $65.61/hr invoiced rate.
+
+For the 24 single-cause rows, the same evidence can be rearranged into a
+genuinely rate-level observation without relabeling the Revenue finding:
+
+`derived actual labor rate = (invoice amount - governed parts amount) /
+governed labor hours`
+
+Across those 24 rows, this derived rate matches hidden truth's
+`invoiced_rate` to the cent, and
+`abs(derived actual rate - applicable contract rate) * labor hours` matches
+the authored rate-mismatch exposure. The dedicated finding would still have
+its own rule, identity, rate comparison, and lineage.
+
+### Actual-rate evidence availability
+
+- **Explicit actual rate:** 0 of 48 truth items. No frozen Wave 1 source has
+  an `actual_applied_rate`, `invoice_unit_rate`, `charged_rate`, or equivalent
+  field.
+- **FieldMaintenance derived actual rate:** mechanically available for 24 of
+  26 items through the residual calculation above. The other 2 lack an
+  attributable billed labor denominator.
+- **Rental arithmetic rate:** all 22 hidden billed rates equal
+  `invoices.amount / elapsed contract days` to the cent. This arithmetic is
+  not governed rate evidence because the source never says the bare contract
+  `rate` is per day and never declares currency.
+
+The implementation requires an explicit `actual_applied_rate` canonical field
+on the same governed subject-attributable dataset. Its readiness contract and
+service do not admit a derived amount/quantity alternative. That requirement
+is narrower than the approved architecture contract, which explicitly
+allowed derivation from attributable billed amount and governed positive
+quantity.
+
+### Contract/reference-rate evidence availability
+
+- **FieldMaintenance:** `service_contracts.labor_rate` is present for all 26
+  items, uniquely linked by `invoices.contract_id`, bounded by contract dates,
+  and canonically carries an hourly denominator. The source does not declare
+  currency.
+- **Rental:** `contracts.rate` is numerically present for all 22 items and the
+  invoice has a unique `contract_id`. The field resolves as generic
+  `unit_price`; no source column declares day/hour/week basis, UOM, or
+  currency. Contract start/end dates govern elapsed duration but do not prove
+  the denominator of `rate`.
+
+### Safe derivation boundary
+
+A reusable actual-rate derivation is safe only when all of these gates pass:
+
+- one governed subject and one billing record;
+- one applicable contract/rate row at the transaction or service timestamp;
+- a positive governed billable quantity with an explicit or inherently
+  governed UOM;
+- billed amount uniquely attributable to the same charge scope;
+- every subtracted non-rate component is governed, complete, and linked to
+  that same scope;
+- compatible, positively governed currency on amount and reference rate;
+- no competing allocation, aggregation, or billed-quantity interpretation.
+
+Missing billing evidence remains distinct from a billed amount of zero. A
+zero residual or zero rate may participate only when the underlying amount,
+scope, and quantity are positively evidenced. Failure of any gate must emit a
+specific abstention reason, never an inferred rate.
+
+This derivation remains distinct from Revenue Amount Variance. Revenue asks
+whether the total expected amount differs from the billed total. Contract/Rate
+Compliance asks whether a derived per-unit charged rate differs from one
+applicable reference rate. The two may describe the same economic loss, but
+their calculations, finding identities, explanations, and portfolio impact
+deduplication remain separate.
+
+### Unsupported cases and predicted ceiling
+
+After adding only the derived-actual-rate model path:
+
+- **24 of 48** truths, representing **$7,022.26**, become mechanically
+  rate-derivable before the currency publication gate.
+- **2 FieldMaintenance** truths remain blocked by ambiguous billed quantity
+  and charge allocation.
+- **22 Rental** truths remain blocked by missing governed contract rate basis,
+  UOM, and currency, even though examiner-side arithmetic reproduces their
+  hidden rates.
+
+The unchanged frozen files declare no currency for either FieldMaintenance or
+Rental. Therefore the strictly publishable denominator remains **0 of 48** if
+the existing positive currency requirement is preserved and no separate
+governed case/tenant currency evidence exists. With governed compatible
+currency supplied outside hidden truth, the predicted publishable ceiling is
+**24 of 48 ($7,022.26)**. Recovering the remaining 24 requires source/data-
+contract evidence, not a broader inference in the capability.
+
+### Capability-model gap and smallest reusable remediation
+
+The dedicated capability's mechanical contract is too narrow: it implements
+only the explicit-rate branch of the approved evidence contract. The smallest
+reusable change is to add one alternative, provenance-complete
+`derived_actual_applied_rate` input to Contract/Rate Compliance:
+
+`(attributable billed amount - governed non-rate components) /
+positive governed rate quantity`
+
+The alternative should reuse the existing canonical subject/linkage,
+applicable-rate, temporal, UOM, currency, and evidence-completeness services.
+Readiness should become `explicit actual rate OR safe derived actual rate`;
+the comparison service should consume either through one common applied-rate
+evidence object. It must not broaden aliases, lower semantic thresholds,
+assume a currency or rate basis, infer billed quantity from truth, or call and
+relabel a Revenue Amount finding.
+
+Required abstention codes should distinguish at least missing currency,
+missing rate basis, non-positive quantity, ambiguous billed quantity,
+non-attributable invoice amount, incomplete residual components, ambiguous
+subject/invoice linkage, multiple applicable rates, and temporal mismatch.
+
+### False-positive risks
+
+The remediation must explicitly guard against:
+
+- dividing an invoice header by a quantity for only one of several charge
+  lines;
+- subtracting incomplete parts or fee components and mislabeling the residual
+  as labor;
+- using total logged quantity when some quantity was unbilled, as in `LK-14`
+  and `LK-49`;
+- treating a bare Rental `rate` as daily solely because contract dates exist;
+- accepting two missing currencies as proof of compatibility;
+- selecting a stale or multiply applicable contract rate;
+- double-counting economic impact across Revenue Amount and Contract/Rate
+  findings.
+
+### Decision gate
+
+**A. P3.xxI.5A-R — REMEDIATE CONTRACT/RATE COMPLIANCE**
+
+The remediation is justified because 24 frozen truths expose a reusable,
+mechanically valid derived-rate path that the approved architecture allowed
+but the implementation omitted. Graduation must remain conditional on
+governed currency evidence; the remediation must preserve abstention for the
+two mixed-scope FieldMaintenance items and all 22 rate-basis-deficient Rental
+items.
+
 **Expected frozen Wave 1 denominator:** 48 truth items
 
 This milestone adds `CONTRACT-RATE-COMPLIANCE` as an independent governed capability. It does not modify or relabel `REVENUE-AMOUNT-VARIANCE`, XDOM-A, XDOM-B, or MAINT-001.
@@ -396,3 +605,272 @@ activate on any frozen Wave 1 case and achieves 0% recall against its exact
 met, and multiple required live controls remain unexercised.
 
 **P3.xxI.5A FAILED**
+
+## P3.xxI.5A-R REMEDIATION IMPLEMENTATION
+
+### Baseline and handoff
+
+Authoritative pre-remediation `main`: `5ac6b20bfcbcbe0b7537371fd371c138491b78fb`
+(PR #122, the certification above). Codex implemented the bulk of this
+remediation directly against that baseline on
+`feature/p3xxi5ar-derived-actual-rate` before hitting its usage limit, leaving
+three modified files uncommitted: `app/services/contract_rate_compliance_service.py`
+(+558/-1 at handoff), `app/services/analysis_case_orchestration_service.py`
+(+17/-13), `app/intelligence_packs/registry.py` (+17/-14), plus the failure-
+reconciliation addendum already recorded above. Claude reconciled the handoff
+per the mission's own required first step (`git fetch --all --prune`;
+inspected branch, HEAD, `origin/main`, full diff, and untracked files; no
+reset, no discard) before writing or changing any further code.
+
+### Codex's implementation reviewed against the approved design
+
+All of Codex's own code was read line-by-line before any further change.
+Findings:
+
+- **Correctly implements the approved design.** `derive_actual_applied_rates`
+  (new, in `contract_rate_compliance_service.py`) computes exactly
+  `(attributable billed amount - governed non-target components) / positive
+  governed target quantity`, gated by: single billing line per subject
+  (`len(billing_lines) != 1` aborts), at most one non-target component
+  *dataset* (`len(component_groups) > 1` aborts), a single agreeing quantity
+  total and unit across every quantity-bearing dataset for that subject
+  (disagreement aborts), a positive quantity, one consistent currency across
+  billing and every component line (`None` or disagreement aborts), governed
+  subject-contract linkage (reused `_subject_contract_map`, ambiguity-safe,
+  identical shape to Revenue Amount Variance's own), and per-row
+  `canonical_evidence_completeness` gating before any line is even collected.
+  `is_rate_card_shaped` datasets are excluded from derivation inputs entirely
+  at the top of the function -- a rate-card row can never become a billing,
+  quantity, or component line (Section 15's required separation, preserving
+  P3.xxI.3's own latent-bug fix).
+- **Readiness was not broadened unsafely.** The new
+  `alternative_canonical_measure_sets` entries in `registry.py`
+  (`invoice_amount`+`quantity`/`duration_hours`+`unit_price`/`hourly_rate`)
+  are purely structural (do the concepts exist anywhere in the case), exactly
+  mirroring the established P3.xxI.2C/P3.xxI.3 precedent where readiness is
+  intentionally broader than execution; every actual safety gate lives in
+  `run_contract_rate_compliance`/`derive_actual_applied_rates`, not in
+  readiness.
+- **Generic, no leaked domain logic.** Grepped the full diff for
+  FieldMaintenance/Rental filenames, customer names, or truth-item
+  identifiers (`LK-`) -- none found. Every field reference is a
+  canonical-concept field name supplied by the orchestration layer.
+- **No hidden-truth dependency.** No import of, or reference to, any
+  ground-truth module or truth-item identifier anywhere in the service file.
+- **The mechanical size is justified, not gratuitous.** The derivation
+  requires per-subject aggregation across up to three dataset roles
+  (billing/quantity/component), ambiguity detection across multiple
+  candidate quantity datasets, and full evidentiary lineage construction
+  (mission Section 11) -- comparable in shape and necessity to
+  `revenue_variance_intelligence_service.py`'s own `_collect_lines`. Left
+  unmodified except one `mypy` fix (below); not rewritten for style.
+
+Two incomplete/broken pieces were found and are the only additions made
+beyond finishing tests and the report:
+
+1. **`mypy` error** (pre-existing in Codex's own diff, never reported since no
+   quality gate had run against the combined tree yet): `sum(line.value for
+   line in lines)` at the quantity-aggregation step inferred
+   `Decimal | Literal[0]` because an empty-iterable-safe `sum()` defaults to
+   `int` `0`. Fixed with an explicit `Decimal("0")` start value. No behavior
+   change.
+2. **Missing rule-definition version.** `_publish_derived_rate_comparison`
+   publishes with `definition_version="1.1"`, but `app/registries/rule_registry.py`
+   only registered `CONTRACT-RATE-COMPLIANCE` version `"1.0"` -- every derived-
+   rate publish attempt failed with `DEFINITION_REFERENCE_INVALID` /
+   `Registered definition not found`. Added a `"1.1"` `RuleDefinition` entry
+   (additive; `"1.0"` is untouched and remains the explicit-rate path's own
+   definition).
+
+### Two orchestration wiring gaps found and fixed during testing
+
+Writing the required positive tests (Section 14 of the mission) surfaced two
+further gaps that made the derived path structurally unreachable even when
+every dataset-level concept resolved correctly. Both are fixed in
+`app/services/analysis_case_orchestration_service.py`, inside the same
+`CONTRACT-RATE-COMPLIANCE` per-dataset loop Codex added:
+
+1. **`allow_bridge` was tied to the wrong condition.** The subject-field
+   resolver was called with `allow_bridge=actual_rate_field is not None` --
+   correct for the original explicit-only capability (only actual-rate rows
+   needed subject resolution at all), but it silently excludes every target-
+   quantity or non-target-component dataset that carries no *directly*
+   AUTO_ACCEPTED subject identifier of its own (the same governed-bridge
+   shape Revenue Amount Variance's own `labor_entries.csv`/`parts_usage.csv`
+   already rely on). Fixed to `allow_bridge=not is_contract_rate_shaped`,
+   the exact established Revenue Amount Variance pattern
+   (`allow_bridge=not is_rate_card_shaped`) applied to this capability's own
+   rate-card-shaped flag. Confirmed via a real, unmodified `execute()` run
+   with an instrumented trace: before the fix, the quantity/component
+   datasets never appeared in `applied_rate_datasets` at all; after, they
+   resolve correctly (directly or via the governed one-hop bridge) exactly
+   as the design intended.
+2. **Evidence-completeness used the wrong concept key when quantity fell back
+   to `duration_hours`.** When a dataset's quantity comes from the
+   `duration_hours` concept (e.g. an "hours" column) rather than a bare
+   `quantity` concept, `rate_required_concepts` still recorded the
+   requirement under the literal key `"quantity"`. The evidence-completeness
+   lookup matches on each semantic decision's own `selected_concept`, which
+   for an "hours" column is `"duration_hours"`, never `"quantity"` -- so the
+   completeness check permanently reported the quantity requirement as
+   unsatisfied even though it had, in fact, resolved with real governed
+   evidence, and every subject on that dataset was silently added to
+   `invalid_subjects`. Fixed by keying the requirement dict entry on whichever
+   concept actually supplied the field (`"duration_hours"` when the fallback
+   was used, `"quantity"` otherwise) -- mirroring P3.xxI.3's own
+   `optional_resolved_concepts` pattern of only recording the concept that
+   was actually used.
+
+**This second fix is materially important for live certification**: the
+real, frozen FieldMaintenance corpus's own `labor_entries.csv` carries an
+`hours` column (which resolves as `duration_hours`, confirmed by direct
+inspection of the frozen file), the exact same shape that exposed this bug
+in testing. Without this fix, the derived-rate path would have silently
+abstained on every one of the 24 target FieldMaintenance truth items in live
+certification even with every other piece of the implementation correct.
+
+Both fixes were found and confirmed exclusively through direct testing
+(Section 17 of the mission: "test before continuing") against a real,
+unmodified `execute()` run -- neither was hypothesized in advance.
+
+### Derived-rate contract (as implemented)
+
+```
+derived_actual_applied_rate = (attributable_billed_amount - governed_non_target_components) / governed_target_quantity
+```
+
+Implemented in `contract_rate_compliance_service.py`'s
+`derive_actual_applied_rates` / `DerivedAppliedRateEvidence`. Every gate named
+in the mission's Section 7 is enforced before a candidate is even
+constructed: unique subject/billing/quantity/component attribution, positive
+quantity with a resolved UOM (explicit `unit_of_measure` field or the
+dataset's own governed `implicit_quantity_unit`), one agreeing currency
+across billing and every component line, and governed subject/contract
+linkage. `run_contract_rate_compliance` then re-validates the *contract* side
+independently through the unmodified, pre-existing
+`resolve_applicable_rate` (P3.xxI.4) -- requiring its own governed
+`currency`, `unit`, and `rate_basis` before any comparison is attempted. A
+subject with a valid **explicit** `actual_applied_rate` is authoritative and
+is recorded in `explicit_subjects`; the derived path is never attempted for
+that subject, so no subject can ever receive two competing
+`CONTRACT-RATE-COMPLIANCE` findings from the two evidence paths.
+
+### Ambiguity rules
+
+Unchanged from the approved design and confirmed by test: a bare `rate` /
+`unit_price` concept never acquires an implicit UOM (P3.xxI.4's own rule,
+reused unmodified); multiple quantity-bearing datasets that disagree on
+total or unit abstain entirely, never silently prefer one; two billing lines
+for the same subject abstain (no unique attribution); an incomplete
+component row (missing price with quantity present, or vice versa) abstains
+the whole subject rather than treating the missing side as zero. Missing
+evidence is never converted to zero anywhere in the derivation.
+
+### Currency and UOM gates
+
+Currency: every input line (billing and every component line) must
+independently resolve a 3-letter currency code, and all resolved currencies
+for one subject must be identical; the contract side must independently
+resolve its own governed currency through `resolve_applicable_rate`. Neither
+side ever assumes USD or any other default. UOM: the target quantity's unit
+comes only from an explicit `unit_of_measure` field or the dataset's own
+governed `implicit_quantity_unit` (never guessed); the contract rate's unit
+comes only through P3.xxI.4's own two governed sources (explicit column or
+the `hourly_rate` concept's name). The two must match exactly
+(`resolve_applicable_rate`'s pre-existing strict equality) or the subject
+abstains.
+
+### Lineage
+
+`DerivedAppliedRateEvidence.evidence` carries one `EvidenceItemCreate` per
+billing line, per quantity line (one per contributing dataset), per
+component line, plus explicit `derived_rate_target_amount` and
+`derived_actual_applied_rate` calculation-trace items showing the exact
+arithmetic (`billed - components = target`, `target / quantity = rate`).
+`_publish_derived_rate_comparison` appends the applicable-contract-rate line,
+the rate-comparison line, and the exposure calculation, and records every
+contributing dataset id. The full chain -- invoice amount, non-target
+component(s), derived target amount, target quantity, derived actual rate,
+contract rate, rate basis/UOM, currency, effective window, and subject/
+contract relationship -- is reconstructable from the persisted evidence
+alone, satisfying Section 11 of the mission.
+
+### Reachable denominator (mechanical, pre-certification)
+
+Unchanged from the failure reconciliation above: **24 of 48** truth items
+($7,022.26) are mechanically rate-derivable from governed customer data
+using this contract; 2 FieldMaintenance items (`LK-14`/`LK-49` internally,
+never referenced by name or ID anywhere in production code) remain
+unreachable because the source data does not distinguish billed from
+unbilled labor quantity; 22 Rental items remain unreachable because
+`contracts.csv` declares no rate basis, UOM, or currency (P3.xxI.4's own
+confirmed `DATA_CONTRACT_GAP`). This remediation does not attempt to close
+either unreachable category -- doing so would require either new source
+evidence or an explicit, separately-scoped, owner-authorized business rule,
+neither of which is implemented here.
+
+### Tests
+
+Added to `tests/test_contract_rate_compliance.py` (all new tests below;
+the pre-existing 16 explicit-actual-rate tests are unchanged and still pass):
+
+| # | Test | Mission requirement |
+|---|---|---|
+| Positive A | `test_derived_a_worked_example_produces_finding` | Section 14A -- exact worked example (1200-200=1000/10=100/hr vs 90/hr contract -> exposure 100) |
+| Positive B | `test_derived_b_actual_equals_contract_no_finding` | Section 14B |
+| Positive C | `test_derived_c_multiple_subjects_have_distinct_findings` | Section 14C |
+| Positive D | `test_derived_d_generic_non_fieldmaintenance_orchestration_end_to_end` | Section 14D -- full, unmodified `execute()`, no FieldMaintenance-shaped column names |
+| Negative A | `test_derived_negative_a_missing_quantity_abstains` | Section 15A |
+| Negative B | `test_derived_negative_b_zero_quantity_abstains` | Section 15B |
+| Negative C | `test_derived_negative_c_conflicting_quantity_abstains` | Section 15C |
+| Negative D | `test_derived_negative_d_incomplete_component_row_abstains` | Section 15D |
+| Negative E | `test_derived_negative_e_missing_currency_no_publication` | Section 15E |
+| Negative F | `test_derived_negative_f_incompatible_uom_abstains` | Section 15F |
+| Negative G | `test_derived_negative_g_ambiguous_invoice_attribution_abstains` | Section 15G |
+| Negative H | `test_derived_negative_h_rate_card_dataset_never_becomes_actual_rate_input` | Section 15H |
+| Negative I | `test_derived_negative_i_bare_rental_rate_without_uom_abstains` | Section 15I |
+| Negative J | `test_derived_negative_j_generic_quantity_ambiguity_abstains_without_identifiers` | Section 15J -- same underlying gate as C, proven again on a distinct, non-identifying fixture |
+
+Plus two additional regression-safety tests not explicitly enumerated but
+required by the design: `test_derived_path_never_double_publishes_when_explicit_rate_also_present`
+(a subject with both valid explicit and derivable evidence produces exactly
+one finding, from the explicit path) and
+`test_derive_actual_applied_rates_returns_empty_for_no_datasets`.
+
+### Regression
+
+| Suite | Result |
+|---|---:|
+| `tests/test_contract_rate_compliance.py` | 32 passed |
+| Focused sweep (rate/uom/duration/revenue/semantic/readiness/relationship/trust/lineage/validation_isolation/tenant/contract) | 661 passed |
+| Full non-PostgreSQL suite | 1730 passed |
+| Disposable PostgreSQL migration/tenant-boundary suite (fresh schema reset) | 83 passed |
+| `ruff format --check .` | all files formatted |
+| `ruff check .` | all checks passed |
+| `mypy .` | 619 source files, no issues |
+
+Revenue Amount / Billing Variance control, P3.xxI.2C subject generalization,
+P3.xxI.3 duration evidence, and P3.xxI.4 rate-basis/UOM evidence test suites
+all re-run and pass unchanged as part of the focused sweep and full suite
+above -- zero regression.
+
+### Implementation PR
+
+Opened after this report section was committed; see commit history / PR
+list for the exact number, head SHA, and CI status. Not merged -- awaiting
+explicit owner authorization naming that PR, per standing house rule and
+Section 22 of the mission.
+
+### Post-merge live certification (not yet performed)
+
+Per the mission's explicit instruction (Section 23), live hidden-truth
+certification is **not** run before an owner-authorized merge and
+deployment. When it runs, it will report, against the frozen Wave 1 corpus:
+
+- reachable-denominator recall = TP / 24
+- full-family recall = TP / 48
+- TP / FP / FN, precision, economic-value capture
+- mechanical/fabricated FP count (target: 0)
+
+both denominators reported side by side, per Section 23's own requirement,
+never collapsing the full-family denominator into the reachable one.
