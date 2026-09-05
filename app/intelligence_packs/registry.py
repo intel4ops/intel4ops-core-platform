@@ -158,6 +158,40 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
     )
     registry.register(
         IntelligencePackDefinition(
+            pack_code="MAINT-REPEAT",
+            rule_code="MAINTENANCE-REPEAT-VISIT",
+            version="1.0",
+            required_domains=frozenset({"maintenance"}),
+            required_canonical_fields=frozenset(
+                {"asset_id", "operational_event_id", "activity_category"}
+            ),
+            required_entities=frozenset(),
+            supported_industry_contexts=None,
+            currency_required=False,
+            output_domains=frozenset({"maintenance"}),
+            required_canonical_entities=frozenset({EntityType.ASSET.value}),
+            minimum_entity_identity_confidence=0.70,
+            confidence_aggregation_policy="max",
+            required_canonical_measures=frozenset({"completed_timestamp"}),
+            alternative_canonical_measure_sets=(
+                frozenset({"completed_timestamp"}),
+                frozenset({"event_timestamp"}),
+            ),
+            currency_behavior="currency_agnostic",
+            unit_behavior="unit_agnostic",
+            required_resolved_trust_domains=frozenset({"maintenance"}),
+            evidence_requirements=frozenset(
+                {
+                    "subject_identity",
+                    "intervention_identity",
+                    "activity_category",
+                    "intervention_timestamp",
+                }
+            ),
+        )
+    )
+    registry.register(
+        IntelligencePackDefinition(
             pack_code="XDOM",
             rule_code="XDOM-A-ASSET-FAILURE-LOST-ACTIVITY",
             version="1.0",

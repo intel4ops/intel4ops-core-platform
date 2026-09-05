@@ -464,6 +464,24 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
     )
     registry.register(
         CanonicalConcept(
+            concept_code="activity_category",
+            concept_type=CanonicalConceptType.CODE.value,
+            description="Governed category of operational or service activity performed.",
+            aliases=frozenset(
+                {
+                    "event_type",
+                    "activity_type",
+                    "service_type",
+                    "maintenance_type",
+                    "work_type",
+                }
+            ),
+            compatible_dataset_roles=frozenset({"event", "work_order"}),
+            requires_sibling_concepts=frozenset({"asset_id", "work_order_id"}),
+        )
+    )
+    registry.register(
+        CanonicalConcept(
             concept_code="quantity",
             concept_type=CanonicalConceptType.QUANTITY.value,
             description="A counted or measured amount of something, not currency.",
