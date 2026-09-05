@@ -230,9 +230,9 @@ regression tests pass.
 
 ## Implementation PR / CI state
 
-Implementation PR: **pending creation after final local scope audit**
+Implementation PR: **#125**
 
-CI status: **pending**
+CI status: **running**
 
 Merge status: **owner-gated; do not merge**
 
