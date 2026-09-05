@@ -333,3 +333,65 @@ in `docs/p3xxi5a-contract-rate-compliance.md`.
 **P3.xxI.5A FAILED**
 
 Capability #2 must not start without a new owner authorization.
+
+## Capability #1 remediation (P3.xxI.5A-R) post-merge scorecard
+
+P3.xxI.5A-R merged through PR #123 at
+`4dac052195b6cb6b92d1d674cf55f063a2a343b4`. Production health returned HTTP
+200. Ten fresh runs reused the exact certified orchestrated Wave 1 cases;
+Revenue Amount remained 61/0/86/26 with zero mechanical regression.
+
+The remediation added an independent `derived_actual_applied_rate` evidence
+path (`(attributable billed amount - governed non-target components) /
+governed target quantity`), closing the exact `CAPABILITY_MODEL_GAP` the
+pre-remediation scorecard named. Live certification against the real,
+frozen corpus confirms the mechanism now computes correctly (governed
+quantity and non-target-component amounts resolve exactly as designed,
+confirmed by direct instrumentation) but still produces **zero** findings,
+for a different and more precisely diagnosed reason than before:
+
+| Measure | Before P3.xxI.5A | After P3.xxI.5A (FAILED) | After P3.xxI.5A-R | Delta (5A-R vs 5A) |
+|---|---:|---:|---:|---:|
+| Registered portfolio breadth | 4/10 = **40.00%** | 5/10 = **50.00%** | 5/10 = **50.00%** | none |
+| Graduated-family breadth | 1/10 = **10.00%** | 1/10 = **10.00%** | 1/10 = **10.00%** | none |
+| Graduated truth-family addressability | 166/788 = **21.07%** | 166/788 = **21.07%** | 166/788 = **21.07%** | none |
+| Certified TP coverage | 150/788 = **19.04%** | 150/788 = **19.04%** | 150/788 = **19.04%** | none |
+| Observed authored-value capture | $83,263.29 / $2,285,738.56 = **3.64%** | $83,263.29 / $2,285,738.56 = **3.64%** | $83,263.29 / $2,285,738.56 = **3.64%** | none |
+
+Capability #1 still scored TP=0, FP=0, FN=48 (full family) / FN=24
+(reachable denominator), recall=0% against both denominators, precision
+N/A, economic-value capture $0/$423,619.72 (full family) and
+$0/$7,022.26 (reachable denominator), and mechanical/fabricated FP=0.
+Breadth and coverage measures are numerically unchanged from the
+pre-remediation scorecard because the capability still produced zero
+certified true positives -- the remediation changed *why*, not *whether*,
+live activation occurred.
+
+**Root-cause reclassification** (the actual measured breadth effect of
+this remediation): the mechanism itself is now proven correct and reaches
+the currency gate rather than never being built. Direct instrumentation
+against the real FIELDMAINT-001 corpus confirms `derive_actual_applied_rates`
+correctly resolves governed quantity (`hours`/`quantity` concepts) and
+non-target component amounts (`parts_usage.csv`'s `quantity` x
+`unit_price`) for all eligible subjects, then correctly withholds every
+single candidate because **no frozen Wave 1 source file -- FieldMaintenance
+or Rental -- declares a currency column at all**. This is a confirmed
+`DATA_CONTRACT_GAP` on the actual-billing side, distinct from and
+in addition to the pre-existing `DATA_CONTRACT_GAP` P3.xxI.4 already
+established on Rental's contract-rate side. Rental separately never
+reaches readiness at all for this capability (`governed_status: BLOCKED`,
+`measure:actual_applied_rate` missing) -- correctly out of scope for this
+remediation per its own explicit instruction not to build Rental-specific
+readiness paths.
+
+The dominant classification changes from `CAPABILITY_MODEL_GAP` (pre-
+remediation: the derivation mechanism did not exist) to `DATA_CONTRACT_GAP`
+(post-remediation: the mechanism exists, is tested and proven correct, and
+is safely and correctly blocked by a confirmed absence of governed currency
+evidence across the entire frozen Wave 1 corpus). Full evidence, per-case
+run IDs, and regression reconciliation are in
+`docs/p3xxi5a-contract-rate-compliance.md`.
+
+**P3.xxI.5A-R PARTIALLY VALIDATED**
+
+Capability #2 must not start without a new owner authorization.

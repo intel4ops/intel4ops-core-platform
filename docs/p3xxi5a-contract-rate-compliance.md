@@ -9,10 +9,10 @@
 
 **P3.xxI.5A FAILED**
 
-**P3.xxI.5A-R remediation implementation:** complete on branch
-`feature/p3xxi5ar-derived-actual-rate`; local quality gates pass. See the
-`P3.xxI.5A-R REMEDIATION IMPLEMENTATION` section at the end of this document.
-Merge and post-merge live certification remain owner-gated.
+**P3.xxI.5A-R remediation implementation:** merged in PR #123; merge commit
+`4dac052195b6cb6b92d1d674cf55f063a2a343b4`.
+
+**P3.xxI.5A-R live certification:** complete.
 
 ## P3.xxI.5A FAILURE RECONCILIATION
 
@@ -856,21 +856,157 @@ above -- zero regression.
 
 ### Implementation PR
 
-Opened after this report section was committed; see commit history / PR
-list for the exact number, head SHA, and CI status. Not merged -- awaiting
-explicit owner authorization naming that PR, per standing house rule and
-Section 22 of the mission.
+PR #123 merged the remediation with merge commit
+`4dac052195b6cb6b92d1d674cf55f063a2a343b4` after its quality gate passed.
+Post-merge certification is recorded below.
 
-### Post-merge live certification (not yet performed)
+## P3.xxI.5A-R LIVE CERTIFICATION
 
-Per the mission's explicit instruction (Section 23), live hidden-truth
-certification is **not** run before an owner-authorized merge and
-deployment. When it runs, it will report, against the frozen Wave 1 corpus:
+### Scope and production state
 
-- reachable-denominator recall = TP / 24
-- full-family recall = TP / 48
-- TP / FP / FN, precision, economic-value capture
-- mechanical/fabricated FP count (target: 0)
+PR #123 merged the remediation at
+`4dac052195b6cb6b92d1d674cf55f063a2a343b4`. This certification recovered
+the ten owner-supplied terminal production cases and did not restart a run,
+create a case, modify frozen inputs, or use hidden truth during production-
+path diagnosis.
 
-both denominators reported side by side, per Section 23's own requirement,
-never collapsing the full-family denominator into the reachable one.
+The Navigator reported the backend connected and every recovered run as
+terminal `Review Required`. That state is the established terminal review
+outcome for these cases, not an execution failure. The capability published
+zero `CONTRACT-RATE-COMPLIANCE` findings in every case.
+
+| Frozen case | Case ID | Terminal run ID | Governed readiness | Safe derived candidates | Contract/Rate findings | Total findings | Revenue Amount control |
+|---|---|---|---|---:|---:|---:|---:|
+| FIELDMAINT-001 | `e326e61b-f11b-4713-9048-6fccc7297a38` | `68537b58-f737-4e17-9264-e567c435a3b0` | READY; execution reaches evidence gates | 0 | 0 | 63 | 61 |
+| FIELDMAINT-002 | `1fc05ddd-47d5-4f59-888e-6e968a577942` | `0d24a7d4-fa20-45b7-9bf8-0a3c389f410e` | READY; execution reaches evidence gates | 0 | 0 | 1 | 0 |
+| FIELDMAINT-005 | `8a7f562f-ea71-42f6-9405-09e2d8f25eda` | `f8db9624-aaf6-416d-bc8e-7285be70e743` | READY; execution reaches evidence gates | 0 | 0 | 87 | 86 |
+| FIELDMAINT-007 | `fbc51228-9a76-4454-8569-a93b5ec03438` | `73cf7ba4-da20-4181-8519-b3d230639c5a` | READY; execution reaches evidence gates | 0 | 0 | 27 | 26 |
+| RENTAL-001 | `1f23bc08-d49e-4e73-8980-9af0c141a049` | `584cb5b1-4849-48de-b31d-b0a0c319f328` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+| RENTAL-003 | `505fe83a-97b1-4b55-a950-d12676a87dda` | `3e3b1efd-a8aa-4fe1-9c04-2cc4bb5c7bb8` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+| RENTAL-011 | `f41ab708-1274-42b4-9234-e9cde40cbff2` | `0f1c0344-67c5-42f6-a630-fcef130dddde` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+| RENTAL-012 | `a45648b2-a7cf-4e80-9bd2-b60442aa0989` | `aa9e87d8-4ff2-4f18-ae7e-55e739314885` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+| RENTAL-015 | `79f737a7-e9bc-4972-b3a2-0273f7cc2f03` | `9d6c782f-48a2-4a02-aa1e-b2ba4c6c8761` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+| RENTAL-018 | `d537f7eb-070d-4313-9bb2-58a99eb74b13` | `6ffc4160-c5b2-45c4-b148-a7affba6ab7f` | BLOCKED: `measure:actual_applied_rate` | 0 | 0 | 0 | 0 |
+
+The Navigator does not surface per-pack readiness payloads for these cases;
+the FieldMaintenance READY and Rental BLOCKED results above are the
+deterministic governed activation outcomes reconstructed from the persisted
+semantic shape and the merged registry contract. Candidate counts are the
+post-safety-gate `DerivedAppliedRateEvidence` population, not the number of
+input rows considered.
+
+### Production-side trace before hidden truth
+
+The production trace used only the frozen customer-side files and the merged
+execution contract. No truth record or examiner-authored amount participated
+in the trace.
+
+Two representative FieldMaintenance subjects demonstrate that the new
+arithmetic path is structurally present and that the stop occurs at currency,
+not at quantity, component attribution, UOM, time, or linkage:
+
+| Evidence element | WO-000011 | WO-000013 |
+|---|---:|---:|
+| Invoice | INV-000011 | INV-000013 |
+| Invoice total | 867.10 | 2,186.14 |
+| Governed non-target component(s) | parts: 1 x 211.00 = 211.00 | parts: (2 x 358.00) + (2 x 436.00) = 1,588.00 |
+| Derived target billed amount | 656.10 | 598.14 |
+| Governed target quantity | 10 | 9 |
+| Quantity concept | `duration_hours` from labor `hours` | `duration_hours` from labor `hours` |
+| Derived actual applied rate | 65.61/hour | 66.46/hour |
+| Governed contract | SVC-000006 | SVC-000006 |
+| Governed contract rate | 95.00/hour | 95.00/hour |
+| Actual-side UOM | `hour`, implicit from governed `duration_hours` | `hour`, implicit from governed `duration_hours` |
+| Contract-side UOM | `hour`, implicit from governed `hourly_rate` | `hour`, implicit from governed `hourly_rate` |
+| Actual-side currency | unresolved; no currency field | unresolved; no currency field |
+| Contract-side currency | unresolved; no currency field | unresolved; no currency field |
+| Temporal applicability | invoice 2026-02-28 is within 2025-10-10 through 2027-12-04 | invoice 2026-07-20 is within 2025-10-10 through 2027-12-04 |
+| Subject/contract linkage | unique invoice -> WO-000011 + SVC-000006 | unique invoice -> WO-000013 + SVC-000006 |
+| Candidate creation | none | none |
+| Publication decision | not attempted | not attempted |
+| Exact rejection | billing/component rows have no governed `currency_code`; subject enters `invalid_subjects` and is skipped before `DerivedAppliedRateEvidence` construction | same |
+
+The arithmetic shown above is diagnostic arithmetic only. It is not promoted
+to a governed finding because a numeric amount without governed currency is
+not a comparable monetary rate. In particular, the tenant's advisory UI
+currency and any organization default are not substituted for row-level
+evidence; USD is never assumed.
+
+The exact merged service path is:
+
+1. Resolve the unique subject and contract link.
+2. Identify one invoice amount, governed non-target parts components, and
+   agreeing positive `duration_hours` quantity with implicit `hour` UOM.
+3. Attempt to collect the billing and component lines.
+4. Resolve no `currency_code` field on either source. The service adds the
+   subject to `invalid_subjects`.
+5. Skip the subject before target amount/rate evidence construction.
+6. Produce no candidate, so the comparison publisher is never called.
+
+Primary blocker: **`CURRENCY_EVIDENCE_GAP`**. This is a source
+**`DATA_CONTRACT_GAP`**, not a `CAPABILITY_MODEL_GAP`, derivation error, or
+`PUBLISHER_GAP`. The no-publication behavior is intentional and is directly
+covered by `test_derived_negative_e_missing_currency_no_publication`; the
+test suite did not miss a production defect.
+
+### Examiner-side reconciliation after production trace
+
+Only after fixing the production diagnosis above was the result compared
+with the frozen Contract/Rate Compliance truth family.
+
+| FN slice | FN | Authored value | Primary classification | Additional blocker |
+|---|---:|---:|---|---|
+| FieldMaintenance, single-cause rate mismatch | 24 | $7,022.26 | `CURRENCY_EVIDENCE_GAP` / `DATA_CONTRACT_GAP` | none before currency publication |
+| FieldMaintenance, rate mismatch plus unbilled labor (`LK-14`, `LK-49`) | 2 | $350.06 | `QUANTITY_ATTRIBUTION_GAP` | `CURRENCY_EVIDENCE_GAP` |
+| Rental | 22 | $416,247.40 | `UOM_GAP` / `DATA_CONTRACT_GAP` | missing governed rate basis and currency; activation remains blocked |
+| **Total** | **48** | **$423,619.72** |  |  |
+
+The 24 single-cause FieldMaintenance records are mechanically derivable only
+up to the positive currency gate. Their arithmetic denominator remains the
+pre-frozen reachable target for measuring the remediation mechanism, but
+their strictly publishable live denominator is zero because compatible
+governed currency does not exist in the source. `LK-14` and `LK-49` remain
+unreachable even if currency were supplied because logged hours do not
+identify the billed subset. Rental remains unsupported because a bare
+contract `rate` does not prove a day/hour/unit basis, UOM, or currency.
+
+| Metric | Result |
+|---|---:|
+| TP | 0 |
+| FP | 0 |
+| FN, full family | 48 |
+| FN, mechanically derivable target | 24 |
+| Precision | N/A (no positive predictions) |
+| Reachable recall | 0 / 24 = **0.00%** |
+| Full-family recall | 0 / 48 = **0.00%** |
+| Full-family economic-value capture | $0 / $423,619.72 = **0.00%** |
+| Mechanically derivable economic-value capture | $0 / $7,022.26 = **0.00%** |
+| Mechanical/fabricated FP | **0** |
+
+### Revenue Amount regression control
+
+The live control is preserved exactly:
+
+- FIELDMAINT-001 = 61
+- FIELDMAINT-002 = 0
+- FIELDMAINT-005 = 86
+- FIELDMAINT-007 = 26
+- certified TP = 150, FN = 16, recall = 90.36%
+- mechanical/fabricated FP = 0
+
+The total persisted counts of 63/1/87/27 retain the same pre-existing
+non-Revenue findings and do not indicate a regression.
+
+### Certification decision
+
+The remediation closes the diagnosed capability-model gap: governed
+quantity, component attribution, target-amount derivation, rate arithmetic,
+UOM, temporal applicability, and subject/contract linkage all follow the
+approved reusable path. It also preserves the zero-fabrication posture by
+refusing to assume currency. Live graduation is not achieved because no
+frozen Wave 1 subject carries enough governed currency evidence to construct
+a publishable candidate, so recall and value capture remain zero.
+
+**P3.xxI.5A-R PARTIALLY VALIDATED**
+
+Capability #2 remains owner-gated and was not started.
