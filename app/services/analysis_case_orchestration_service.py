@@ -2487,6 +2487,9 @@ class AnalysisCaseOrchestrationService:
                     actual_rate_field = self._resolve_canonical_concept_field(
                         cd.id, semantic_outcome, "actual_applied_rate"
                     )
+                    invoice_amount_field = self._resolve_canonical_concept_field(
+                        cd.id, semantic_outcome, "invoice_amount"
+                    )
                     unit_field = self._resolve_canonical_concept_field(
                         cd.id, semantic_outcome, "unit_of_measure"
                     )
@@ -2579,7 +2582,7 @@ class AnalysisCaseOrchestrationService:
                             canonical_frames,
                             semantic_outcome,
                             subject_concept_codes,
-                            allow_bridge=actual_rate_field is not None,
+                            allow_bridge=not is_contract_rate_shaped,
                         )
                     )
                     if subject_field is None or subject_evidence_concept is None:
@@ -2588,20 +2591,34 @@ class AnalysisCaseOrchestrationService:
                     quantity_field = self._resolve_canonical_concept_field(
                         cd.id, semantic_outcome, "quantity"
                     )
+                    duration_hours_field = None
                     if quantity_field is None:
-                        quantity_field = self._resolve_canonical_concept_field(
+                        duration_hours_field = self._resolve_canonical_concept_field(
                             cd.id, semantic_outcome, "duration_hours"
                         )
+                        quantity_field = duration_hours_field
 
                     rate_required_concepts = {
                         concept
                         for concept, field in {
                             "actual_applied_rate": actual_rate_field,
+                            "invoice_amount": invoice_amount_field,
+                            "unit_price": unit_price_field,
                             "unit_of_measure": unit_field,
                             "currency_code": currency_field,
                             "contract_id": contract_field,
                             "event_timestamp": event_timestamp_field,
-                            "quantity": quantity_field,
+                            # P3.xxI.5A-R: the evidence-completeness lookup below
+                            # matches on the semantic decision's OWN selected_concept.
+                            # quantity_field may actually be sourced from the
+                            # duration_hours concept (the fallback just above) --
+                            # requiring the literal "quantity" concept here would
+                            # never match that decision's real selected_concept,
+                            # permanently reporting it as missing even though it
+                            # resolved and is in use.
+                            (
+                                "duration_hours" if duration_hours_field is not None else "quantity"
+                            ): (quantity_field),
                         }.items()
                         if field is not None
                     }
@@ -2640,6 +2657,14 @@ class AnalysisCaseOrchestrationService:
                             event_timestamp_field=event_timestamp_field,
                             quantity_field=quantity_field,
                             canonical_evidence_completeness=evidence_completeness,
+                            invoice_amount_field=invoice_amount_field,
+                            component_unit_price_field=(
+                                None if is_contract_rate_shaped else unit_price_field
+                            ),
+                            implicit_quantity_unit=(
+                                "hour" if duration_hours_field is not None else None
+                            ),
+                            is_rate_card_shaped=is_contract_rate_shaped,
                         )
                     )
                     if actual_rate_field is not None:

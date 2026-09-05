@@ -348,7 +348,7 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
         IntelligencePackDefinition(
             pack_code="RATE-COMP",
             rule_code="CONTRACT-RATE-COMPLIANCE",
-            version="1.0",
+            version="1.1",
             required_domains=frozenset(),
             required_canonical_fields=frozenset(),
             required_entities=frozenset(),
@@ -365,15 +365,19 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
             ),
             minimum_entity_identity_confidence=0.70,
             confidence_aggregation_policy="max",
-            # A structural case-level gate: an explicit actual applied
-            # rate and one governed contract-rate concept must exist.
-            # Candidate execution below remains stricter and abstains
-            # unless linkage, rate basis/UOM, currency, and temporal
-            # applicability are compatible on the same comparison.
+            # A structural case-level gate: either an explicit actual rate
+            # or the amount/quantity inputs for a derived rate, plus one
+            # governed contract-rate concept. Candidate execution remains
+            # stricter and applies attribution, component, linkage, UOM,
+            # currency, and temporal gates per subject.
             required_canonical_measures=frozenset({"actual_applied_rate", "unit_price"}),
             alternative_canonical_measure_sets=(
                 frozenset({"actual_applied_rate", "unit_price"}),
                 frozenset({"actual_applied_rate", "hourly_rate"}),
+                frozenset({"invoice_amount", "quantity", "unit_price"}),
+                frozenset({"invoice_amount", "quantity", "hourly_rate"}),
+                frozenset({"invoice_amount", "duration_hours", "unit_price"}),
+                frozenset({"invoice_amount", "duration_hours", "hourly_rate"}),
             ),
             currency_behavior="currency_agnostic",
             unit_behavior="unit_aware",
@@ -382,6 +386,7 @@ def default_intelligence_pack_registry() -> IntelligencePackRegistry:
                     "governed_subject_linkage",
                     "governed_contract_rate",
                     "governed_actual_applied_rate",
+                    "governed_derived_actual_applied_rate",
                     "compatible_rate_basis",
                     "compatible_currency",
                     "unambiguous_temporal_applicability",
