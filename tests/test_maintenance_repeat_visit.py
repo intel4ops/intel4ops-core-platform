@@ -35,6 +35,7 @@ def _dataset(
     dataset_id: UUID | None = None,
     trust_id: UUID | None = None,
     label: str = "service_interventions.csv",
+    relation_dimension_field: str | None = "component",
 ) -> InterventionDatasetFields:
     return InterventionDatasetFields(
         dataset_id=dataset_id or uuid4(),
@@ -45,6 +46,7 @@ def _dataset(
         intervention_id_field="service_order",
         timestamp_field="completed_at",
         activity_category_field="service_category",
+        relation_dimension_field=relation_dimension_field,
     )
 
 
@@ -53,12 +55,14 @@ def _row(
     intervention: str,
     occurred_at: str | None,
     category: str = "calibration",
+    component: str | None = "seal",
 ) -> dict[str, object]:
     return {
         "equipment": subject,
         "service_order": intervention,
         "completed_at": occurred_at,
         "service_category": category,
+        "component": component,
     }
 
 
@@ -158,7 +162,19 @@ def test_c_three_event_chain_pairs_only_adjacent_interventions() -> None:
     ]
 
 
-def test_d_generic_service_fixture_runs_end_to_end(db: Session, tmp_path: Path) -> None:
+def test_d_generic_service_fixture_reaches_ready_but_abstains_without_relation_dimension(
+    db: Session, tmp_path: Path
+) -> None:
+    """P3.xxI.5B-R: readiness correctly reaches READY and execution now
+    correctly resolves admissible datasets (asset_id/work_order_id/
+    service_type/completed_at all auto-accept directly here -- this
+    fixture never hit the SCHEDULE/EVENT role-precedence defect FieldMaintenance
+    did), but the orchestration wiring resolves no governed relation
+    dimension beyond activity category for this or any other real corpus
+    today. Publication must therefore still be zero -- this is the exact
+    safety property the relation-dimension gate exists to guarantee: fixing
+    identity/readiness never turns bare category adjacency into a
+    publishable finding."""
     org: Organization = OrganizationService().create(
         db,
         OrganizationCreate(
@@ -234,9 +250,7 @@ def test_d_generic_service_fixture_runs_end_to_end(db: Session, tmp_path: Path) 
             )
         ).all()
     )
-    assert len(findings) == 1
-    assert "SO-1" in findings[0].summary
-    assert "SO-2" in findings[0].summary
+    assert findings == []
 
 
 def test_e_published_finding_preserves_full_lineage_and_no_policy_claim(
@@ -412,3 +426,90 @@ def test_negative_h_tied_distinct_events_abstain_from_ordering() -> None:
         {"EQ-1"},
     )
     assert pairs == []
+
+
+# --- P3.xxI.5B-R: bare activity-category adjacency is never sufficient
+# governed relation evidence on its own -- a pair requires an additional,
+# shared, non-null relation-dimension value. See build_repeat_visit_pairs's
+# own docstring and docs/p3xxi5b-r-semantic-relation-reconciliation.md.
+
+
+def test_negative_i_no_relation_dimension_field_never_pairs() -> None:
+    """No relation-dimension concept resolves at all (relation_dimension_field
+    is None) -- exactly the real state of every corpus this program has
+    certified against today. Same asset, same category, clean adjacent
+    timestamps: everything that used to be sufficient before this fix. The
+    pair must not form."""
+    pairs = build_repeat_visit_pairs(
+        [
+            _dataset(
+                [
+                    _row("EQ-1", "SO-1", "2026-01-01T08:00:00Z"),
+                    _row("EQ-1", "SO-2", "2026-01-03T08:00:00Z"),
+                ],
+                relation_dimension_field=None,
+            )
+        ],
+        {"EQ-1"},
+    )
+    assert pairs == []
+
+
+def test_negative_j_relation_dimension_field_present_but_value_missing_never_pairs() -> None:
+    """The field is declared, but the value is blank on at least one row --
+    an unresolved relation dimension is not governed evidence and must not
+    be treated as an implicit wildcard match."""
+    pairs = build_repeat_visit_pairs(
+        [
+            _dataset(
+                [
+                    _row("EQ-1", "SO-1", "2026-01-01T08:00:00Z", component=None),
+                    _row("EQ-1", "SO-2", "2026-01-03T08:00:00Z", component="seal"),
+                ]
+            )
+        ],
+        {"EQ-1"},
+    )
+    assert pairs == []
+
+
+def test_negative_k_different_relation_dimension_values_do_not_pair() -> None:
+    """Same asset, same category, both rows DO carry a governed relation
+    dimension -- but the values genuinely differ (a bearing failure vs. a
+    seal failure). Two ordinary, unrelated interventions of the same
+    generic category must not be conflated into a repeat/rework pair
+    merely because both happened to record some relation-dimension value."""
+    pairs = build_repeat_visit_pairs(
+        [
+            _dataset(
+                [
+                    _row("EQ-1", "SO-1", "2026-01-01T08:00:00Z", component="bearing"),
+                    _row("EQ-1", "SO-2", "2026-01-03T08:00:00Z", component="seal"),
+                ]
+            )
+        ],
+        {"EQ-1"},
+    )
+    assert pairs == []
+
+
+def test_positive_relation_dimension_present_and_shared_produces_a_pair() -> None:
+    """The positive counterpart to the three negatives above: when a
+    governed relation dimension genuinely resolves and genuinely agrees
+    (both interventions are seal-related), the pair forms exactly as it
+    always did -- this fix narrows WHEN a pair forms, it does not remove
+    the capability's ability to ever form one."""
+    pairs = build_repeat_visit_pairs(
+        [
+            _dataset(
+                [
+                    _row("EQ-1", "SO-1", "2026-01-01T08:00:00Z", component="seal"),
+                    _row("EQ-1", "SO-2", "2026-01-03T08:00:00Z", component="seal"),
+                ]
+            )
+        ],
+        {"EQ-1"},
+    )
+    assert len(pairs) == 1
+    assert pairs[0].prior.intervention_key == "SO-1"
+    assert pairs[0].subsequent.intervention_key == "SO-2"

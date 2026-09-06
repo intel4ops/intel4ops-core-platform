@@ -122,6 +122,67 @@ def test_negative_b_constant_field_is_neither() -> None:
     assert field.is_candidate_reference_identifier is False
 
 
+# --- P3.xxI.5B-R: SCHEDULE must not unconditionally preempt EVENT ---
+
+
+def test_a_scheduled_date_alone_is_genuinely_schedule_shaped() -> None:
+    """No completion/close/actual/occurred evidence at all -- a forward-
+    looking plan, not a record of what happened. SCHEDULE is the correct,
+    honest answer here (mirrors the semantic_calibration_fixtures.py
+    'work_order_unfamiliar_aliases' fixture this test intentionally does
+    not disturb)."""
+    df = pd.DataFrame(
+        {
+            "svc_ord": [f"WO-{i}" for i in range(1, 11)],
+            "scheduled_date": [f"2026-01-{i:02d}" for i in range(1, 11)],
+            "status": ["open", "closed"] * 5,
+        }
+    )
+    profile = dataset_profiler.profile("plan.csv", df)
+    role = dataset_role_classifier.classify(profile)
+    assert role.primary_role == "schedule"
+
+
+def test_b_scheduled_plus_completed_date_is_event_shaped_not_schedule() -> None:
+    """P3.xxI.5B-R root-cause fix: a dataset with BOTH a scheduled/planned
+    date AND a completed/closed/actual/occurred date is a record of what
+    happened (an intervention/event log), not a forward-looking plan, even
+    though it also carries a scheduled-date column. Before this fix,
+    SCHEDULE unconditionally preempted EVENT (EVENT was only proposed when
+    nothing else matched), so this genuinely event-shaped dataset was
+    misclassified purely because of the extra scheduled-date column."""
+    df = pd.DataFrame(
+        {
+            "event_id": [f"MEV-{i}" for i in range(1, 11)],
+            "asset_id": [f"A{i % 3}" for i in range(1, 11)],
+            "work_order_id": [f"WO-{i}" for i in range(1, 11)],
+            "event_type": ["CM", "PM"] * 5,
+            "scheduled_date": [f"2026-01-{i:02d}" for i in range(1, 11)],
+            "completed_date": [f"2026-02-{i:02d}" for i in range(1, 11)],
+        }
+    )
+    profile = dataset_profiler.profile("maintenance_events.csv", df)
+    role = dataset_role_classifier.classify(profile)
+    assert role.primary_role == "event"
+
+
+def test_c_closed_date_alone_also_suppresses_schedule() -> None:
+    """The completion signal generalizes beyond the literal word
+    'completed' -- 'closed'/'actual'/'occurred' are equally valid evidence
+    that a dataset records what happened, not what is planned."""
+    df = pd.DataFrame(
+        {
+            "record_id": [f"R-{i}" for i in range(1, 11)],
+            "asset_id": [f"A{i % 3}" for i in range(1, 11)],
+            "scheduled_date": [f"2026-01-{i:02d}" for i in range(1, 11)],
+            "closed_date": [f"2026-02-{i:02d}" for i in range(1, 11)],
+        }
+    )
+    profile = dataset_profiler.profile("records.csv", df)
+    role = dataset_role_classifier.classify(profile)
+    assert role.primary_role != "schedule"
+
+
 def test_profiler_never_hits_the_network_or_requires_ai() -> None:
     """Deterministic profiling has no provider dependency at all -- import
     the profiler module in isolation and confirm it never imports
