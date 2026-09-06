@@ -32,6 +32,13 @@ class InterventionDatasetFields:
     timestamp_field: str
     activity_category_field: str
     canonical_evidence_completeness: CanonicalEvidenceCompletenessResult | None = None
+    # P3.xxI.5B-R: an OPTIONAL governed relation dimension beyond bare
+    # activity category -- e.g. a shared failure/failure-category,
+    # component/subsystem, or service/repair type. None when no such field
+    # resolves (every real corpus this program has certified against
+    # today). See build_repeat_visit_pairs's own docstring for why this is
+    # required, not optional, for a pair to form.
+    relation_dimension_field: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class InterventionEvidence:
     occurred_at: datetime
     activity_category: str
     normalized_activity_category: str
+    relation_dimension_value: str | None
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,26 @@ def build_repeat_visit_pairs(
     Intervention identity is authoritative for duplicate suppression. Conflicting
     representations of one identity and distinct identities tied at one timestamp
     abstain because their sequence cannot be governed deterministically.
+
+    P3.xxI.5B-R: same-asset + same-activity-category adjacency ALONE is
+    evidence that two interventions are comparable -- it is not, by itself,
+    sufficient governed evidence that they are RELATED (a repeat/rework
+    pair) rather than two ordinary, independent interventions of the same
+    generic type. A prior reconciliation (docs/p3xxi5b-r-semantic-relation-
+    reconciliation.md) found that publishing on category adjacency alone,
+    once the identity gate is cleared, produces an unacceptable
+    false-positive surface (verified against a real corpus: 36 true
+    matches against 1,085 non-truth pairs). A pair is therefore only
+    ELIGIBLE at all when both interventions also share a non-null,
+    governed `relation_dimension_value` -- e.g. a failure/failure-category,
+    component/subsystem, or service/repair type. When a dataset resolves no
+    such field (`relation_dimension_field is None`, true of every real
+    corpus this program has certified against so far), none of its
+    interventions can ever pair -- this is a deliberate, safe abstention,
+    not a bug: the platform does not yet have a governed source of that
+    evidence (see the reconciliation doc's Option B/C). This never narrows
+    to a customer-specific or simulation-specific value -- it is a purely
+    structural requirement on whether the concept resolved at all.
     """
 
     representations: dict[tuple[str, str], list[InterventionEvidence]] = {}
@@ -97,6 +125,10 @@ def build_repeat_visit_pairs(
             and not dataset.canonical_evidence_completeness.satisfied
         ):
             continue
+        has_relation_dimension = (
+            dataset.relation_dimension_field is not None
+            and dataset.relation_dimension_field in dataset.dataframe.columns
+        )
         for row_index, row in dataset.dataframe.iterrows():
             subject_key = _text(row[dataset.subject_id_field])
             intervention_key = _text(row[dataset.intervention_id_field])
@@ -110,6 +142,11 @@ def build_repeat_visit_pairs(
                 or category is None
             ):
                 continue
+            relation_dimension_value = (
+                _text(row[dataset.relation_dimension_field])
+                if has_relation_dimension and dataset.relation_dimension_field is not None
+                else None
+            )
             evidence = InterventionEvidence(
                 dataset=dataset,
                 row_reference=str(row_index),
@@ -118,6 +155,7 @@ def build_repeat_visit_pairs(
                 occurred_at=occurred_at,
                 activity_category=category,
                 normalized_activity_category=category.casefold(),
+                relation_dimension_value=relation_dimension_value,
             )
             representations.setdefault((subject_key, intervention_key), []).append(evidence)
 
@@ -128,6 +166,7 @@ def build_repeat_visit_pairs(
                 item.subject_key,
                 item.normalized_activity_category,
                 item.occurred_at,
+                item.relation_dimension_value,
             )
             for item in event_representations
         }
@@ -144,10 +183,21 @@ def build_repeat_visit_pairs(
             )
         )
 
-    related_groups: dict[tuple[str, str], list[InterventionEvidence]] = {}
+    related_groups: dict[tuple[str, str, str], list[InterventionEvidence]] = {}
     for intervention in deduplicated:
+        # P3.xxI.5B-R: category adjacency alone is never sufficient
+        # governed evidence of relatedness -- see this function's own
+        # docstring. An intervention with no resolved relation-dimension
+        # value can never join a group, and therefore can never pair.
+        if intervention.relation_dimension_value is None:
+            continue
         related_groups.setdefault(
-            (intervention.subject_key, intervention.normalized_activity_category), []
+            (
+                intervention.subject_key,
+                intervention.normalized_activity_category,
+                intervention.relation_dimension_value.casefold(),
+            ),
+            [],
         ).append(intervention)
 
     pairs: list[RepeatVisitPair] = []
@@ -202,13 +252,15 @@ def _intervention_evidence(intervention: InterventionEvidence, role: str) -> Evi
         description=(
             f"Intervention {intervention.intervention_key} on subject "
             f"{intervention.subject_key} has governed activity category "
-            f"{intervention.activity_category} and timestamp "
+            f"{intervention.activity_category}, relation dimension "
+            f"{intervention.relation_dimension_value}, and timestamp "
             f"{intervention.occurred_at.isoformat()}."
         ),
         metadata={
             "role": role,
             "row_reference": intervention.row_reference,
             "activity_category": intervention.activity_category,
+            "relation_dimension_value": intervention.relation_dimension_value,
             "occurred_at": intervention.occurred_at.isoformat(),
         },
     )
@@ -288,6 +340,11 @@ def run_maintenance_repeat_visit(
                         identity_role="material_condition",
                         reference_type="activity_category",
                         canonical_reference=prior.normalized_activity_category,
+                    ),
+                    StableFindingIdentityReference(
+                        identity_role="material_condition",
+                        reference_type="relation_dimension",
+                        canonical_reference=(prior.relation_dimension_value or "").casefold(),
                     ),
                 ],
                 domains=["maintenance"],

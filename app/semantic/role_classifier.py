@@ -143,9 +143,20 @@ def _score_roles(profile: DatasetProfile) -> list[RoleScore]:
         )
 
     # SCHEDULE: dataset with a scheduled/planned temporal field + no
-    # currency, no lifecycle-close status.
+    # currency, no lifecycle-close status, and no actual-occurrence/
+    # completion evidence. P3.xxI.5B-R: a dataset that ALSO records when
+    # something actually completed/closed/occurred is a record of what
+    # happened (EVENT-shaped -- an intervention/activity log), not a
+    # forward-looking plan (SCHEDULE-shaped), even though it also carries a
+    # scheduled/planned date. Without this guard, SCHEDULE unconditionally
+    # preempted EVENT below (EVENT is only proposed when nothing else
+    # matched), which meant a genuine event log with its own row-level
+    # identity, a completion timestamp, and entity references was
+    # misclassified purely because it also had an optional scheduled-date
+    # column -- not because SCHEDULE was a better description of its shape.
     scheduled_hits = field_matches("scheduled", "planned", "due")
-    if scheduled_hits and not amount_hits:
+    completion_hits = field_matches("completed", "closed", "actual", "occurred")
+    if scheduled_hits and not amount_hits and not completion_hits:
         scores.append(
             RoleScore(
                 DatasetRole.SCHEDULE.value,
