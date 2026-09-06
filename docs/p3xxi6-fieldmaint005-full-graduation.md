@@ -350,3 +350,91 @@ family in FIELDMAINT-005's truth, correctly not attempted here given its
 dependency on an ungoverned workload-normalcy concept (see the Gap
 Ledger's own risk note, consistent with the breadth-expansion doc's prior
 `HIGH_DESIGN_RISK` flag on the parent Labor Productivity family).
+
+## 7. Post-merge verification (PR #129 merged at `72d5816b682ba1b0a9dd8684d6f15999108ef2f8`)
+
+Per explicit owner instruction, the pre-merge numbers above were **not**
+assumed to hold post-merge -- a fresh production case was created and run
+against deployed `main`, and results were measured, not carried forward.
+
+- Local `main` confirmed `== origin/main` at `72d5816b682ba1b0a9dd8684d6f15999108ef2f8`.
+- Backend health: transient HTTP 502 immediately after merge (Render
+  redeploy in progress), HTTP 200 (`{"status":"ok",...}`) on retry seconds
+  later.
+- Post-merge `main` Quality Gate (run `34045934615`): **success**.
+- Fresh case `P3xxI6-Cert-FIELDMAINT-005` (`0521ccda-2bc7-407c-9ab9-c9c24db16db3`),
+  run `0c6ce6dc-367f-4807-b7ad-237800cbaf5b`, production-pipeline-first,
+  reached terminal `review_required` at 2026-09-06T16:42:52Z. Findings
+  frozen (131 total: 44 `MAINTENANCE-SCHEDULE-COMPLETION-GAP`, 86
+  `REVENUE-AMOUNT-VARIANCE`, 1 `XDOM-DATA-LINKAGE-ISSUE`, 0
+  `MAINTENANCE-REPEAT-VISIT`, 0 `CONTRACT-RATE-COMPLIANCE`) and every
+  affected work order/asset recorded *before* hidden truth was read.
+
+### Measured full-simulation score (SIM-OFS-FIELDMAINT-005, complete 387-item truth)
+
+| Metric | Result |
+|---|---:|
+| TP | 130 |
+| FP | 0 |
+| FN | 257 |
+| Precision | 130 / 130 = **100.00%** |
+| Recall | 130 / 387 = **33.59%** |
+| Economic-value capture | $206,577.52 / $215,698.49 = **95.77%** |
+| Mechanical/fabricated FP | **0** |
+| DQ capture (`missing_records`, 60 defects) | 0 / 60 -- unchanged, no dedicated capability exists (`GAP-008`) |
+
+| Truth family | Items | Value | TP | FP | FN | Recall | Value captured |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `unbilled_parts` | 88 | $47,347.99 | 86 (85 exact-value, 1 partial) | 0 | 2 | 97.73% | $46,381.52 (97.96%) |
+| `preventive_maintenance_missed` | 44 | $160,196.00 | 44 | 0 | 0 | **100.00%** | $160,196.00 (100.00%) |
+| `overtime_leakage` | 255 | $8,154.50 | 0 | 0 | 255 | 0.00% | $0.00 (0.00%) |
+
+### Measured full-corpus control (all 4 frozen FieldMaintenance cases, against current `main`)
+
+| Case | `MAINTENANCE-SCHEDULE-COMPLETION-GAP` | `REVENUE-AMOUNT-VARIANCE` | `MAINTENANCE-REPEAT-VISIT` | `CONTRACT-RATE-COMPLIANCE` |
+|---|---:|---:|---:|---:|
+| FIELDMAINT-001 | 0 | 61 | 0 | 0 |
+| FIELDMAINT-002 | 7 | 0 | 0 | 0 |
+| FIELDMAINT-005 | 44 | 86 | 0 | 0 |
+| FIELDMAINT-007 | 0 | 26 | 0 | 0 |
+| **Total** | **51** | **173** | **0** | **0** |
+
+**All pre-merge expected controls confirmed exactly, measured, not
+assumed:** preventive-maintenance 44/44 on FIELDMAINT-005; full frozen
+FieldMaintenance corpus 51/51 TP on `MAINTENANCE-SCHEDULE-COMPLETION-GAP`
+with 0 FP; Revenue Amount Variance preserved exactly at 61/0/86/26;
+`MAINTENANCE-REPEAT-VISIT` and `CONTRACT-RATE-COMPLIANCE` both remain at
+0 findings everywhere (unchanged); mechanical/fabricated FP = 0
+throughout.
+
+## 8. Learning-cycle record (SIM-OFS-FIELDMAINT-005, first current-version full-simulation cycle)
+
+`SIM-OFS-FIELDMAINT-005` is the program's first full-simulation (all
+truth families, not a subset) learning-cycle example under the current
+platform version. One gap was resolved this cycle; two remain open.
+
+### GAP-007 -- resolved this cycle
+
+| Field | Value |
+|---|---|
+| Miss | 44 `preventive_maintenance_missed` truth items unaddressed |
+| Cause (chain) | scheduled preventive maintenance not completed -> `scheduled_timestamp` had no path to `AUTO_ACCEPTED` (no `compatible_dataset_roles`, no sibling-corroboration declaration) -> readiness/execution both correctly saw the concept as ungoverned enough to withhold the capability |
+| Remediation | reusable scheduled/completed-timestamp evidence capability (`MAINTENANCE-SCHEDULE-COMPLETION-GAP`) + a foundational semantic-registry fix (`alternative_sibling_concept_sets` added to `scheduled_timestamp`, mirroring `completed_timestamp`'s own P3.xxI.3 fix) |
+| Implementation SHA | `72d5816b682ba1b0a9dd8684d6f15999108ef2f8` (PR #129 merge commit) |
+| Before score (FIELDMAINT-005) | 0 / 44 recall on this family; corpus-wide 0 / 51 |
+| After score (FIELDMAINT-005) | **44 / 44** (100%) |
+| After score (full frozen FieldMaintenance corpus) | **51 / 51 TP, 0 FP** |
+| Regression result | Clean -- Revenue Amount Variance (61/0/86/26), `MAINTENANCE-REPEAT-VISIT` (0 everywhere), `CONTRACT-RATE-COMPLIANCE` (0 everywhere) all unchanged; 1,761 non-Postgres + 83 Postgres tests pass |
+| Transfer candidates | Any customer/simulation with a governed `scheduled_timestamp`/`completed_timestamp` pair on a maintenance-shaped (or any) event dataset -- the fix is fully generic, not FieldMaintenance-specific. The `scheduled_timestamp` semantic-registry fix specifically transfers to any future capability that needs this concept at `AUTO_ACCEPTED`, not just this one |
+
+### GAP-006 (`overtime_leakage`) -- open, not attempted
+
+Deferred pending a governed workload-normalcy concept; attempting it
+without one risks inventing a threshold, the exact failure mode this
+program has rejected elsewhere. See `docs/simulation-gap-ledger.md`.
+
+### GAP-008 (DQ `missing_records`) -- open, not attempted
+
+A referential/join-completeness Trust primitive gap (60 defects, no
+economic value); lower priority than GAP-006, not attempted this cycle.
+See `docs/simulation-gap-ledger.md`.
