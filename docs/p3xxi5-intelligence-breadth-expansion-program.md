@@ -2,7 +2,8 @@
 
 ## P3.xxI.5 INTELLIGENCE BREADTH RECONCILIATION
 
-**Status:** Capability #1 implemented and live-certified; P3.xxI.5A FAILED
+**Status:** Capabilities #1 and #2 implemented and live-certified;
+P3.xxI.5A-R PARTIALLY VALIDATED; P3.xxI.5B FAILED
 
 **Reconciled baseline:** pre-implementation `origin/main` at
 `a9609e36b95df0d85fabf04cc51a6a1673eae0a5`; implementation merged at
@@ -86,7 +87,7 @@ Status vocabulary is intentionally constrained to the program's required classif
 |---:|---|---:|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Revenue Amount/Billing Variance | 166 | **GRADUATED** | Invoice linkage; governed duration/rate; amount, currency, UOM; readiness; stable identity; lineage | Rental governed rate-basis evidence remains absent | Medium | High | High | Low under current abstention rules | High for Rental rate basis | Can surface rate-driven amount differences | High; completed | Preserve baseline; use as control and shared arithmetic layer |
 | 2 | Revenue/Billing Timeliness | 21 | **FOUNDATIONAL_GAP_REQUIRED** | Event/completed timestamps; invoice entity; temporal linkage; lineage | Dedicated governed invoice/billing timestamp and governed allowed-delay policy | Medium | High | Medium | High if a delay threshold is invented | High | May share invoice/subject linkage with amount and existence | Low today | Add semantic and policy-evidence contracts before build |
-| 3 | Maintenance Repeat Visit/Rework | 76 | **FOUNDATIONAL_GAP_REQUIRED** | Asset/work-order identity; event timestamps; relationship graph; repeat detection patterns | Governed proximity window and evidence distinguishing rework from legitimate subsequent work | Medium-high | High | High | Medium-high | Related to MAINT-001, but not the same truth mechanism | Low today | Define policy evidence and intervention equivalence before build |
+| 3 | Maintenance Repeat Visit/Rework | 76 | **PARTIALLY_IMPLEMENTED** | Registered `MAINTENANCE-REPEAT-VISIT` pack; asset/work-order identity; timestamps; exact-category adjacency; stable identity and lineage | Live readiness/execution evidence mismatch; governed evidence distinguishing rework from legitimate subsequent work | Medium-high | High | High | Proven high if the current identity gate is bypassed | Related to MAINT-001, but not the same truth mechanism | Live certification completed at 0 TP / 76 FN | Do not graduate; preserve safe abstention and redesign only under a new owner gate |
 | 4 | Contract/Rate Compliance | 48 | **PARTIALLY_IMPLEMENTED** | Registered pack; explicit actual-rate semantics; applicable-rate resolver; temporal windows; duration; quantity; currency/UOM; subject-aware identity; lineage | Live Wave 1 has no explicit actual-rate field; implementation omitted governed attributable amount/quantity derivation; Rental also lacks rate basis/UOM and currency | Medium | High | High | Low with strict abstention | High | Overlaps economically with amount variance but explains a distinct rate breach | Live certification completed at 0 TP / 48 FN | Do not graduate; owner review required |
 | 5 | Labor Productivity | 324 | **HIGH_DESIGN_RISK** | Person/work-order identity; duration; quantity; timestamps; relationship graph | Governed productive/nonproductive time, shift/capacity, overtime entitlement, work attribution | High | High | Very high | High | High | May share labor amounts with Revenue Amount | Medium-low | Defer until labor evidence model is governed |
 | 6 | Process Cycle-Time/Schedule Adherence | 77 | **FOUNDATIONAL_GAP_REQUIRED** | Scheduled/completed timestamps; asset/work-order linkage; duration arithmetic | Governed schedule tolerance, expected occurrence semantics, cancellation/deferral evidence | Medium-high | High | High | High | High | Shares temporal concepts with Timeliness and Repeat Visit | Low today | Establish a reusable policy/tolerance contract first |
@@ -395,3 +396,46 @@ run IDs, and regression reconciliation are in
 **P3.xxI.5A-R PARTIALLY VALIDATED**
 
 Capability #2 must not start without a new owner authorization.
+
+## Capability #2 post-merge scorecard
+
+P3.xxI.5B merged through PR #125 at
+`f9d1d9455c8a7ff3624c2533a4adf1aae5a6c055`. Deployment health and the
+post-merge main Quality Gate passed. Four fresh applicable FieldMaintenance
+runs completed before examiner-side truth comparison.
+
+The capability produced no candidates and no findings. The frozen family
+remained 76 `repeat_repair` items worth $117,524.00 in truth-authored value.
+Certification scored TP=0, FP=0, FN=76, precision N/A, recall=0.00%,
+truth-authored value capture=0.00%, and mechanical/fabricated FP=0.
+
+| Measure | Before P3.xxI.5B | After P3.xxI.5B | Delta |
+|---|---:|---:|---:|
+| Registered portfolio breadth | 5/10 = **50.00%** | 6/10 = **60.00%** | +10.00 pp |
+| Graduated-family breadth | 1/10 = **10.00%** | 1/10 = **10.00%** | none |
+| Graduated truth-family addressability | 166/788 = **21.07%** | 166/788 = **21.07%** | none |
+| Certified TP coverage | 150/788 = **19.04%** | 150/788 = **19.04%** | none |
+| Observed authored-value capture | $83,263.29 / $2,285,738.56 = **3.64%** | $83,263.29 / $2,285,738.56 = **3.64%** | none |
+
+Registered breadth increases because the independent pack exists. Graduated
+breadth, certified TP coverage, and economic-weighted coverage do not increase
+because the new family produced zero certified true positives.
+
+The production blocker is a `CAPABILITY_MODEL_GAP` with an immediate
+`SEMANTIC_EVIDENCE_GAP`: generic readiness sees a structurally available
+intervention identifier while dataset-local execution correctly refuses its
+`accepted_with_flag` semantic evidence, leaving zero pairing datasets. A naive
+threshold bypass is unsafe. Across the four frozen cases, the implemented
+same-category adjacency rule would form 1,121 pairs, only 36 of which match
+the 76-item truth family; 1,085 would be non-truth pairs and 40 truth items
+would still be missed. The missing governed distinction between ordinary
+recurring maintenance and actual repeat repair remains foundational.
+
+Revenue Amount remained exactly 61/0/86/26, `MAINT-001` was unchanged, and no
+policy violation, economic exposure, or mechanical false positive was
+fabricated. Full run IDs, evidence traces, and failure classification are in
+`docs/p3xxi5b-maintenance-repeat-visit-rework.md`.
+
+**P3.xxI.5B FAILED**
+
+Capability #3 must not start without a new owner authorization.
