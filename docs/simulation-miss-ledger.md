@@ -7,6 +7,13 @@ where the underlying cause is identical across many truth items. Read
 alongside `docs/simulation-gap-ledger.md`, which rolls related misses up
 into reusable, ranked platform gaps.
 
+**2026-09-06 post-merge note:** the `preventive_maintenance_missed` row
+below was re-measured (not assumed) against deployed `main` at
+`72d5816b682ba1b0a9dd8684d6f15999108ef2f8` via a fresh production case
+(`0521ccda-2bc7-407c-9ab9-c9c24db16db3`) and confirmed resolved exactly as
+recorded. See `docs/p3xxi6-fieldmaint005-full-graduation.md` Section 7 for
+the full post-merge verification.
+
 Columns: **Sim** (simulation the miss was observed on) · **Truth ref**
 (scenario/finding id(s)) · **Items** · **Value** · **Classification**
 (`SOURCE_HAS_EXPLICIT_SEMANTIC_EVIDENCE` /
@@ -24,6 +31,28 @@ Columns: **Sim** (simulation the miss was observed on) · **Truth ref**
 | `overtime_leakage` (all) | 255 | $8,154.50 | `CAPABILITY_MODEL_GAP` | No registered capability reads `labor_entries.overtime_hours` against any workload-normalcy baseline; `technicians.csv` carries no `overtime_rate`-shaped field in this corpus. Building a safe baseline without inventing a threshold is unsolved. | `GAP-006` |
 | `preventive_maintenance_missed` (all, FIELDMAINT-005) -- **RESOLVED** | 44 -> 0 | $160,196.00 -> $0 remaining FN | `CAPABILITY_MODEL_GAP` -> **CLOSED** | Was: no registered capability compared `scheduled_timestamp` to `completed_timestamp`. Fixed by the new `MAINTENANCE-SCHEDULE-COMPLETION-GAP` capability (GAP-007), retested: 44/44 TP, 0 FP on FIELDMAINT-005; 7/7 TP, 0 FP on FIELDMAINT-002; 0/0 correctly on FIELDMAINT-001/007. | `GAP-007` (closed) |
 | DQ `missing_records` (all) | 60 defects | n/a (DQ, not economic) | `CAPABILITY_MODEL_GAP` | Existing `required_field_completeness` Trust rule is a same-row, per-field null check; structurally cannot express "zero matching rows in a different dataset" (the actual shape of this defect). | `GAP-008` |
+
+## Learning Batch 1 (5 new simulations, 2026-09-06)
+
+Full detail, per-sim scoring, and root-cause analysis in
+`docs/simulation-gap-ledger.md`'s "Learning Batch 1" section. Summarized
+here at truth-family grain (not one row per truth item, per this ledger's
+own deterministic-grouping convention).
+
+| Sim | Truth ref | Items | Value | Classification | Cause | Linked gap |
+|---|---|---:|---:|---|---|---|
+| FIELDMAINT-003, -006 | `repeat_repair` | 524 | $865,862.00 | `DATA_CONTRACT_GAP` | Same root cause as the original 76-item finding, now measured at much larger scale -- no governed relation dimension beyond a coarse activity category. | `GAP-004` |
+| FIELDMAINT-003, -006, -009 | `technician_idle_time` | 404 | $97,888.50 | `SEMANTIC_GAP` | No governed workload-normalcy baseline exists to compare logged hours against; same root cause as `overtime_leakage`. | `GAP-006` |
+| FIELDMAINT-003, -009 | `delayed_work_order_completion` | 155 | $1,001,250.00 | `GOVERNANCE_GAP` | No governed "allowed completion time" policy exists; evidence (timestamps) may be present but no threshold is defined, and none should be invented from truth. | `GAP-009` |
+| FIELDMAINT-009 | `unauthorized_discount` | 90 | $28,780.46 | `SEMANTIC_GAP` | No governed discount-authorization concept exists; single-simulation occurrence so far. | `GAP-010` |
+| RENTAL-013 (9 families), RENTAL-004 (3 categories) | Rental-specific leakage (`excessive_asset_downtime`, `late_maintenance`, `late_return_leakage`, `unbilled_rental_days`, `duplicate_credit_or_adjustment`, `fuel_discrepancy`, `missing_field_tickets`, `delayed_invoicing`, `rental_rate_mismatch`, `UNDER_BILLING`, `UNBILLED_SERVICE`, `DUPLICATE_PAYMENT`) | 113 | $3,157,225.27 | `CAPABILITY_MODEL_GAP` (majority) / `DATA_CONTRACT_GAP` (`rental_rate_mismatch` slice) | No capability in this platform is shaped for Rental's `contract_id`/`dispatch_id`-keyed schema; every existing capability is FieldMaintenance-`work_order_id`-shaped and structurally inapplicable. | `GAP-011` (extends `GAP-001`) |
+| FIELDMAINT-003, -006, -009 (partial) | `unbilled_parts` residual | 5 | $796.56 | `DATA_CONTRACT_GAP` | Same aggregate-vs-itemized-invoice limitation already identified on FIELDMAINT-005. | `GAP-005` |
+
+**Resolved this batch (not misses):** `preventive_maintenance_missed`
+(171/171 across FIELDMAINT-003/006/009, `GAP-007`, zero new code) and, as
+an unplanned positive transfer of the pre-existing `REVENUE-AMOUNT-VARIANCE`
+capability, `unbilled_labor_hours` (179/180), `missing_field_ticket_billing`
+(142/142), and `contract_rate_mismatch` (31/31, FIELDMAINT-003 only).
 
 ## Prior sessions (carried forward for continuity, not re-verified in this pass)
 
