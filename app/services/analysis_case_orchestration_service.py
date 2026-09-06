@@ -98,6 +98,11 @@ from app.services.maintenance_repeat_visit_service import (
     build_repeat_visit_pairs,
     run_maintenance_repeat_visit,
 )
+from app.services.maintenance_schedule_completion_service import (
+    ScheduledMaintenanceDatasetFields,
+    find_incomplete_scheduled_maintenance,
+    run_maintenance_schedule_completion,
+)
 from app.services.revenue_variance_intelligence_service import (
     DatasetConceptFields,
     run_revenue_amount_variance,
@@ -181,6 +186,10 @@ _GOVERNED_RULE_CODES = frozenset(
         "REVENUE-AMOUNT-VARIANCE",
         "CONTRACT-RATE-COMPLIANCE",
         "MAINTENANCE-REPEAT-VISIT",
+        # P3.xxI.6 (GAP-007): additive fourth governed rule -- same
+        # generic readiness/activation-decision persistence, no parallel
+        # execution system.
+        "MAINTENANCE-SCHEDULE-COMPLETION-GAP",
     }
 )
 
@@ -1323,6 +1332,7 @@ class AnalysisCaseOrchestrationService:
             "REVENUE-AMOUNT-VARIANCE",
             "CONTRACT-RATE-COMPLIANCE",
             "MAINTENANCE-REPEAT-VISIT",
+            "MAINTENANCE-SCHEDULE-COMPLETION-GAP",
         }
         evaluated = 0
         agree_count = 0
@@ -1981,6 +1991,120 @@ class AnalysisCaseOrchestrationService:
                     "candidate_dataset_count": len(intervention_datasets),
                     "pair_count": len(repeat_pairs),
                     "finding_count": len(repeat_findings),
+                    "policy_window_applied": False,
+                },
+            )
+
+        # --- P3.xxI.6 (GAP-007): MAINTENANCE SCHEDULE COMPLETION GAP ---
+        # Independent from MAINT-001 and MAINTENANCE-REPEAT-VISIT. A
+        # scheduled maintenance event with no governed completed timestamp
+        # is reported as an observed scheduling gap only; no policy
+        # violation or corrective-cost exposure is invented.
+        schedule_completion_ready = (
+            governed_status_by_rule.get("MAINTENANCE-SCHEDULE-COMPLETION-GAP") == "READY"
+        )
+        if schedule_completion_ready:
+            schedule_pack = default_intelligence_pack_registry().get(
+                "MAINTENANCE-SCHEDULE-COMPLETION-GAP"
+            )
+            schedule_eligible_assets = (
+                eligible_entity_keys(
+                    entity_candidates,
+                    EntityType.ASSET.value,
+                    schedule_pack.minimum_entity_identity_confidence,
+                )
+                if schedule_pack is not None
+                else set()
+            )
+            scheduled_maintenance_datasets: list[ScheduledMaintenanceDatasetFields] = []
+            for cd in by_domain.get("maintenance", []):
+                trust_id = trust_assessment_ids.get(cd.id)
+                frame = canonical_frames.get(cd.id)
+                if trust_id is None or frame is None:
+                    continue
+                subject_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "asset_id"
+                )
+                event_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "work_order_id"
+                )
+                scheduled_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "scheduled_timestamp"
+                )
+                completed_field = self._resolve_canonical_concept_field(
+                    cd.id, semantic_outcome, "completed_timestamp"
+                )
+                if (
+                    subject_field is None
+                    or event_field is None
+                    or scheduled_field is None
+                    or completed_field is None
+                ):
+                    continue
+                schedule_required_concepts = {
+                    "asset_id",
+                    "work_order_id",
+                    "scheduled_timestamp",
+                    "completed_timestamp",
+                }
+                decisions = (
+                    semantic_outcome.decisions_by_case_dataset.get(cd.id, [])
+                    if semantic_outcome is not None
+                    else []
+                )
+                schedule_evidence_completeness = evaluate_canonical_evidence_completeness(
+                    frozenset(schedule_required_concepts),
+                    [
+                        RawFieldSemanticEvidence(
+                            canonical_field=decision.selected_concept,
+                            source_field=decision.source_field,
+                            machine_status=decision.status,
+                            machine_selected_concept=decision.selected_concept,
+                            machine_confidence=decision.confidence,
+                        )
+                        for decision in decisions
+                        if decision.selected_concept in schedule_required_concepts
+                    ],
+                )
+                scheduled_maintenance_datasets.append(
+                    ScheduledMaintenanceDatasetFields(
+                        dataset_id=cd.dataset_id,
+                        dataset_label=cd.source_label,
+                        dataframe=frame,
+                        trust_assessment_id=trust_id,
+                        subject_id_field=subject_field,
+                        event_id_field=event_field,
+                        scheduled_timestamp_field=scheduled_field,
+                        completed_timestamp_field=completed_field,
+                        canonical_evidence_completeness=schedule_evidence_completeness,
+                    )
+                )
+
+            schedule_gaps = find_incomplete_scheduled_maintenance(
+                scheduled_maintenance_datasets, schedule_eligible_assets
+            )
+            schedule_findings = run_maintenance_schedule_completion(
+                db,
+                organization_id,
+                scheduled_maintenance_datasets,
+                schedule_eligible_assets,
+                actor_user_id,
+            )
+            for finding in schedule_findings:
+                published_finding_ids.add(finding.id)
+            self._record_stage(
+                db,
+                organization_id,
+                analysis_case_id,
+                run_id,
+                "domain_intelligence",
+                StageEventStatus.COMPLETED.value,
+                {
+                    "pack": "MAINT-SCHEDULE",
+                    "eligible_subject_count": len(schedule_eligible_assets),
+                    "candidate_dataset_count": len(scheduled_maintenance_datasets),
+                    "gap_count": len(schedule_gaps),
+                    "finding_count": len(schedule_findings),
                     "policy_window_applied": False,
                 },
             )

@@ -353,6 +353,17 @@ def build_default_canonical_concept_registry() -> CanonicalConceptRegistry:
             description="When work or an event was planned/scheduled to occur.",
             aliases=frozenset({"scheduled_date", "scheduled_at", "planned_date", "due_date"}),
             expected_value_patterns=frozenset({"iso_date"}),
+            # P3.xxI.6: the same sibling-corroboration mechanism
+            # event_timestamp/completed_timestamp already declare -- without
+            # it, scheduled_timestamp had no path to AUTO_ACCEPTED at all
+            # (capped by alias+datatype evidence alone at 0.80, just under
+            # the 0.90 bar, since this concept has no compatible_dataset_roles
+            # declared either), which would have silently blocked any
+            # capability needing a governed scheduled-vs-completed comparison.
+            alternative_sibling_concept_sets=(
+                frozenset({"work_order_id"}),
+                frozenset({"contract_id"}),
+            ),
         )
     )
     registry.register(

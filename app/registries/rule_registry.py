@@ -232,5 +232,21 @@ def default_rule_registry() -> RuleRegistry:
                 ("derived_actual_applied_rate", "applicable_contract_rate"),
                 analytical_level="arithmetic",
             ),
+            # P3.xxI.6 (GAP-007): additive, independent capability -- a
+            # scheduled maintenance event with a governed scheduled
+            # timestamp but no governed completed timestamp on file.
+            # Never a policy-violation claim, never an estimated
+            # corrective-cost exposure (see
+            # app/services/maintenance_schedule_completion_service.py's
+            # own module docstring).
+            RuleDefinition(
+                "MAINTENANCE-SCHEDULE-COMPLETION-GAP",
+                "1.0",
+                "Scheduled maintenance not completed",
+                "A scheduled maintenance event has no governed completion timestamp on file.",
+                RuleOperator.EQUALS,
+                ("completed_timestamp_present", "expected_present"),
+                analytical_level="arithmetic",
+            ),
         ]
     )
