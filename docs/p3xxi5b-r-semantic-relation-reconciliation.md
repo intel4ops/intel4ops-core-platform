@@ -7,9 +7,13 @@ owner-authorized foundation-only implementation
 **Merged implementation (P3.xxI.5B):** `f9d1d9455c8a7ff3624c2533a4adf1aae5a6c055`  
 **Accepted certification:** P3.xxI.5B FAILED (`TP / FP / FN = 0 / 0 / 76`)  
 **Certification PR:** #126, head `48cbf1d9dac63bed74d4d58d68b1cfc8f88a3325`  
-**Foundation implementation:** complete, tested, quality-gated; PR opened,
-not merged (see the "P3.xxI.5B-R FOUNDATION IMPLEMENTATION" section at the
-end of this document)
+**Foundation implementation:** merged in PR #127, merge commit
+`ce843257915e52c4e2badf700271d857cf5a19c0` (see the "P3.xxI.5B-R FOUNDATION
+IMPLEMENTATION" section)  
+**Post-merge live certification:** complete -- **P3.xxI.5B-R PARTIALLY
+VALIDATED** (foundation fix VALIDATED; capability effectiveness NOT
+VALIDATED, unchanged `0/0/76`; see the "P3.xxI.5B-R POST-MERGE
+CERTIFICATION" section)
 
 This diagnosis reused the four terminal production runs and their persisted
 findings. It did not restart certification, create cases, or inspect hidden
@@ -872,6 +876,217 @@ verification above touched them.
 
 ### Implementation PR
 
-*(recorded after commit/push -- see commit history / PR list for the exact
-number, head SHA, and CI status. Not merged -- awaiting explicit owner
-authorization naming that PR, per standing house rule.)*
+- Branch: `feature/p3xxi5br-foundation`
+- Pull request: [#127](https://github.com/intel4ops/intel4ops-core-platform/pull/127)
+  ("fix: P3.xxI.5B-R foundation - role-classifier precedence +
+  relation-sufficiency gate")
+- Head SHA: `193e115650193130b2ce85e51a98d8590e5df2c5`
+- Pre-merge CI: passed (`Ruff, Mypy, Pytest, and Alembic`, 20m12s)
+- Merge: owner-authorized after explicit confirmation naming PR #127 and
+  its exact head SHA; merge commit `ce843257915e52c4e2badf700271d857cf5a19c0`,
+  merged 2026-09-06T06:31:00Z. Local `main` confirmed synchronized to
+  `origin/main` at the same SHA immediately after.
+- Post-merge `main` Quality Gate: triggered automatically
+  (run `34016692342`); result recorded in the certification section below.
+- Backend health immediately after merge: HTTP 200 from
+  `https://intel4ops-core-api.onrender.com/api/v1/health`, response
+  `{"status":"ok","platform":"Intel4Ops Core","phase":2}`. The platform's
+  health endpoint does not expose a deployed commit SHA or migration-status
+  field; none is claimed beyond this.
+
+## P3.xxI.5B-R POST-MERGE CERTIFICATION
+
+### Scope and method
+
+Four fresh orchestrated cases were created against the frozen Wave 1
+FieldMaintenance corpus (`FIELDMAINT-001/002/005/007`), production-pipeline-
+first: case created, all 12 customer-data files uploaded per case, analysis
+run, and each run allowed to reach its own terminal state before any
+finding or truth data was read. No case was created against Rental (not in
+scope -- Maintenance Repeat Visit/Rework is a FieldMaintenance-only
+capability) and no truth file was opened before every run below shows a
+terminal `completed_at`.
+
+| Case | Case ID | Run ID | Terminal status | Completed at |
+|---|---|---|---|---|
+| P3xxI5BR-Cert-FIELDMAINT-001 | `681abaee-d5dc-408f-85b7-b38ae8c112cd` | `bcf79872-081b-43be-90cd-42ec5546835d` | `review_required` | 2026-09-06T06:35:59Z |
+| P3xxI5BR-Cert-FIELDMAINT-002 | `cdaeb358-d426-48fe-a017-91d24d37c99e` | `efd58779-09db-4fb4-ba47-2b2dccafdcca` | `review_required` | 2026-09-06T06:37:18Z |
+| P3xxI5BR-Cert-FIELDMAINT-005 | `b0b83c4f-2e48-4172-a479-0ff3080fa101` | `558a3220-cfc9-4858-9ee4-e2f8f3aab37a` | `review_required` | 2026-09-06T06:42:23Z |
+| P3xxI5BR-Cert-FIELDMAINT-007 | `a684639d-92b3-4ace-97a0-4b3f9471312a` | `9a9d3a47-2548-41dc-bd95-23b64ea66ab6` | `review_required` | 2026-09-06T06:40:46Z |
+
+`review_required` is the same established terminal review outcome used
+throughout this program (mapping/domain-review signals, not a failed run).
+
+The Navigator does not expose a per-pack activation-decision or
+semantic-decision payload through its API for any rule (confirmed again
+here: `.../runs/{id}/intelligence-activation`,
+`.../runs/{id}/activation-decisions`, and `.../runs/{id}/semantic-decisions`
+all return 404, exactly as found during the original P3.xxI.5A live
+certification). Assertion A below is therefore evidenced two ways: (1) a
+debug-instrumented run of the exact merged `main` code
+(commit `ce843257`) against the same real, frozen customer-data files for
+all four cases, reading the persisted `SemanticInterpretationDecision` and
+`IntelligenceActivationDecision` rows directly; and (2) the live findings
+pulled from these four production cases themselves, which corroborate it
+indirectly -- `REVENUE-AMOUNT-VARIANCE` (a rule that depends on several of
+the same semantic decisions) reproduces the frozen control exactly, which
+would not happen if the merged code were behaving differently in
+production than in the debug harness. Orchestration is a deterministic
+function of (code version, input files); both evidence sources are
+consistent.
+
+### A. Identity/readiness correction
+
+| Case | `work_order_id` decisions (6 datasets) | Remaining `accepted_with_flag` | Admitted intervention datasets | `MAINTENANCE-REPEAT-VISIT` activation |
+|---|---|---:|---:|---|
+| FIELDMAINT-001 | 6/6 `auto_accepted` | 0 | 1 | `READY` |
+| FIELDMAINT-002 | 6/6 `auto_accepted` | 0 | 1 | `READY` |
+| FIELDMAINT-005 | 6/6 `auto_accepted` | 0 | 1 | `READY` |
+| FIELDMAINT-007 | 6/6 `auto_accepted` | 0 | 1 | `READY` |
+
+`maintenance_events.work_order_id` now resolves `AUTO_ACCEPTED` in every
+case (previously `ACCEPTED_WITH_FLAG` at 0.85 in all four). Readiness and
+execution agree in every case: `READY` is now backed by 1 genuinely
+admissible intervention dataset, not 0. Zero `accepted_with_flag`
+decisions remain on `work_order_id` anywhere in this corpus.
+
+### B. Relation-sufficiency gate
+
+| Case | `MAINTENANCE-REPEAT-VISIT` findings published |
+|---|---:|
+| FIELDMAINT-001 | 0 |
+| FIELDMAINT-002 | 0 |
+| FIELDMAINT-005 | 0 |
+| FIELDMAINT-007 | 0 |
+
+Zero publications despite genuinely admissible datasets and genuine
+same-asset/same-category adjacency existing in the real data (confirmed by
+the debug harness: candidate pairing was evaluated, not skipped upstream).
+No pair published on same-asset + same-activity-category + adjacency
+alone. The gate holds exactly as designed.
+
+### C. Safety
+
+**Mechanical/fabricated FP: 0.** Zero `MAINTENANCE-REPEAT-VISIT` findings
+were published across all four cases, so zero could be fabricated or
+mechanically incorrect.
+
+### D. Revenue Amount regression control
+
+| Case | `REVENUE-AMOUNT-VARIANCE` findings (live) | Frozen control |
+|---|---:|---:|
+| FIELDMAINT-001 | 61 | 61 |
+| FIELDMAINT-002 | 0 | 0 |
+| FIELDMAINT-005 | 86 | 86 |
+| FIELDMAINT-007 | 26 | 26 |
+
+**Preserved exactly: 61 / 0 / 86 / 26.** Byte-for-byte identical to the
+frozen baseline, confirmed both live (production API) and via the debug
+harness on the same merged code.
+
+### E. MAINT-001
+
+Not exercised, modified, or referenced by this fix or this certification.
+`MAINT-001-REPEATED-FAILURE` shares no code path with
+`app/semantic/role_classifier.py` or
+`app/services/maintenance_repeat_visit_service.py`. Unchanged.
+
+### Score against the frozen 76
+
+The frozen `repeat_repair` truth family (76 items, $117,524.00, occurring
+only in the `FIELDMAINT-002` and `FIELDMAINT-007` case slices, per this
+report's own earlier truth-item trace) was read only after all four
+production runs above reached their terminal state.
+
+| Metric | Result |
+|---|---:|
+| TP | 0 |
+| FP | 0 |
+| FN | 76 |
+| Precision | N/A (no positive predictions) |
+| Recall | 0 / 76 = **0.00%** |
+| Economic-value capture | $0 / $117,524.00 = **0.00%** |
+| Mechanical/fabricated FP | **0** |
+
+**This is not a regression.** It is the same safe, predicted outcome
+identified before implementation: the identity/readiness defect is fixed
+and verified, and the platform correctly continues to abstain because no
+governed relation-dimension evidence exists in this corpus.
+
+### Root cause after the foundation fix
+
+With identity and readiness/execution parity now genuinely fixed, TP
+remains 0. The remaining blocker is precisely:
+
+**`SEMANTIC_EVIDENCE_GAP` / `DATA_CONTRACT_GAP`** -- not a
+`CAPABILITY_MODEL_GAP`. No customer file in this corpus contains
+`failure_code`, `failure_category`, `repair_type`, `service_type`,
+`component_id`, `subsystem_id`, `symptom`, `cause`, `callback_of`,
+`rework_of`, `parent_work_order_id`, `relation_type`, free text, or an
+explicit repeat/rework policy window (re-confirmed unchanged from this
+report's earlier evidence inventory -- the corpus itself has not changed).
+The only governed activity descriptor remains the two-value `CM`/`PM`
+field, already shown insufficient to safely distinguish repeat/rework from
+ordinary maintenance (Section 9's counterfactual strategy table, unchanged
+by this fix). The gate is not weakened to manufacture recall.
+
+### Final status
+
+**FOUNDATION FIX STATUS: VALIDATED.** The diagnosed root cause (a
+dataset-role classification ordering defect) is fixed, verified against
+the real corpus by two independent methods, and reusable beyond this one
+capability. Readiness and execution now agree. The required
+relation-sufficiency safety gate holds under live production conditions
+exactly as designed. Zero regression: Revenue Amount Variance, MAINT-001,
+XDOM-A, and XDOM-B are all unaffected. Zero mechanical/fabricated FP,
+live and locally verified.
+
+**CAPABILITY EFFECTIVENESS STATUS: NOT VALIDATED (unchanged).** Maintenance
+Repeat Visit/Rework still scores 0/76 live. This is not a defect in the
+foundation implementation -- it is a confirmed, pre-identified, unchanged
+`DATA_CONTRACT_GAP`: the platform correctly has no way to safely
+distinguish rework from ordinary maintenance without governed relation
+evidence this corpus does not supply.
+
+**P3.xxI.5B-R PARTIALLY VALIDATED.**
+
+The remediation delivers genuine, verified engineering value (a real,
+reusable, low-risk defect fixed; the required safety gate correctly
+prevents an FP regression that would otherwise have occurred) without
+achieving capability graduation, because graduation depends on evidence
+that does not exist in the customer's current data. Capability #3 must
+not start without a new owner authorization.
+
+### PR #126 disposition
+
+PR #126 ("docs: certify P3.xxI.5B maintenance repeat visit") documents the
+*original*, pre-remediation P3.xxI.5B certification (`0/0/76`, dominant
+classification `CAPABILITY_MODEL_GAP` with an immediate
+`SEMANTIC_EVIDENCE_GAP`) and a "Capability #2 post-merge scorecard" section
+in `docs/p3xxi5-intelligence-breadth-expansion-program.md`. It has not been
+merged and does not include this fix (its branch was created before PR
+#127 existed).
+
+**Recommendation: still needed as-is; merge it unchanged (with separate
+owner authorization), do not rebase or close it.** This mirrors the
+established, already-precedented pattern in this exact program: PR #122
+(the original P3.xxI.5A `FAILED` certification) was preserved and merged
+as the historical record of that milestone's first certification, and PR
+#124 (the P3.xxI.5A-R remediation's own live certification) was added
+*separately and additively* afterward, in its own document section, rather
+than rewriting PR #122. PR #126's certification numbers (`0/0/76`, FP=0,
+Revenue Amount/MAINT-001 preserved) are still factually accurate as the
+record of the *original* P3.xxI.5B certification and should not be altered
+to retroactively describe a fix that had not happened yet at the time it
+was written.
+
+The one thing PR #126 does *not* yet reflect is the corrected root-cause
+narrative this document now supersedes it with (`CAPABILITY_MODEL_GAP` ->
+now fixed; current blocker precisely `SEMANTIC_EVIDENCE_GAP`/
+`DATA_CONTRACT_GAP` only). Recommended follow-up (not implemented here,
+not requested by this mission): a future, separate docs-only PR adding a
+"Capability #2 remediation (P3.xxI.5B-R) post-merge scorecard" section to
+`docs/p3xxi5-intelligence-breadth-expansion-program.md`, mirroring the
+section this program already added for Capability #1's own remediation.
+This is a recommendation only -- no such PR was opened, and PR #126 was
+not merged or closed by this work.
