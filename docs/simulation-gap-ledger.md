@@ -156,16 +156,22 @@ Automated where the platform's own upload API/browser flow allowed;
 customer-data-only exposure and hidden-truth-after-terminal discipline
 maintained throughout. No development gap was hit in the case-creation/
 upload/run pipeline itself. One process note: FIELDMAINT-006 and
-FIELDMAINT-009's live production runs (Render) ran unusually long (>15
-minutes, vs. 3-5 minutes for a comparably-sized case earlier the same
-session) and had not reached terminal status at the time of this report --
-likely contention from five near-simultaneous large uploads against a
-single free/shared backend instance, not a code defect. Their reported
-scores below are from a debug-instrumented execution of the byte-identical
-merged `main` code against the same real files (the same cross-verification
-method used throughout this program, always previously confirmed to match
-live output exactly) -- flagged as pending final live terminal confirmation,
-not fabricated.
+FIELDMAINT-009's live production runs (Render) ran unusually long and
+had not reached terminal status at the time of this report. Their
+reported scores below are from a debug-instrumented execution of the
+byte-identical merged `main` code against the same real files (the same
+cross-verification method used throughout this program, always
+previously confirmed to match live output exactly) -- flagged at the
+time as pending final live terminal confirmation, not fabricated.
+
+**2026-09-06 update:** both runs were re-checked 5.5+ hours after they
+started and confirmed genuinely orphaned (`status: "running"` still,
+zero heartbeat advancement, zero findings) -- **not** contention, a
+genuine platform defect. Full diagnosis, evidence, and root-cause
+analysis in `docs/run-reliability-001-incident.md` (RUN-RELIABILITY-001).
+The debug-harness scores below remain the trusted result per this
+program's established cross-verification methodology; live terminal
+confirmation is still pending owner-authorized re-run.
 
 | Sim | Case ID | Run ID | Terminal (live) |
 |---|---|---|---|
@@ -296,3 +302,190 @@ readiness-to-invest-in-discovery:
 
 No code changes are proposed by this report. Per the stop gate, work
 stops here pending owner authorization.
+
+## GAP-011 Rental Capability Discovery (2026-09-06, discovery only)
+
+Scoped exactly as authorized: decompose the existing GAP-011 finding
+into reusable, individually-classified gap families using evidence
+already in hand (RENTAL-013's 9/9 scenario families, RENTAL-004's 3
+categories, plus the Wave-1 rate-mismatch finding) and this program's
+own production code (`app/domain_registry.py`,
+`app/semantic/concept_registry.py`). **No new simulations were run; no
+code was written.** See `docs/run-reliability-001-incident.md` for the
+companion FIELDMAINT-006/009 live-run diagnosis performed in the same
+pass.
+
+### Rental Capability Discovery Matrix
+
+| Simulation | Truth scenario family | Truth item count | Economic value | Existing capability overlap | Production TP | Production FP | Production FN | Required source evidence | Evidence actually present | Semantic concept available? | Canonical entity available? | Relationship available? | Process-state available? | Governed policy required? | Data-contract limitation? | Likely reusable gap family | Confidence |
+|---|---|---:|---:|---|---:|---:|---:|---|---|---|---|---|---|---|---|---|---|
+| RENTAL-013+RENTAL-004+Wave-1 | `rental_rate_mismatch`/`UNDER_BILLING` | 10+19+22=51 | $148,407.75+$298,432+$416,247.40=$863,087.15 | None | 0 | 0 | 51 | Contract rate basis, UOM, currency | `contracts.csv` has bare `rate`, no basis/UOM/currency | No (no rate-basis concept exists) | No (no "contract" entity) | No | N/A | No | **Yes -- confirmed dead end (extends GAP-001)** | GAP-001 (unchanged) | High |
+| RENTAL-013 | `unbilled_rental_days` | 6 | $311,400.00 | None | 0 | 0 | 6 | Completed dispatch with zero matching invoice in its contract period | `dispatch.csv` (dispatch_id/return_date -> `operational_event_id`/`operational_event_end`, confirmed aliased); `invoices.csv` (contract_id, invoice_date -> `event_date`, amount -> `transaction_amount`, confirmed satisfies the `revenue` domain signature) | **Yes** -- both sides use existing generic concepts | `operational_event` yes; no dedicated "contract" entity needed for a key-equality join | **No** -- no rule joins operations/dispatch datasets to revenue datasets by a shared non-asset key | Partial -- `dispatch.csv` has no explicit status field; `return_date` presence can serve as a completion signal (same pattern already validated for `completed_timestamp` in GAP-007) | No -- zero-invented-parameter design possible (mirrors GAP-007) | **No** | **New candidate: CAPABILITY_MODEL_GAP** (see Candidate 1 below) | High |
+| RENTAL-004 | `UNBILLED_SERVICE` | 10 | $480,050.00 | None | 0 | 0 | 10 | Same as `unbilled_rental_days` -- identical root cause, older manifest vintage | Same | Same | Same | Same | Same | No | **No** | Same as above -- Candidate 1 | High |
+| RENTAL-013 | `late_return_leakage` | 5 | $81,800.00 | None | 0 | 0 | 5 | Contract `end_date` vs dispatch `return_date`, no additional days billed for overage | Dispatch side present (as above); contract side blocked -- `contracts.csv` (contract_id, customer_id, asset_id, start_date, end_date, rate) matches **no** `DomainSignature` in `app/domain_registry.py` today (no `operational_event_id`, no `failure_code`/`downtime_hours`, no `transaction_amount`, only bare `asset_id`) | Partial -- dispatch half only | No "contract" entity | No | Partial | No (binary comparison, no threshold) | No, but currently unreachable via domain detection | **SEMANTIC_GAP** (missing commercial-contract domain/entity; see Candidate 3) | Medium |
+| RENTAL-013 | `excessive_asset_downtime` | 15 | $55,254.17 | None | 0 | 0 | 15 | Maintenance downtime during an active contract, "unusually long" | `maintenance.csv` (maintenance_id, asset_id, maintenance_date, cost, downtime_hours) matches **neither** existing maintenance `DomainSignature` (missing `failure_code` for sig #1; missing `operational_event_id`/`activity_category` for sig #2); contract side blocked as above; "unusually long" requires a normalcy baseline | No (fails domain detection) | No | No | Partial | **Yes -- same threshold-invention risk already rejected for GAP-006** | No, but currently unreachable | SEMANTIC_GAP (domain signature) **+** GOVERNANCE_GAP (threshold) -- compound, **do not pursue** | Medium-low |
+| RENTAL-013 | `late_maintenance` | 25 | $1,456,650.00 | None | 0 | 0 | 25 | An allowed maintenance-response-SLA policy | Timestamps likely present; policy is what's missing, identical shape to GAP-009 | N/A -- policy-blocked | N/A | N/A | N/A | **Yes -- identical blocker to GAP-009** | No | **Extends GAP-009, not new** -- do not pursue | High (confirmed same blocker, no new investigation needed) |
+| RENTAL-013 | `duplicate_credit_or_adjustment` | 5 | $171,258.60 | None | 0 | 0 | 5 | Two payment rows against the same invoice_id | `payments.csv` (payment_id, invoice_id, payment_date, amount) -- fully present, no cross-domain join needed | Structural duplicate-key check, not domain-dependent | `transaction` entity exists in `BASE_CANONICAL_ENTITY_TYPES` | N/A (within-dataset) | N/A | **No** (pure structural dedup, no threshold) | **No** | **New candidate: CODE_GAP/GOVERNANCE_GAP hybrid** (see Candidate 2 below) | High |
+| RENTAL-004 | `DUPLICATE_PAYMENT` | 4 | $153,220.00 | None | 0 | 0 | 4 | Same as above, older manifest vintage | Same | Same | Same | Same | Same | No | No | Same -- Candidate 2 | High |
+| RENTAL-013 | `fuel_discrepancy` | 3 | $752.75 | None | 0 | 0 | 3 | Gallons x an external regional-benchmark fuel price | `fuel.csv` (fuel_id, asset_id, fuel_date, gallons, cost) -- the benchmark price is **not present in any customer file**, invented by the simulator for its own truth; separately, `gallons` does not alias to `fuel_quantity` today (only `fuel_gallons` does) | No (benchmark absent) | N/A | N/A | N/A | No | **Yes -- confirmed dead end, no customer-visible benchmark evidence exists** | DATA_CONTRACT_LIMITATION (same class as GAP-002) | High |
+| RENTAL-013 | `missing_field_tickets` | 3 | $0.00 (DQ-shaped) | None | 0 | 0 | 3 | Completed dispatch with zero matching field-ticket row | `dispatch.csv` + `field_tickets.csv` (ticket_id, dispatch_id, hours_used, ticket_date -- no `asset_id`, so `field_tickets.csv` itself does not domain-detect) | Partial | N/A | No | Partial | No | No, but blocked by the same structural limitation as GAP-008 | **Extends GAP-008, not new** | High |
+| RENTAL-013 | `delayed_invoicing` | 8 | $0.00 (DQ-shaped) | None | 0 | 0 | 8 | Dispatch `return_date` vs invoice `invoice_date`, an "acceptable delay" policy | Timestamps present on both sides; policy is what's missing | N/A -- policy-blocked | N/A | Partial (join exists via `contract_id`) | Partial | **Yes -- same blocker as GAP-009** | No | **Extends GAP-009, not new** | High |
+
+### Classification (categories per mission Phase D; multiple apply simultaneously)
+
+GAP-011 is **not** a single gap -- it decomposes into at least four
+structurally distinct families, each requiring its own resolution path:
+
+- **DATA_CONTRACT_GAP**: `rental_rate_mismatch`/`UNDER_BILLING` (extends
+  GAP-001, currency/rate-basis absent) and `fuel_discrepancy` (external
+  benchmark price absent from any customer file). Confirmed dead ends;
+  no code path exists without new customer data.
+- **SEMANTIC_GAP**: no domain signature or canonical entity exists for
+  a commercial contract/agreement dataset (`contracts.csv`-shaped:
+  party + asset + rate + date range, no transaction amount), and
+  `maintenance.csv`-shaped datasets carrying `downtime_hours` without
+  `failure_code` fail both existing maintenance signatures. Blocks
+  `late_return_leakage` and half of `excessive_asset_downtime`.
+- **GOVERNANCE_GAP**: `late_maintenance` and `delayed_invoicing` require
+  an allowed-response/allowed-delay policy that does not exist and must
+  not be invented -- these are not new discoveries, they extend the
+  already-identified GAP-009 exactly.
+- **CAPABILITY_MODEL_GAP** (the two genuinely new, evidence-sufficient
+  candidates): no rule exists that (a) joins a completed operational
+  event to a revenue/invoice dataset by a shared key to detect a
+  zero-match ("no invoice was ever raised"), or (b) detects duplicate
+  transaction rows against the same invoice_id. Neither requires new
+  customer data, an invented threshold, or a new domain signature.
+
+No part of GAP-011 is classified `ORCHESTRATION/RUNTIME_GAP` --
+that category applies to RUN-RELIABILITY-001 instead (see the
+companion incident doc), not to any Rental finding.
+
+### Counterfactual safety tests (Phase E)
+
+**Candidate 1 -- "Operational Event With No Matching Revenue Record"
+(generalizes the XDOM-B/MAINTENANCE-SCHEDULE-COMPLETION-GAP pattern):**
+"If implemented using only currently governed evidence, what false
+positives could it create?" Rejected unsafe shortcuts considered and
+explicitly not taken: it would **not** assume a dispatch is "complete"
+from the mere presence of a `return_date` without also requiring that
+field to have passed this program's existing governed-acceptance
+scoring (mirrors the discipline already applied to
+`completed_timestamp`/`scheduled_timestamp`); it would **not** invent a
+grace-period/threshold for "how long after completion is an invoice
+still expected" -- the only safe first version is a **binary** "zero
+matching revenue rows for this key, full stop" check, identical in
+spirit to GAP-007's zero-invented-parameter design; it would **not**
+assume `contract_id` is the correct join key for every customer without
+first confirming both datasets independently expose it as a governed,
+matching identifier (not silently coerced or truncated); it would
+**not** treat a partial/ambiguous domain classification
+(`DOMAIN_REVIEW_REQUIRED`) as sufficient to proceed -- both datasets
+must reach `confirmed`/`auto_accepted` status first, exactly as every
+existing governed rule in this program already requires. Estimated
+addressable items: 16 (this batch) + more across the other 6 untouched
+Rental sims once graduated. Estimated value: ~$791,450 (this batch) +
+unknown residual. Estimated FP exposure: low, if scoped to a strict
+zero-match binary check with no threshold. Sims helped: all Rental sims
+with a dispatch/invoice pair (likely most of the 23); transferability
+beyond Rental: **high** -- this is a generic "completed operational
+event, no corresponding revenue record" pattern applicable to any
+vertical with the same shape (e.g., FieldMaintenance work orders vs.
+invoices, already partially covered by Revenue Amount Variance for a
+different failure mode).
+
+**Candidate 2 -- "Duplicate Transaction Against the Same Reference
+ID":** Rejected unsafe shortcuts: it would **not** treat any two
+same-invoice-id payment rows as automatically duplicate without
+requiring the amounts to match (or be within a governed, non-invented
+tolerance) -- a genuine partial payment plan must not be flagged; it
+would **not** assume `payments.csv`-shaped data reaches a confirmed
+domain before running (it does not today, absent the `payment_date`
+event_date-alias fix noted above) -- the rule must gate on governed
+mapping/domain status exactly like every other rule in this program,
+not bypass it because the check "seems simple." Estimated addressable
+items: 9 (this batch). Estimated value: ~$324,478.60. Estimated FP
+exposure: very low -- pure structural duplication, no threshold, no
+cross-domain join. Sims helped: any sim with a payments/transactions
+dataset. Transferability beyond Rental: **high** -- duplicate-payment
+detection is a generic financial-controls check with no
+industry-specific assumption.
+
+**Candidate 3 -- "Commercial Contract/Agreement domain + entity":** not
+a finding-producing rule by itself, so no counterfactual FP test
+applies in the same sense; the safety consideration is instead that
+adding a domain signature for `contracts.csv`-shaped data must **not**
+be defined so loosely that it also captures unrelated datasets that
+happen to share `asset_id`+two dates (e.g., a maintenance window) --
+the signature would need to require the *absence* of
+`operational_event_id`/`downtime_hours`/`transaction_amount` alongside
+a `rate`-shaped commercial field, to stay narrow. Addresses 0 dollars
+directly; unlocks $137,054.17 across `late_return_leakage` +
+`excessive_asset_downtime`'s identity half (though the latter remains
+separately blocked by the governance-gap threshold problem).
+
+### Ranked candidate reusable capabilities (Phase F)
+
+1. **Candidate 1 -- Operational Event / Revenue Coverage Gap.**
+   Gap IDs addressed: new (extends the XDOM-B/GAP-007 architectural
+   pattern). Expected sims helped: most of the 23 Rental sims (dispatch
+   + invoices is a near-universal pair in this vertical); FieldMaintenance
+   transferability unconfirmed but plausible. Expected truth items: 16
+   measured, likely more. Expected economic value: ~$791,450 measured,
+   likely more once the other 6 untouched Rental sims are graduated.
+   Required evidence: dispatch completion signal + invoice presence by
+   shared key -- both already reach governed/near-governed status today.
+   Current evidence status: **sufficient to begin a scoped design**, not
+   yet proven end-to-end (no test case has been built). FP risk: low if
+   built as a strict binary zero-match check. Implementation layer(s):
+   new service module (mirrors `maintenance_schedule_completion_service.py`'s
+   shape) + orchestration wiring (two governed-rule-code registrations,
+   the same pattern GAP-007 required) + rule/intelligence-pack registry
+   entries. Estimated effort: comparable to GAP-007's build. Confidence:
+   Medium-high. **Verdict: DISCOVERY_MORE** -- evidence is promising but
+   no dataset-resolution/dedup design has been drafted or tested yet;
+   recommend a focused design-and-test pass (not a full build
+   authorization) as the next step, consistent with the mission's
+   explicit non-authorization of GAP-011 remediation in this pass.
+2. **Candidate 2 -- Duplicate Transaction Detector.** Gap IDs addressed:
+   new. Expected sims helped: any sim with a payments/transactions
+   dataset (broad, cross-vertical). Expected truth items: 9 measured.
+   Expected economic value: ~$324,478.60. Required evidence: within-
+   dataset uniqueness on invoice_id + matching amount -- already fully
+   present, pending the `payment_date` domain-alias fix. Current
+   evidence status: sufficient. FP risk: very low. Implementation
+   layer(s): likely a Trust-layer primitive (uniqueness/duplication
+   check) closer in shape to GAP-008 than to a new Intelligence rule --
+   worth resolving during design whether this belongs in Trust or
+   Intelligence. Estimated effort: smaller than Candidate 1. Confidence:
+   Medium-high. **Verdict: DISCOVERY_MORE** -- same reasoning as above,
+   smaller scope.
+3. **Candidate 3 -- Commercial Contract/Agreement domain + entity.**
+   Gap IDs addressed: unblocks `late_return_leakage` identity half and
+   is a prerequisite (not sufficient by itself) for
+   `excessive_asset_downtime`'s identity half. Expected economic value
+   addressed directly: $0 (foundational, not finding-producing).
+   Required evidence: none new -- this is a code-only domain-registry
+   addition. FP risk: requires a carefully narrow signature (see safety
+   test above). Implementation layer(s): `app/domain_registry.py`
+   (`DomainSignature`) + `BASE_CANONICAL_ENTITY_TYPES`. Estimated
+   effort: small in isolation, but its economic payoff is contingent on
+   GAP-009's separate policy-definition blocker for
+   `excessive_asset_downtime` and remains fully blocked for
+   `rental_rate_mismatch` regardless (GAP-001 is a currency/rate-basis
+   absence, not a domain-detection absence). **Verdict: BLOCKED** for
+   near-term economic value; **DISCOVERY_MORE** only as foundational,
+   lower-priority work.
+4. **`late_maintenance`/`delayed_invoicing`/`excessive_asset_downtime`'s
+   threshold half** -- **BLOCKED**, extends the already-rejected
+   GAP-006/GAP-009 governance gap; not pursued, per explicit mission
+   instruction not to automatically attack this class of gap.
+5. **`rental_rate_mismatch`/`UNDER_BILLING`, `fuel_discrepancy`** --
+   **DATA_CONTRACT_BLOCKED**, confirmed dead ends, no code path.
+6. **`missing_field_tickets`** -- not new; extends GAP-008 exactly, same
+   status (identified, not implemented).
+
+No implementation is recommended in this pass for any GAP-011 candidate.
+Candidates 1 and 2 are ranked evidence-sufficient enough to justify a
+**scoped design/test discovery pass** (not a build) as the next
+authorized step, should the owner choose to continue.
