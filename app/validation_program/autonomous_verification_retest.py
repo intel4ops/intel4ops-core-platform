@@ -126,7 +126,9 @@ class AutonomousVerificationRetestService:
         if result.get("automatic_merge_performed") is not False:
             _fail("CANDIDATE_ALREADY_MERGED", "Verification requires an unmerged candidate", 409)
         if result.get("automatic_deploy_performed") is not False:
-            _fail("CANDIDATE_ALREADY_DEPLOYED", "Verification requires an undeployed candidate", 409)
+            _fail(
+                "CANDIDATE_ALREADY_DEPLOYED", "Verification requires an undeployed candidate", 409
+            )
         return result
 
     def start(
@@ -141,7 +143,11 @@ class AutonomousVerificationRetestService:
         batch, items = self._batch(db, organization_id, batch_id)
         if batch.status != SimulationBatchStatus.ACTIVE.value:
             _fail("BATCH_NOT_ACTIVE", "Simulation batch is not active for retest", 409)
-        invalid = [item.simulation_id for item in items if item.state != SimulationBatchItemState.REMEDIATION_REVIEW.value]
+        invalid = [
+            item.simulation_id
+            for item in items
+            if item.state != SimulationBatchItemState.REMEDIATION_REVIEW.value
+        ]
         if invalid:
             _fail("ITEMS_NOT_READY_FOR_RETEST", "Not all batch items are ready for retest", 409)
 
@@ -226,7 +232,11 @@ class AutonomousVerificationRetestService:
             expected_ids = {item.simulation_id for item in items}
             actual_ids = {result.simulation_id for result in payload.results}
             if len(payload.results) != len(actual_ids) or actual_ids != expected_ids:
-                _fail("RETEST_RESULT_SET_INVALID", "Retest results must match the batch simulation set exactly", 409)
+                _fail(
+                    "RETEST_RESULT_SET_INVALID",
+                    "Retest results must match the batch simulation set exactly",
+                    409,
+                )
             by_id = {result.simulation_id: result for result in payload.results}
             before_tp = sum(item.true_positive_count or 0 for item in items)
             before_fp = sum(item.false_positive_count or 0 for item in items)
