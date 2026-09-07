@@ -5,9 +5,11 @@ worker-credentials) via the platform-admin `client` fixture, and the
 worker-credential endpoints (claim/heartbeat/result/failure) via a real
 `Authorization: Bearer <token>` header -- never the Supabase session."""
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 
 def create_organization(client: TestClient, slug: str) -> UUID:
@@ -206,3 +208,51 @@ def test_r2_job_is_never_claimable_by_a_worker_credential_over_http(client: Test
     )
     assert claim_response.status_code == 200
     assert claim_response.json() is None
+
+
+def test_claim_endpoint_opportunistically_recovers_a_stale_job_before_dispatching(
+    client: TestClient, db: Session
+) -> None:
+    """Phase O: a run/job that silently stops sending heartbeats must
+    never sit at RUNNING forever with no external signal -- unlike
+    RUN-RELIABILITY-001's production-run path, /claim proactively sweeps
+    stale AgentJobs (via AgentJobService.recover_stale) before every
+    dispatch, so a dead worker's job gets requeued and reclaimed on the
+    very next poll instead of needing a manual /status query."""
+    from app.models.agent_jobs import AgentJob, AgentJobStatus
+
+    org_id = create_organization(client, "route-stale-recovery")
+    created = client.post(
+        f"/api/v1/organizations/{org_id}/agent-jobs",
+        json={
+            "job_type": "PRODUCTION_TRIAGE",
+            "risk_class": "R0",
+            "requested_capability": "gap_classification_v1",
+            "evidence_package": _evidence_package_payload(),
+        },
+    ).json()
+
+    credential_response = client.post(
+        f"/api/v1/organizations/{org_id}/agent-jobs/worker-credentials",
+        params={"worker_id": f"stale-worker-{uuid4().hex[:8]}"},
+    )
+    headers = {"Authorization": f"Bearer {credential_response.json()['token']}"}
+
+    first_claim = client.post(f"/api/v1/organizations/{org_id}/agent-jobs/claim", headers=headers)
+    assert first_claim.status_code == 200
+    assert first_claim.json() is not None
+
+    # Simulate the worker vanishing: back-date the heartbeat far beyond
+    # the stale threshold without ever submitting a result or failure.
+    job = db.get(AgentJob, UUID(created["id"]))
+    assert job is not None
+    job.heartbeat_at = datetime.now(UTC) - timedelta(hours=1)
+    db.commit()
+
+    second_claim = client.post(f"/api/v1/organizations/{org_id}/agent-jobs/claim", headers=headers)
+    assert second_claim.status_code == 200
+    reclaimed = second_claim.json()
+    assert reclaimed is not None
+    assert reclaimed["job"]["id"] == created["id"]
+    assert reclaimed["job"]["status"] == AgentJobStatus.RUNNING.value
+    assert reclaimed["job"]["retry_count"] == 1

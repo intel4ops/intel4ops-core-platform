@@ -37,6 +37,7 @@ import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from types import FrameType
 from uuid import UUID
 
@@ -204,29 +205,45 @@ class AgentWorker:
                     },
                 )
                 return True
-            self._backend.submit_result(
-                job_id,
-                {
-                    "lease_id": lease_id,
-                    "structured_result": result.parsed_json,
-                    "execution_time_ms": result.total_ms,
-                    "input_tokens": result.input_tokens,
-                    "output_tokens": result.output_tokens,
-                    "reasoning_tokens": result.reasoning_tokens,
-                    "ttft_ms": result.ttft_ms,
-                    "tokens_per_second": result.tokens_per_second,
-                    "model_identifier": result.model_identifier,
-                },
-            )
-            logger.info(
-                "job_succeeded",
-                extra={
-                    "job_id": job_id,
-                    "ttft_ms": result.ttft_ms,
-                    "tokens_per_second": result.tokens_per_second,
-                    "output_tokens": result.output_tokens,
-                },
-            )
+            try:
+                self._backend.submit_result(
+                    job_id,
+                    {
+                        "lease_id": lease_id,
+                        "structured_result": result.parsed_json,
+                        "execution_time_ms": result.total_ms,
+                        "input_tokens": result.input_tokens,
+                        "output_tokens": result.output_tokens,
+                        "reasoning_tokens": result.reasoning_tokens,
+                        "ttft_ms": result.ttft_ms,
+                        "tokens_per_second": result.tokens_per_second,
+                        "model_identifier": result.model_identifier,
+                    },
+                )
+                logger.info(
+                    "job_succeeded",
+                    extra={
+                        "job_id": job_id,
+                        "ttft_ms": result.ttft_ms,
+                        "tokens_per_second": result.tokens_per_second,
+                        "output_tokens": result.output_tokens,
+                    },
+                )
+            except RuntimeError as exc:
+                # The backend rejected the model's JSON against the
+                # stricter server-side schema (e.g. an out-of-taxonomy
+                # gap_class value) -- report it as a failure rather than
+                # crashing the worker process and leaving the job
+                # orphaned at RUNNING.
+                self._backend.submit_failure(
+                    job_id,
+                    {
+                        "lease_id": lease_id,
+                        "error_code": "BACKEND_REJECTED_RESULT",
+                        "error_detail": str(exc)[:2000],
+                        "retryable": True,
+                    },
+                )
         except LmStudioError as exc:
             self._backend.submit_failure(
                 job_id,
@@ -241,9 +258,26 @@ class AgentWorker:
             heartbeat.stop()
         return True
 
+    # Must match app.schemas.agent_jobs.GapClass exactly -- restated here
+    # for the same "no import path back into the backend package" reason
+    # PROFILE_PARAMETERS is restated above.
+    _GAP_CLASSES = (
+        "DATA_CONTRACT_GAP",
+        "EXTRACTION_GAP",
+        "SEMANTIC_GAP",
+        "MAPPING_GAP",
+        "ENTITY_RELATIONSHIP_GAP",
+        "PROCESS_MODEL_GAP",
+        "GOVERNED_POLICY_GAP",
+        "INTELLIGENCE_CAPABILITY_GAP",
+        "ECONOMIC_VALUE_GAP",
+        "ORCHESTRATION_RUNTIME_GAP",
+    )
+
     def _build_prompt(self, evidence_package: dict) -> str:
         # The EvidencePackage IS the prompt payload -- a worker never
         # receives a conversation history (Phase C).
+        gap_classes = ", ".join(f'"{g}"' for g in self._GAP_CLASSES)
         return (
             "You are a fast routine-classification worker for the Intel4Ops learning program.\n"
             "Given the EVIDENCE PACKAGE below, answer the QUESTION with ONLY a single JSON object "
@@ -253,6 +287,8 @@ class AgentWorker:
             '"architecture_impact": false, "policy_dependency": false, '
             '"data_contract_dependency": false, "recommended_action": "...", '
             '"escalate": false, "escalation_reason": null}\n\n'
+            f"primary_gap_class and every entry in secondary_gap_classes MUST be exactly one of "
+            f"these values, verbatim, no others: [{gap_classes}]\n\n"
             f"EVIDENCE PACKAGE:\n{json.dumps(evidence_package, indent=2)}\n\n"
             f"QUESTION: {evidence_package.get('question', '')}"
         )
@@ -270,8 +306,28 @@ class AgentWorker:
         logger.info("agent_worker_stopped")
 
 
+def _load_dotenv(path: Path) -> None:
+    """Minimal, dependency-free .env loader -- this worker stays pure
+    stdlib (no pip install step) per Phase E. Only fills in variables not
+    already set in the real environment, so an explicit `set FOO=...`
+    before launch always wins over the file."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip()
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    _load_dotenv(
+        Path(__file__).resolve().parent / os.environ.get("AGENT_ENV_FILE", ".env.production")
+    )
     base_url = os.environ.get("AGENT_API_BASE_URL")
     organization_id = os.environ.get("AGENT_ORGANIZATION_ID")
     token = os.environ.get("AGENT_WORKER_TOKEN")
