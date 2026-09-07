@@ -69,6 +69,9 @@ from app.validation_program.autonomous_verification_routes import (
 from app.validation_program.simulation_controller_routes import (
     router as simulation_controller_router,
 )
+from app.validation_program.verified_release_authorization_routes import (
+    router as verified_release_authorization_router,
+)
 
 settings = get_settings()
 
@@ -192,6 +195,7 @@ app.include_router(agent_job_router)
 app.include_router(validation_router)
 app.include_router(simulation_controller_router)
 app.include_router(autonomous_verification_router)
+app.include_router(verified_release_authorization_router)
 app.include_router(semantic_router)
 app.include_router(semantic_review_router)
 app.include_router(entities_router)
