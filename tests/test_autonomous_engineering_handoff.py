@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.agent_jobs import AgentJobStatus
+from app.models.agent_jobs import AgentJob, AgentJobStatus
 from app.models.entities import Organization
 from app.models.simulation_batch import (
     SimulationBatch,
@@ -47,7 +47,9 @@ def _organization(db: Session, slug: str) -> Organization:
     )
 
 
-def _batch_with_item(db: Session, org_id, simulation_id: str) -> tuple[SimulationBatch, SimulationBatchItem]:
+def _batch_with_item(
+    db: Session, org_id: UUID, simulation_id: str
+) -> tuple[SimulationBatch, SimulationBatchItem]:
     batch = SimulationBatch(
         organization_id=org_id,
         name=f"batch-{simulation_id}",
@@ -71,11 +73,11 @@ def _batch_with_item(db: Session, org_id, simulation_id: str) -> tuple[Simulatio
 def _classification_job(
     db: Session,
     storage: LocalFileStorage,
-    org_id,
+    org_id: UUID,
     simulation_id: str,
     gap_class: str,
     action: str,
-):
+) -> AgentJob:
     service = AgentJobService(storage=storage)
     evidence = EvidencePackage(
         work_item_id=f"{simulation_id}:family",
