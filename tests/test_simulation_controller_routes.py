@@ -96,6 +96,30 @@ def test_staging_rejects_zip_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_staging_rejects_an_archive_that_expands_past_the_configured_limit(
+    tmp_path: Path,
+) -> None:
+    """A legitimate (honestly-labeled) archive whose declared uncompressed
+    total exceeds the configured cap must be rejected before any bytes are
+    written to disk. (A member lying about its own declared size to sneak
+    a larger real payload past this pre-check was investigated and found
+    not to be exploitable against the stdlib zipfile reader used here --
+    CPython's ZipExtFile enforces the declared size/CRC-32 against the
+    actual decompressed bytes on every read, independent of compression
+    method, so a mismatched declared size surfaces as a corrupt-archive
+    error rather than silently over-reading.)"""
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("payload.bin", b"\x00" * 5_000)
+    buffer.seek(0)
+
+    service = SimulationPackageStagingService(tmp_path, 1_000)
+    with pytest.raises(SimulationPackageStagingError) as exc:
+        service.stage_zip(uuid4(), buffer)
+    assert exc.value.code == "ARCHIVE_EXPANDS_TOO_LARGE"
+    assert not any(tmp_path.rglob("payload.bin"))
+
+
 def test_admin_can_stage_one_package_over_http(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -103,7 +127,7 @@ def test_admin_can_stage_one_package_over_http(
 
     org_id = _create_organization(client, "ac002a-stage")
     staging = SimulationPackageStagingService(tmp_path, 10_000_000)
-    controller = SimulationBatchController(LocalFileStorage(tmp_path / "raw"))
+    controller = SimulationBatchController(LocalFileStorage(str(tmp_path / "raw")))
 
     monkeypatch.setattr(simulation_controller_routes, "_staging_service", lambda: staging)
     monkeypatch.setattr(simulation_controller_routes, "_controller", lambda: controller)
