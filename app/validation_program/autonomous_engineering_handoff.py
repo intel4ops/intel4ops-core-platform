@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -110,7 +111,7 @@ class AutonomousEngineeringHandoffService:
                 409,
             )
 
-        clusters: dict[str, dict[str, object]] = defaultdict(
+        clusters: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"job_ids": [], "simulations": set(), "recommended_actions": []}
         )
         for job in jobs:
@@ -126,9 +127,6 @@ class AutonomousEngineeringHandoffService:
             job_ids = cluster["job_ids"]
             simulations = cluster["simulations"]
             recommended_actions = cluster["recommended_actions"]
-            assert isinstance(job_ids, list)
-            assert isinstance(simulations, set)
-            assert isinstance(recommended_actions, list)
             job_ids.append(str(job.id))
             if job.simulation_id:
                 simulations.add(job.simulation_id)
