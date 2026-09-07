@@ -3,7 +3,9 @@ from uuid import uuid4
 
 from app.schemas.autonomous_engineering_control import AutonomousEngineeringPolicyRequest
 from app.storage.local_storage import LocalFileStorage
-from app.validation_program.autonomous_engineering_control import AutonomousEngineeringControlService
+from app.validation_program.autonomous_engineering_control import (
+    AutonomousEngineeringControlService,
+)
 
 
 def _service(tmp_path: Path) -> AutonomousEngineeringControlService:
