@@ -66,6 +66,9 @@ from app.ground_truth_validation.routes import router as validation_router
 from app.validation_program.autonomous_verification_routes import (
     router as autonomous_verification_router,
 )
+from app.validation_program.deployment_authorization_controlled_promotion_routes import (
+    router as deployment_authorization_controlled_promotion_router,
+)
 from app.validation_program.governed_merge_release_routes import (
     router as governed_merge_release_router,
 )
@@ -200,6 +203,7 @@ app.include_router(simulation_controller_router)
 app.include_router(autonomous_verification_router)
 app.include_router(verified_release_authorization_router)
 app.include_router(governed_merge_release_router)
+app.include_router(deployment_authorization_controlled_promotion_router)
 app.include_router(semantic_router)
 app.include_router(semantic_review_router)
 app.include_router(entities_router)
