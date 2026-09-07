@@ -538,6 +538,11 @@ __all__ = [
     "SemanticReview",
     "SemanticDecisionVersion",
     "SemanticDecisionAuditEvent",
+    "AgentJob",
+    "AgentJobEvent",
+    "AgentWorkerCredential",
+    "SimulationBatch",
+    "SimulationBatchItem",
 ]
 from app.models.actions import (
     ActionDependency,
@@ -548,6 +553,11 @@ from app.models.actions import (
     ActionPlanStep,
     ActionResourceRequirement,
     OperationalAction,
+)
+from app.models.agent_jobs import (
+    AgentJob,
+    AgentJobEvent,
+    AgentWorkerCredential,
 )
 from app.models.economics import (
     EconomicAssumption,
@@ -562,4 +572,8 @@ from app.models.economics import (
     OpportunityOverlapMember,
     PrioritizationAssessment,
     RecoveryOpportunity,
+)
+from app.models.simulation_batch import (
+    SimulationBatch,
+    SimulationBatchItem,
 )
