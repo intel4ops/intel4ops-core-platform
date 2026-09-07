@@ -74,7 +74,10 @@ class DeploymentAuthorizationControlledPromotionService:
         )
         if job is None:
             _fail("CODEX_JOB_NOT_FOUND", "Codex implementation job not found", 404)
-        if job.job_type != _JOB_TYPE or job.assigned_worker != AgentWorkerProfile.CODEX_IMPLEMENTATION.value:
+        if (
+            job.job_type != _JOB_TYPE
+            or job.assigned_worker != AgentWorkerProfile.CODEX_IMPLEMENTATION.value
+        ):
             _fail("CODEX_JOB_INVALID", "Job is not an approved Codex implementation job", 409)
         if job.status != AgentJobStatus.SUCCEEDED.value:
             _fail("CODEX_JOB_NOT_SUCCEEDED", "Codex implementation job is not complete", 409)
@@ -112,14 +115,20 @@ class DeploymentAuthorizationControlledPromotionService:
             ) from exc
         if promotion.get("schema_version") != "ac002g-release-promotion-v1":
             _fail("RELEASE_PROMOTION_INVALID", "AC-002G release promotion schema is invalid", 409)
-        if promotion.get("organization_id") != str(organization_id) or promotion.get("batch_id") != str(batch_id):
+        if promotion.get("organization_id") != str(organization_id) or promotion.get(
+            "batch_id"
+        ) != str(batch_id):
             _fail("RELEASE_PROMOTION_SCOPE_MISMATCH", "Release promotion scope mismatch", 409)
         if promotion.get("implementation_job_id") != str(job.id):
             _fail("RELEASE_PROMOTION_JOB_MISMATCH", "Release promotion job mismatch", 409)
         if promotion.get("decision") != "MERGED_RELEASE_CANDIDATE":
             _fail("RELEASE_NOT_MERGED", "AC-002G did not produce a merged release candidate", 409)
         if promotion.get("release_stage") != "MERGED_AWAITING_DEPLOYMENT_AUTHORIZATION":
-            _fail("RELEASE_STAGE_INVALID", "Release candidate is not awaiting deployment authorization", 409)
+            _fail(
+                "RELEASE_STAGE_INVALID",
+                "Release candidate is not awaiting deployment authorization",
+                409,
+            )
         if promotion.get("deploy_allowed") is not False:
             _fail("DEPLOY_BOUNDARY_INVALID", "AC-002G must not pre-authorize deployment", 409)
         if not promotion.get("merge_commit_sha"):
@@ -141,7 +150,11 @@ class DeploymentAuthorizationControlledPromotionService:
         if payload.environment not in _ALLOWED_ENVIRONMENTS:
             _fail("ENVIRONMENT_INVALID", "Deployment environment is not allowed", 409)
         if payload.expected_merge_commit_sha != promotion["merge_commit_sha"]:
-            _fail("MERGE_COMMIT_MISMATCH", "Deployment authorization targets a stale merge commit", 409)
+            _fail(
+                "MERGE_COMMIT_MISMATCH",
+                "Deployment authorization targets a stale merge commit",
+                409,
+            )
 
         decision = "APPROVED" if payload.approve else "REJECTED"
         artifact = {
@@ -169,7 +182,9 @@ class DeploymentAuthorizationControlledPromotionService:
             batch.status = SimulationBatchStatus.PAUSED_SAFETY_GATE.value
             batch.safety_gate_reason = payload.note or "deployment rejected by owner"
         db.commit()
-        return DeploymentAuthorizationDecision(batch_id, job.id, decision, ref, payload.environment, payload.approve)
+        return DeploymentAuthorizationDecision(
+            batch_id, job.id, decision, ref, payload.environment, payload.approve
+        )
 
     def start(
         self,
@@ -194,11 +209,20 @@ class DeploymentAuthorizationControlledPromotionService:
                 "DEPLOYMENT_AUTHORIZATION_MISSING", "Deployment authorization is missing", 409
             ) from exc
         if authorization.get("schema_version") != "ac002h-deployment-authorization-v1":
-            _fail("DEPLOYMENT_AUTHORIZATION_INVALID", "Deployment authorization schema is invalid", 409)
-        if authorization.get("decision") != "APPROVED" or authorization.get("deploy_allowed") is not True:
+            _fail(
+                "DEPLOYMENT_AUTHORIZATION_INVALID",
+                "Deployment authorization schema is invalid",
+                409,
+            )
+        if (
+            authorization.get("decision") != "APPROVED"
+            or authorization.get("deploy_allowed") is not True
+        ):
             _fail("DEPLOYMENT_NOT_AUTHORIZED", "Owner did not authorize deployment", 409)
         if authorization.get("environment") != environment:
-            _fail("ENVIRONMENT_SCOPE_MISMATCH", "Deployment authorization environment mismatch", 409)
+            _fail(
+                "ENVIRONMENT_SCOPE_MISMATCH", "Deployment authorization environment mismatch", 409
+            )
         if authorization.get("merge_commit_sha") != expected_merge_commit_sha:
             _fail("AUTHORIZED_COMMIT_STALE", "Authorized deployment commit is stale", 409)
 
@@ -251,9 +275,17 @@ class DeploymentAuthorizationControlledPromotionService:
         if manifest.get("environment") != payload.environment:
             _fail("ENVIRONMENT_SCOPE_MISMATCH", "Controlled promotion environment mismatch", 409)
         if payload.deployed_commit_sha != promotion["merge_commit_sha"]:
-            _fail("DEPLOYED_COMMIT_MISMATCH", "Deployed commit does not match the authorized merge commit", 409)
+            _fail(
+                "DEPLOYED_COMMIT_MISMATCH",
+                "Deployed commit does not match the authorized merge commit",
+                409,
+            )
         if payload.outcome == "deployed" and not payload.deployment_reference:
-            _fail("DEPLOYMENT_REFERENCE_REQUIRED", "Successful deployment requires a deployment reference", 409)
+            _fail(
+                "DEPLOYMENT_REFERENCE_REQUIRED",
+                "Successful deployment requires a deployment reference",
+                409,
+            )
 
         decision = "DEPLOYED" if payload.outcome == "deployed" else "DEPLOYMENT_BLOCKED"
         if payload.outcome == "deployed":
@@ -286,4 +318,6 @@ class DeploymentAuthorizationControlledPromotionService:
             f"agent-jobs/{job.id}/controlled-promotion-result-{payload.environment}.json", result
         )
         db.commit()
-        return ControlledPromotionDecision(batch_id, job.id, decision, result_ref, payload.environment)
+        return ControlledPromotionDecision(
+            batch_id, job.id, decision, result_ref, payload.environment
+        )
