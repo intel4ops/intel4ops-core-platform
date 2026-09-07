@@ -5,7 +5,7 @@ submission (accept / escalate / malformed-output failure)."""
 
 from datetime import timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -60,7 +60,7 @@ def _service(tmp_path: Path) -> AgentJobService:
 
 
 def _credential(
-    db: Session, org_id, risk_classes: list[str] | None = None
+    db: Session, org_id: UUID, risk_classes: list[str] | None = None
 ) -> AgentWorkerCredential:
     credential = AgentWorkerCredential(
         organization_id=org_id,
@@ -196,6 +196,7 @@ def test_heartbeat_succeeds_with_valid_lease_and_fails_after_lease_lost(
     )
     credential = _credential(db, org.id)
     claim = service.claim_next(db, credential)
+    assert claim is not None
     assert service.heartbeat(db, claim) is True
 
     # Recover the job as stale (simulating a lost worker), which clears
@@ -221,13 +222,14 @@ def test_stale_job_is_requeued_then_eventually_times_out(db: Session, tmp_path: 
     )
     credential = _credential(db, org.id)
 
-    job_id = None
+    job_id: UUID | None = None
     for attempt in range(4):
         claim = service.claim_next(db, credential)
         assert claim is not None, f"expected a claimable job on attempt {attempt}"
         job_id = claim.job_id
         service.recover_stale(db, timedelta(seconds=-1))
 
+    assert job_id is not None
     job = service.get(db, org.id, job_id)
     assert job.status == AgentJobStatus.TIMED_OUT.value
     assert job.retry_count == 3
@@ -252,6 +254,7 @@ def test_submit_result_accepted_marks_job_succeeded(db: Session, tmp_path: Path)
     )
     credential = _credential(db, org.id)
     claim = service.claim_next(db, credential)
+    assert claim is not None
     job = service.submit_result(
         db,
         claim,
@@ -296,6 +299,7 @@ def test_submit_result_low_confidence_escalates_not_accepted(db: Session, tmp_pa
     )
     credential = _credential(db, org.id)
     claim = service.claim_next(db, credential)
+    assert claim is not None
     job = service.submit_result(
         db,
         claim,
@@ -338,6 +342,7 @@ def test_submit_malformed_result_fails_never_silently_accepted(db: Session, tmp_
     )
     credential = _credential(db, org.id)
     claim = service.claim_next(db, credential)
+    assert claim is not None
     job = service.submit_result(
         db,
         claim,
@@ -368,6 +373,7 @@ def test_submit_result_with_stale_lease_raises_lease_lost(db: Session, tmp_path:
     )
     credential = _credential(db, org.id)
     claim = service.claim_next(db, credential)
+    assert claim is not None
     service.recover_stale(db, timedelta(seconds=-1))
     try:
         service.submit_result(

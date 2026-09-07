@@ -85,6 +85,7 @@ def test_summarize_counts_qwen_accept_and_escalate(db: Session, tmp_path: Path) 
             uuid4(),
         )
         claim = service.claim_next(db, credential)
+        assert claim is not None
         service.submit_result(
             db,
             claim,
@@ -146,6 +147,7 @@ def test_learning_transfer_rate_counts_encountered_and_handled(db: Session, tmp_
         uuid4(),
     )
     claim = service.claim_next(db, credential)
+    assert claim is not None
     service.submit_result(
         db,
         claim,

@@ -36,6 +36,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from types import FrameType
 from uuid import UUID
 
@@ -43,31 +44,35 @@ from lm_studio_client import LmStudioClient, LmStudioError
 
 logger = logging.getLogger("intel4ops.agent_worker")
 
+
+@dataclass(frozen=True)
+class ModelProfile:
+    model: str
+    reasoning: bool
+    max_output_tokens: int
+    temperature: float
+
+
 # Frozen model-profile parameters -- mirrors
-# app.services.agent_routing_service.MODEL_PROFILE_PARAMETERS exactly.
-# Kept in sync by test_agent_worker_profiles.py on the backend side; this
-# script has no import path back into the backend package, so the
-# constants are restated here rather than shared (a local worker process
-# never imports backend application code).
-PROFILE_PARAMETERS = {
-    "QWEN_R0": {
-        "model": "qwen/qwen3.5-9b",
-        "reasoning": False,
-        "max_output_tokens": 180,
-        "temperature": 0,
-    },
-    "QWEN_R1": {
-        "model": "qwen/qwen3.5-9b",
-        "reasoning": False,
-        "max_output_tokens": 500,
-        "temperature": 0,
-    },
-    "DEVSTRAL_SPECIALIST": {
-        "model": "mistralai/devstral-small-2-2512",
-        "reasoning": True,
-        "max_output_tokens": 2000,
-        "temperature": 0,
-    },
+# app.services.agent_routing_service.MODEL_PROFILE_PARAMETERS exactly
+# (see tests/test_agent_routing_service.py on the backend side for the
+# authoritative test coverage of those values). This script has no
+# import path back into the backend package, so the constants are
+# restated here rather than shared -- a local worker process never
+# imports backend application code.
+PROFILE_PARAMETERS: dict[str, ModelProfile] = {
+    "QWEN_R0": ModelProfile(
+        model="qwen/qwen3.5-9b", reasoning=False, max_output_tokens=180, temperature=0
+    ),
+    "QWEN_R1": ModelProfile(
+        model="qwen/qwen3.5-9b", reasoning=False, max_output_tokens=500, temperature=0
+    ),
+    "DEVSTRAL_SPECIALIST": ModelProfile(
+        model="mistralai/devstral-small-2-2512",
+        reasoning=True,
+        max_output_tokens=2000,
+        temperature=0,
+    ),
 }
 
 
@@ -99,10 +104,14 @@ class BackendClient:
         self._request("POST", f"/{job_id}/heartbeat", {"lease_id": lease_id})
 
     def submit_result(self, job_id: str, payload: dict) -> dict:
-        return self._request("POST", f"/{job_id}/result", payload)
+        result = self._request("POST", f"/{job_id}/result", payload)
+        assert result is not None  # the /result endpoint always returns the updated job
+        return result
 
     def submit_failure(self, job_id: str, payload: dict) -> dict:
-        return self._request("POST", f"/{job_id}/failure", payload)
+        result = self._request("POST", f"/{job_id}/failure", payload)
+        assert result is not None  # the /failure endpoint always returns the updated job
+        return result
 
 
 class HeartbeatPump:
@@ -178,11 +187,11 @@ class AgentWorker:
         try:
             prompt = self._build_prompt(claim_response["evidence_package"])
             result = self._lm_studio.chat_completion(
-                model=params["model"],
+                model=params.model,
                 prompt=prompt,
-                max_output_tokens=params["max_output_tokens"],
-                temperature=params["temperature"],
-                reasoning=params["reasoning"],
+                max_output_tokens=params.max_output_tokens,
+                temperature=params.temperature,
+                reasoning=params.reasoning,
             )
             if result.parsed_json is None:
                 self._backend.submit_failure(

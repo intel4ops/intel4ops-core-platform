@@ -54,6 +54,7 @@ def test_batch_controller_happy_path_discover_through_gap_clustering(
     from app.models.simulation_batch import SimulationBatchItem
 
     item = db.scalar(select(SimulationBatchItem).where(SimulationBatchItem.batch_id == batch.id))
+    assert item is not None
     assert item.state == SimulationBatchItemState.SELECTED.value
 
     controller.prepare_batch(db, batch.id, corpus_root, actor)
@@ -122,6 +123,7 @@ def test_batch_controller_happy_path_discover_through_gap_clustering(
     from app.models.simulation_batch import SimulationBatch
 
     refreshed_batch = db.get(SimulationBatch, batch.id)
+    assert refreshed_batch is not None
     assert refreshed_batch.status == SimulationBatchStatus.OWNER_REVIEW_REQUIRED.value
 
 

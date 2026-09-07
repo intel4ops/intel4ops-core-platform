@@ -50,7 +50,8 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 def extract_json(raw_content: str) -> dict | None:
     cleaned = _FENCE_RE.sub("", raw_content).strip()
     try:
-        return json.loads(cleaned)
+        parsed: dict = json.loads(cleaned)
+        return parsed
     except json.JSONDecodeError:
         return None
 
