@@ -205,3 +205,12 @@ SEMANTIC_REVIEW_ROLES = (
     MembershipRole.ANALYST,
     MembershipRole.OPERATOR,
 )
+
+# AGENTIC-CONTROL-001: agent job visibility mirrors analysis-case
+# visibility; creation is scoped like analysis-case creation; owner
+# approval and worker-credential issuance are organization-admin-only --
+# never delegated to a local worker or an automated caller (Phase N/K).
+AGENT_JOB_READ_ROLES = ORGANIZATION_READ_ROLES
+AGENT_JOB_CREATE_ROLES = ANALYSIS_CASE_CREATE_ROLES
+AGENT_JOB_OWNER_APPROVAL_ROLES = ORGANIZATION_ADMIN_ROLES
+AGENT_WORKER_CREDENTIAL_ADMIN_ROLES = ORGANIZATION_ADMIN_ROLES
