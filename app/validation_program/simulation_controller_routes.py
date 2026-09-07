@@ -13,6 +13,10 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.simulation_batch import SimulationBatch, SimulationBatchItem, SimulationBatchStatus
 from app.schemas.agent_jobs import OwnerApprovalDecision
+from app.schemas.premium_codex_execution import (
+    PremiumCodexExecutionComplete,
+    PremiumCodexExecutionStart,
+)
 from app.storage.local_storage import LocalFileStorage
 from app.validation_program.approved_codex_dispatch import (
     ApprovedCodexDispatchError,
@@ -26,6 +30,10 @@ from app.validation_program.batch_controller import (
     SimulationBatchController,
     SimulationControllerError,
     TruthIsolationViolation,
+)
+from app.validation_program.premium_codex_execution import (
+    PremiumCodexExecutionError,
+    PremiumCodexExecutionService,
 )
 from app.validation_program.simulation_package_staging import (
     SimulationPackageStagingError,
@@ -63,6 +71,11 @@ def _handoff_service() -> AutonomousEngineeringHandoffService:
 def _dispatch_service() -> ApprovedCodexDispatchService:
     settings = get_settings()
     return ApprovedCodexDispatchService(LocalFileStorage(settings.storage_root))
+
+
+def _premium_codex_service() -> PremiumCodexExecutionService:
+    settings = get_settings()
+    return PremiumCodexExecutionService(LocalFileStorage(settings.storage_root))
 
 
 def _get_batch(db: Session, organization_id: UUID, batch_id: UUID) -> SimulationBatch:
@@ -278,4 +291,55 @@ def decide_engineering_handoff(
         "target_worker_profile": "CODEX_IMPLEMENTATION",
         "dispatch_authorized": result.dispatch_authorized,
         "provider_execution_started": result.provider_execution_started,
+    }
+
+
+@router.post("/codex-jobs/{job_id}/execution/start")
+def start_premium_codex_execution(
+    organization_id: UUID,
+    job_id: UUID,
+    payload: PremiumCodexExecutionStart,
+    db: Session = Depends(get_db),
+    _access: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
+) -> dict[str, object]:
+    try:
+        lease = _premium_codex_service().start(
+            db,
+            organization_id,
+            job_id,
+            payload.worker_id,
+        )
+    except PremiumCodexExecutionError as exc:
+        _raise(exc)
+    return {
+        "job_id": lease.job_id,
+        "organization_id": lease.organization_id,
+        "lease_id": lease.lease_id,
+        "worker_id": lease.worker_id,
+        "manifest_ref": lease.manifest_ref,
+        "provider_execution_started": True,
+        "automatic_merge_allowed": False,
+        "automatic_deploy_allowed": False,
+    }
+
+
+@router.post("/codex-jobs/{job_id}/execution/complete")
+def complete_premium_codex_execution(
+    organization_id: UUID,
+    job_id: UUID,
+    payload: PremiumCodexExecutionComplete,
+    db: Session = Depends(get_db),
+    _access: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
+) -> dict[str, object]:
+    try:
+        job = _premium_codex_service().complete(db, organization_id, job_id, payload)
+    except PremiumCodexExecutionError as exc:
+        _raise(exc)
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "result_ref": job.result_ref,
+        "escalation_reason": job.escalation_reason,
+        "automatic_merge_performed": False,
+        "automatic_deploy_performed": False,
     }
