@@ -73,11 +73,17 @@ class PremiumCodexExecutionService:
         if job.assigned_worker != AgentWorkerProfile.CODEX_IMPLEMENTATION.value:
             _fail("WORKER_PROFILE_INVALID", "Job is not assigned to the Codex profile", 409)
         if job.owner_approval_required is not True:
-            _fail("OWNER_GATE_REQUIRED", "Codex implementation job must require owner approval", 409)
+            _fail(
+                "OWNER_GATE_REQUIRED", "Codex implementation job must require owner approval", 409
+            )
         if job.owner_approval_status != AgentJobOwnerApprovalStatus.APPROVED.value:
             _fail("OWNER_APPROVAL_MISSING", "Codex implementation job is not owner-approved", 409)
         if job.evidence_plane != "validation":
-            _fail("EVIDENCE_PLANE_INVALID", "Codex implementation job must use validation evidence", 409)
+            _fail(
+                "EVIDENCE_PLANE_INVALID",
+                "Codex implementation job must use validation evidence",
+                409,
+            )
         if not job.input_evidence_ref:
             _fail("EVIDENCE_MISSING", "Codex implementation job has no evidence package", 409)
 
