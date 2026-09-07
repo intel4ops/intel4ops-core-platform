@@ -13,6 +13,10 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.simulation_batch import SimulationBatch, SimulationBatchItem, SimulationBatchStatus
 from app.storage.local_storage import LocalFileStorage
+from app.validation_program.autonomous_engineering_handoff import (
+    AutonomousEngineeringHandoffError,
+    AutonomousEngineeringHandoffService,
+)
 from app.validation_program.batch_controller import (
     SimulationBatchController,
     SimulationControllerError,
@@ -44,6 +48,11 @@ def _staging_service() -> SimulationPackageStagingService:
     return SimulationPackageStagingService(
         settings.storage_root, settings.max_case_total_size_bytes
     )
+
+
+def _handoff_service() -> AutonomousEngineeringHandoffService:
+    settings = get_settings()
+    return AutonomousEngineeringHandoffService(LocalFileStorage(settings.storage_root))
 
 
 def _get_batch(db: Session, organization_id: UUID, batch_id: UUID) -> SimulationBatch:
@@ -205,3 +214,26 @@ def create_miss_classification_jobs(
     payload = _batch_payload(db, batch)
     payload["created_agent_job_ids"] = job_ids
     return payload
+
+
+@router.post("/batches/{batch_id}/engineering-handoff")
+def prepare_engineering_handoff(
+    organization_id: UUID,
+    batch_id: UUID,
+    db: Session = Depends(get_db),
+    _access: OrganizationAccess = Depends(require_organization_roles(*ORGANIZATION_ADMIN_ROLES)),
+) -> dict[str, object]:
+    try:
+        handoff = _handoff_service().prepare(db, organization_id, batch_id)
+    except AutonomousEngineeringHandoffError as exc:
+        _raise(exc)
+    batch = _get_batch(db, organization_id, batch_id)
+    return {
+        "batch": _batch_payload(db, batch),
+        "decision_package_ref": handoff.decision_package_ref,
+        "engineering_handoff_ref": handoff.engineering_handoff_ref,
+        "target_worker_profile": "CODEX_IMPLEMENTATION",
+        "owner_approval_required": handoff.owner_approval_required,
+        "dispatch_allowed": False,
+        "status": handoff.status,
+    }
