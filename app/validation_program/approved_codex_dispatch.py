@@ -175,10 +175,12 @@ class ApprovedCodexDispatchService:
             risk_class=AgentJobRiskClass.R2.value,
             observation=EvidenceObservation(
                 observed_behavior=(
-                    "Owner-approved simulation gap clusters require a bounded implementation change."
+                    "Owner-approved simulation gap clusters require a bounded "
+                    "implementation change."
                 ),
                 expected_capability_behavior=(
-                    "Implement only the approved bounded remediation and preserve all existing gates."
+                    "Implement only the approved bounded remediation and preserve "
+                    "all existing gates."
                 ),
             ),
             impact=EvidenceImpact(
@@ -191,8 +193,9 @@ class ApprovedCodexDispatchService:
             safety=EvidenceSafety(
                 fp_exposure="unknown",
                 truth_isolation_constraints=(
-                    "Use only the summarized AC-002B decision/handoff artifacts. Never read hidden-truth "
-                    "package files and never introduce validation-plane dependencies into production execution."
+                    "Use only the summarized AC-002B decision/handoff artifacts. "
+                    "Never read hidden-truth package files and never introduce "
+                    "validation-plane dependencies into production execution."
                 ),
             ),
             code_context=EvidenceCodeContext(),
@@ -255,7 +258,10 @@ class ApprovedCodexDispatchService:
                         "worker_profile": AgentWorkerProfile.CODEX_IMPLEMENTATION.value,
                         "local_allowed": False,
                         "owner_gate_required": True,
-                        "reasoning": "Explicit AC-002C dispatch from owner-approved AC-002B handoff",
+                        "reasoning": (
+                            "Explicit AC-002C dispatch from owner-approved "
+                            "AC-002B handoff"
+                        ),
                     },
                     idempotency_key=str(uuid4()),
                 ),
@@ -332,7 +338,8 @@ class ApprovedCodexDispatchService:
         handoff["implementation_job_id"] = str(job.id)
         handoff["provider_execution_started"] = False
         handoff["next_action"] = (
-            "A premium Codex dispatcher may consume the approved AgentJob; automatic merge/deploy remains prohibited."
+            "A premium Codex dispatcher may consume the approved AgentJob; "
+            "automatic merge/deploy remains prohibited."
         )
         self._agent_jobs._write_json(handoff_ref, handoff)  # noqa: SLF001
 
