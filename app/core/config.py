@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     mapping_worker_stale_threshold_seconds: float = Field(default=60.0, ge=10, le=3600)
     mapping_worker_db_backoff_seconds: float = Field(default=5.0, gt=0, le=300)
     mapping_worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
+    # AGENTIC-CONTROL-001 Phase O: same "no indefinite running" discipline
+    # as the mapping worker above, applied to AgentJob. Recovery is
+    # invoked opportunistically on every /claim request (see
+    # app.api.agent_job_routes.claim_agent_job) rather than needing a
+    # separate scheduled sweep process.
+    agent_job_stale_threshold_seconds: float = Field(default=120.0, ge=10, le=3600)
 
     # P3.xxC.1 Analysis Case storage/orchestration. storage_root is a local
     # filesystem path (expected to sit on a Render persistent disk in

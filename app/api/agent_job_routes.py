@@ -129,7 +129,16 @@ def claim_agent_job(
     db: Session = Depends(get_db),
     credential: AgentWorkerCredential = Depends(require_worker_credential),
 ) -> object:
+    from datetime import timedelta
+
     service = _service()
+    # Opportunistic stale-lease recovery (Phase O) -- mirrors
+    # MappingExecutionWorker.run()'s recover_stale_once() call, but
+    # invoked on every claim request rather than needing a separate
+    # scheduled process, since AgentJob workers are remote/pull-based and
+    # there is no long-lived in-process worker loop on the server side to
+    # host a periodic sweep.
+    service.recover_stale(db, timedelta(seconds=get_settings().agent_job_stale_threshold_seconds))
     claim = service.claim_next(db, credential)
     if claim is None:
         return None
