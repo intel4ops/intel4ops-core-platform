@@ -95,7 +95,9 @@ class VerifiedReleaseAuthorizationService:
         )
         if batch.status != SimulationBatchStatus.OWNER_REVIEW_REQUIRED.value:
             _fail("OWNER_REVIEW_NOT_PENDING", "Batch is not awaiting release authorization", 409)
-        if not items or any(item.state != SimulationBatchItemState.GRADUATED.value for item in items):
+        if not items or any(
+            item.state != SimulationBatchItemState.GRADUATED.value for item in items
+        ):
             _fail("BATCH_NOT_VERIFIED", "Batch items are not fully graduated", 409)
         return batch, items
 
@@ -121,13 +123,29 @@ class VerifiedReleaseAuthorizationService:
             ) from exc
         if result.get("schema_version") != "ac002e-verification-result-v1":
             _fail("VERIFICATION_SCHEMA_INVALID", "Verification result schema is invalid", 409)
-        if result.get("organization_id") != str(organization_id) or result.get("batch_id") != str(batch_id):
-            _fail("VERIFICATION_SCOPE_MISMATCH", "Verification result scope does not match the batch", 409)
+        if result.get("organization_id") != str(organization_id) or result.get("batch_id") != str(
+            batch_id
+        ):
+            _fail(
+                "VERIFICATION_SCOPE_MISMATCH",
+                "Verification result scope does not match the batch",
+                409,
+            )
         if result.get("implementation_job_id") != str(job.id):
-            _fail("VERIFICATION_JOB_MISMATCH", "Verification result does not match the Codex job", 409)
-        if result.get("decision") != "VERIFIED_IMPROVEMENT" or result.get("owner_review_required") is not True:
-            _fail("VERIFICATION_NOT_APPROVABLE", "Only a verified improvement may be authorized", 409)
-        if result.get("automatic_merge_performed") is not False or result.get("automatic_deploy_performed") is not False:
+            _fail(
+                "VERIFICATION_JOB_MISMATCH", "Verification result does not match the Codex job", 409
+            )
+        if (
+            result.get("decision") != "VERIFIED_IMPROVEMENT"
+            or result.get("owner_review_required") is not True
+        ):
+            _fail(
+                "VERIFICATION_NOT_APPROVABLE", "Only a verified improvement may be authorized", 409
+            )
+        if (
+            result.get("automatic_merge_performed") is not False
+            or result.get("automatic_deploy_performed") is not False
+        ):
             _fail("VERIFICATION_BOUNDARY_BROKEN", "Verification boundary was already crossed", 409)
         return result
 
@@ -146,11 +164,23 @@ class VerifiedReleaseAuthorizationService:
         verification = self._verification(organization_id, batch_id, job)
 
         if payload.expected_head_sha != candidate["head_sha"]:
-            _fail("CANDIDATE_SHA_MISMATCH", "Owner approval does not match the verified candidate SHA", 409)
+            _fail(
+                "CANDIDATE_SHA_MISMATCH",
+                "Owner approval does not match the verified candidate SHA",
+                409,
+            )
         if payload.pull_request_number != candidate["pull_request_number"]:
-            _fail("CANDIDATE_PR_MISMATCH", "Owner approval does not match the verified pull request", 409)
+            _fail(
+                "CANDIDATE_PR_MISMATCH",
+                "Owner approval does not match the verified pull request",
+                409,
+            )
         if verification.get("candidate_head_sha") != candidate["head_sha"]:
-            _fail("VERIFIED_CANDIDATE_MISMATCH", "Verification result is stale for this candidate", 409)
+            _fail(
+                "VERIFIED_CANDIDATE_MISMATCH",
+                "Verification result is stale for this candidate",
+                409,
+            )
         if verification.get("pull_request_number") != candidate["pull_request_number"]:
             _fail("VERIFIED_PR_MISMATCH", "Verification result is stale for this pull request", 409)
 
@@ -168,7 +198,9 @@ class VerifiedReleaseAuthorizationService:
                 and existing.get("pull_request_number") == candidate["pull_request_number"]
             )
             if not same:
-                _fail("AUTHORIZATION_ALREADY_DECIDED", "Release authorization already recorded", 409)
+                _fail(
+                    "AUTHORIZATION_ALREADY_DECIDED", "Release authorization already recorded", 409
+                )
             return ReleaseAuthorizationDecision(
                 batch_id=batch_id,
                 job_id=job.id,
