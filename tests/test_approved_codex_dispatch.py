@@ -178,12 +178,15 @@ def test_owner_rejection_closes_handoff_without_job(db: Session, tmp_path: Path)
     assert result.decision == "REJECTED"
     assert result.implementation_job_id is None
     assert result.dispatch_authorized is False
-    assert db.scalar(
-        select(AgentJob).where(
-            AgentJob.organization_id == org.id,
-            AgentJob.job_type == "CODEX_IMPLEMENTATION",
+    assert (
+        db.scalar(
+            select(AgentJob).where(
+                AgentJob.organization_id == org.id,
+                AgentJob.job_type == "CODEX_IMPLEMENTATION",
+            )
         )
-    ) is None
+        is None
+    )
 
     handoff = AgentJobService(storage=storage)._read_json(handoff_ref)  # noqa: SLF001
     assert handoff["owner_gate"]["decision"] == "REJECTED"
