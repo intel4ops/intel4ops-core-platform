@@ -36,7 +36,9 @@ def _raise(exc: Exception) -> NoReturn:
 
 def _service() -> DeploymentAuthorizationControlledPromotionService:
     settings = get_settings()
-    return DeploymentAuthorizationControlledPromotionService(LocalFileStorage(settings.storage_root))
+    return DeploymentAuthorizationControlledPromotionService(
+        LocalFileStorage(settings.storage_root)
+    )
 
 
 @router.post("/codex-jobs/{job_id}/deployment-authorization")
