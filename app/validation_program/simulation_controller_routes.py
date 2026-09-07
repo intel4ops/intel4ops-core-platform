@@ -8,11 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.authorization import OrganizationAccess, require_organization_roles
-from app.auth.permissions import ORGANIZATION_ADMIN_ROLES
+from app.auth.permissions import AGENT_JOB_OWNER_APPROVAL_ROLES, ORGANIZATION_ADMIN_ROLES
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.simulation_batch import SimulationBatch, SimulationBatchItem, SimulationBatchStatus
+from app.schemas.agent_jobs import OwnerApprovalDecision
 from app.storage.local_storage import LocalFileStorage
+from app.validation_program.approved_codex_dispatch import (
+    ApprovedCodexDispatchError,
+    ApprovedCodexDispatchService,
+)
 from app.validation_program.autonomous_engineering_handoff import (
     AutonomousEngineeringHandoffError,
     AutonomousEngineeringHandoffService,
@@ -53,6 +58,11 @@ def _staging_service() -> SimulationPackageStagingService:
 def _handoff_service() -> AutonomousEngineeringHandoffService:
     settings = get_settings()
     return AutonomousEngineeringHandoffService(LocalFileStorage(settings.storage_root))
+
+
+def _dispatch_service() -> ApprovedCodexDispatchService:
+    settings = get_settings()
+    return ApprovedCodexDispatchService(LocalFileStorage(settings.storage_root))
 
 
 def _get_batch(db: Session, organization_id: UUID, batch_id: UUID) -> SimulationBatch:
@@ -236,4 +246,36 @@ def prepare_engineering_handoff(
         "owner_approval_required": handoff.owner_approval_required,
         "dispatch_allowed": False,
         "status": handoff.status,
+    }
+
+
+@router.post("/batches/{batch_id}/engineering-handoff/owner-decision")
+def decide_engineering_handoff(
+    organization_id: UUID,
+    batch_id: UUID,
+    payload: OwnerApprovalDecision,
+    db: Session = Depends(get_db),
+    access: OrganizationAccess = Depends(
+        require_organization_roles(*AGENT_JOB_OWNER_APPROVAL_ROLES)
+    ),
+) -> dict[str, object]:
+    try:
+        result = _dispatch_service().decide(
+            db,
+            organization_id,
+            batch_id,
+            payload.approve,
+            payload.note,
+            access.user.user_id,
+        )
+    except ApprovedCodexDispatchError as exc:
+        _raise(exc)
+    batch = _get_batch(db, organization_id, batch_id)
+    return {
+        "batch": _batch_payload(db, batch),
+        "decision": result.decision,
+        "implementation_job_id": result.implementation_job_id,
+        "target_worker_profile": "CODEX_IMPLEMENTATION",
+        "dispatch_authorized": result.dispatch_authorized,
+        "provider_execution_started": result.provider_execution_started,
     }
