@@ -184,8 +184,14 @@ class AutonomousVerificationRetestService:
                 "return one scored result for every listed simulation and no others",
             ],
             "decision_policy": {
-                "verified_improvement": "total false negatives decrease, false positives do not increase, and true positives do not decrease",
-                "regression": "any false-positive increase, false-negative increase, or true-positive decrease",
+                "verified_improvement": (
+                    "total false negatives decrease, false positives do not increase, "
+                    "and true positives do not decrease"
+                ),
+                "regression": (
+                    "any false-positive increase, false-negative increase, "
+                    "or true-positive decrease"
+                ),
                 "no_improvement": "all other scored outcomes",
             },
             "automatic_merge_allowed": False,
