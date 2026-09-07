@@ -319,7 +319,7 @@ class SimulationBatchController:
         item.state = SimulationBatchItemState.SCORED.value
 
     def _resolve_family_and_value(
-        self, db: Session, miss: "ValidationFindingMatch"
+        self, db: Session, miss: ValidationFindingMatch
     ) -> tuple[str, float | None, str | None]:
         """A single missed scenario is often expressed on both the
         FINDING_DETECTION and LEAKAGE_VALUE dimensions (see
