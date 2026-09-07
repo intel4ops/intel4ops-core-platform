@@ -123,19 +123,23 @@ class ApprovedCodexDispatchService:
         if handoff.get("target_worker_profile") != AgentWorkerProfile.CODEX_IMPLEMENTATION.value:
             _fail("HANDOFF_TARGET_INVALID", "Engineering handoff does not target Codex", 409)
         if handoff.get("handoff_state") != "OWNER_APPROVAL_REQUIRED":
-            _fail("HANDOFF_ALREADY_DECIDED", "Engineering handoff is not awaiting owner approval", 409)
+            _fail(
+                "HANDOFF_ALREADY_DECIDED", "Engineering handoff is not awaiting owner approval", 409
+            )
         if handoff.get("dispatch_allowed") is not False:
             _fail("HANDOFF_DISPATCH_STATE_INVALID", "Unapproved handoff cannot allow dispatch", 409)
         owner_gate = handoff.get("owner_gate") or {}
         if owner_gate.get("required") is not True or owner_gate.get("decision") is not None:
             _fail("HANDOFF_OWNER_GATE_INVALID", "Engineering handoff owner gate is invalid", 409)
         if not handoff.get("decision_package_ref"):
-            _fail("HANDOFF_DECISION_PACKAGE_MISSING", "Engineering handoff has no decision package", 409)
+            _fail(
+                "HANDOFF_DECISION_PACKAGE_MISSING",
+                "Engineering handoff has no decision package",
+                409,
+            )
         return handoff_ref, handoff
 
-    def _existing_job(
-        self, db: Session, organization_id: UUID, batch_id: UUID
-    ) -> AgentJob | None:
+    def _existing_job(self, db: Session, organization_id: UUID, batch_id: UUID) -> AgentJob | None:
         return db.scalar(
             select(AgentJob).where(
                 AgentJob.organization_id == organization_id,
