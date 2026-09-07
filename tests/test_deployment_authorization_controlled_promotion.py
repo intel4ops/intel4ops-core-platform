@@ -36,7 +36,9 @@ def _organization(db: Session, slug: str) -> Organization:
     )
 
 
-def _scenario(db: Session, storage: LocalFileStorage, org: Organization) -> tuple[SimulationBatch, AgentJob]:
+def _scenario(
+    db: Session, storage: LocalFileStorage, org: Organization
+) -> tuple[SimulationBatch, AgentJob]:
     batch = SimulationBatch(
         organization_id=org.id,
         name="AC-002H deployment batch",
@@ -128,7 +130,9 @@ def test_authorization_rejects_stale_merge_commit(db: Session, tmp_path: Path) -
     assert exc_info.value.code == "MERGE_COMMIT_MISMATCH"
 
 
-def test_controlled_promotion_requires_same_environment_authorization(db: Session, tmp_path: Path) -> None:
+def test_controlled_promotion_requires_same_environment_authorization(
+    db: Session, tmp_path: Path
+) -> None:
     org = _organization(db, "ac002h-env")
     storage = LocalFileStorage(str(tmp_path / "storage"))
     _batch, job = _scenario(db, storage, org)
