@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -129,8 +130,9 @@ class AutonomousEngineeringControlService:
                 "cross_environment_promotion_allowed": False,
             },
         }
-        ref = f"autonomy-decisions/{organization_id}/{decision_id}.json"
-        self._storage.write_text(ref, __import__("json").dumps(artifact, sort_keys=True, indent=2))
+        requested_ref = f"autonomy-decisions/{organization_id}/{decision_id}.json"
+        encoded = json.dumps(artifact, sort_keys=True, indent=2).encode("utf-8")
+        stored = self._storage.write_stream(requested_ref, [encoded])
         return AutonomousEngineeringDecision(
             decision_id=decision_id,
             decision=decision,
@@ -140,5 +142,5 @@ class AutonomousEngineeringControlService:
             auto_deploy_staging_allowed=auto_stage,
             production_deploy_allowed=production,
             reason=reason,
-            artifact_ref=ref,
+            artifact_ref=stored.reference,
         )
