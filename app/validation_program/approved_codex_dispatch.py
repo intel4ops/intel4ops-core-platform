@@ -258,10 +258,7 @@ class ApprovedCodexDispatchService:
                         "worker_profile": AgentWorkerProfile.CODEX_IMPLEMENTATION.value,
                         "local_allowed": False,
                         "owner_gate_required": True,
-                        "reasoning": (
-                            "Explicit AC-002C dispatch from owner-approved "
-                            "AC-002B handoff"
-                        ),
+                        "reasoning": "Owner-approved AC-002C handoff to Codex",
                     },
                     idempotency_key=str(uuid4()),
                 ),
