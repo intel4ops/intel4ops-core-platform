@@ -122,10 +122,12 @@ class GovernedMergeReleasePromotionService:
             ) from exc
         if artifact.get("schema_version") != "ac002f-release-authorization-v1":
             _fail("RELEASE_AUTHORIZATION_INVALID", "Release authorization schema is invalid", 409)
-        if artifact.get("organization_id") != str(organization_id) or artifact.get("batch_id") != str(
-            batch_id
-        ):
-            _fail("RELEASE_AUTHORIZATION_SCOPE_MISMATCH", "Release authorization scope mismatch", 409)
+        if artifact.get("organization_id") != str(organization_id) or artifact.get(
+            "batch_id"
+        ) != str(batch_id):
+            _fail(
+                "RELEASE_AUTHORIZATION_SCOPE_MISMATCH", "Release authorization scope mismatch", 409
+            )
         if artifact.get("implementation_job_id") != str(job.id):
             _fail("RELEASE_AUTHORIZATION_JOB_MISMATCH", "Release authorization job mismatch", 409)
         if artifact.get("decision") != "APPROVED" or artifact.get("merge_allowed") is not True:
@@ -207,7 +209,9 @@ class GovernedMergeReleasePromotionService:
         if manifest.get("lease_id") != str(payload.lease_id):
             _fail("LEASE_MISMATCH", "Governed merge lease does not match", 409)
         if payload.candidate_head_sha != candidate["head_sha"]:
-            _fail("CANDIDATE_SHA_MISMATCH", "Merged candidate SHA does not match authorization", 409)
+            _fail(
+                "CANDIDATE_SHA_MISMATCH", "Merged candidate SHA does not match authorization", 409
+            )
         if payload.pull_request_number != candidate["pull_request_number"]:
             _fail("CANDIDATE_PR_MISMATCH", "Merged pull request does not match authorization", 409)
         if payload.target_branch != _TARGET_BRANCH:
