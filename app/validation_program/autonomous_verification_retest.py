@@ -119,6 +119,7 @@ class AutonomousVerificationRetestService:
         return batch, items
 
     def _candidate(self, job: AgentJob) -> dict[str, Any]:
+        assert job.result_ref is not None
         result = self._jobs._read_json(job.result_ref)  # noqa: SLF001
         required = ("head_sha", "pull_request_number", "pull_request_url", "branch_name")
         if any(not result.get(field) for field in required):
