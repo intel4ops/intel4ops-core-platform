@@ -1,35 +1,17 @@
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 
-AutonomyDecision = Literal[
-    "AUTO_EXECUTE",
-    "AUTO_MERGE",
-    "AUTO_DEPLOY_STAGING",
-    "OWNER_APPROVAL_PRODUCTION",
-    "OWNER_APPROVAL_R3",
-    "ESCALATE_ON_REGRESSION",
-    "BLOCKED",
-]
-
-
 class AutonomousEngineeringPolicyRequest(BaseModel):
-    risk_class: Literal["R0", "R1", "R2", "R3"]
-    lifecycle_stage: Literal[
-        "implementation",
-        "verified_candidate",
-        "merged_release_candidate",
-        "deployment",
-    ]
-    verification_decision: Literal[
-        "NOT_APPLICABLE",
-        "VERIFIED_IMPROVEMENT",
-        "NO_MEANINGFUL_IMPROVEMENT",
-        "REGRESSION",
-    ] = "NOT_APPLICABLE"
+    risk_class: str = Field(pattern="^(R0|R1|R2|R3)$")
+    lifecycle_stage: str = Field(
+        pattern="^(implementation|verified_candidate|merged_release_candidate|deployment)$"
+    )
+    verification_decision: str = Field(
+        default="NOT_APPLICABLE",
+        pattern="^(NOT_APPLICABLE|VERIFIED_IMPROVEMENT|NO_MEANINGFUL_IMPROVEMENT|REGRESSION)$",
+    )
     quality_gate_green: bool = False
-    target_environment: Literal["none", "staging", "production"] = "none"
+    target_environment: str = Field(default="none", pattern="^(none|staging|production)$")
     security_boundary_change: bool = False
     tenant_boundary_change: bool = False
     evidence_gate_change: bool = False
