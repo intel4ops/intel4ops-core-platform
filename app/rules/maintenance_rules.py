@@ -18,7 +18,11 @@ def detect_repeated_asset_failures(
         raise ValueError(f"Missing required maintenance columns: {sorted(missing)}")
 
     normalized_currency = currency.strip().upper()
-    if len(normalized_currency) != 3 or not normalized_currency.isascii() or not normalized_currency.isalpha():
+    if (
+        len(normalized_currency) != 3
+        or not normalized_currency.isascii()
+        or not normalized_currency.isalpha()
+    ):
         raise ValueError("currency must be a three-letter ASCII currency code")
 
     findings: list[FindingCreate] = []
