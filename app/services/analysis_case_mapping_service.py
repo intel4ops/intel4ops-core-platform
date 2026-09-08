@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.domain_registry import DOMAIN_SIGNATURES, canonicalize_field
 from app.models.analysis_case import AnalysisCaseFieldMapping, DetectionStatus, MappingStatus
+from app.semantic.candidate import InterpretationDecisionStatus
+from app.semantic.interpreter import interpret_dataset
+from app.semantic.provider import NullSemanticReasoningProvider
 
 
 @dataclass(frozen=True)
@@ -19,11 +22,19 @@ class MappingBridgeResult:
 
 
 class AnalysisCaseMappingService:
-    """MVP deterministic mapping bridge (Section 8/scope decision 5 of the
-    plan): a known alias table, not the full governed Canonical Mapping
-    template lifecycle. Structured so a validated mapping can be promoted
-    into a real MappingTemplateVersion/FieldMapping later without losing
-    which source column fed which canonical field."""
+    """Customer-native mapping bridge into the existing canonical path.
+
+    Exact governed aliases remain authoritative. For fields that do not
+    resolve through the legacy alias registry, the existing semantic
+    interpreter may promote a meaning only when its deterministic evidence
+    reaches AUTO_ACCEPTED authority. Review-required/flagged decisions are
+    persisted as mapping uncertainty and never routed as canonical data.
+
+    The semantic pass deliberately uses the null provider here: mapping
+    authority must be reproducible from customer data and governed registry
+    evidence alone. The normal case-level semantic stage still runs later
+    with its full cross-dataset context and configured provider policy.
+    """
 
     def apply(
         self,
@@ -33,17 +44,6 @@ class AnalysisCaseMappingService:
         domain: str | None,
         detection_status: str | None = None,
     ) -> MappingBridgeResult:
-        # P3.xxC.2E: a domain's required canonical fields are only ever
-        # enforced once domain detection is itself CONFIRMED. A
-        # NEEDS_REVIEW or UNKNOWN detection is, by construction, already
-        # missing fields the signature requires (see
-        # domain_detection_service.detect_domain) -- re-enforcing that
-        # same requirement here would just relabel an unresolved domain
-        # guess as a "missing required field" mapping problem, which is
-        # exactly the false-positive review_required this correction
-        # removes. Domain uncertainty is surfaced separately as
-        # DOMAIN_REVIEW_REQUIRED (see analysis_case_orchestration_service
-        # .review_reasons), from the dataset's own detection_status.
         required_fields: frozenset[str] = frozenset()
         if detection_status == DetectionStatus.CONFIRMED.value:
             for signature in DOMAIN_SIGNATURES:
@@ -51,22 +51,64 @@ class AnalysisCaseMappingService:
                     required_fields = signature.required_canonical_fields
                     break
 
+        # Run the platform's existing semantic interpretation only as a
+        # fallback for fields the governed exact/token alias bridge cannot
+        # already resolve. No filename or simulation context is supplied.
+        semantic_result = interpret_dataset(
+            str(analysis_case_dataset_id),
+            "customer_dataset",
+            dataframe,
+            provider=NullSemanticReasoningProvider(),
+        )
+        semantic_by_field = {decision.source_field: decision for decision in semantic_result.field_decisions}
+
         rename_map: dict[str, str] = {}
+        promoted_columns: dict[str, str] = {}
         mappings: list[AnalysisCaseFieldMapping] = []
         mapped_canonical_fields: set[str] = set()
+        has_mapping_uncertainty = False
+
         for column in dataframe.columns:
-            canonical = canonicalize_field(str(column))
+            source_field = str(column)
+            canonical = canonicalize_field(source_field)
+            status = MappingStatus.IGNORED
+
             if canonical is not None:
-                rename_map[str(column)] = canonical
+                rename_map[source_field] = canonical
                 mapped_canonical_fields.add(canonical)
                 status = MappingStatus.AUTO_MAPPED
             else:
-                status = MappingStatus.IGNORED
+                decision = semantic_by_field.get(source_field)
+                if decision is not None and decision.selected_concept is not None:
+                    if decision.status in {
+                        InterpretationDecisionStatus.AUTO_ACCEPTED.value,
+                        InterpretationDecisionStatus.HUMAN_CONFIRMED.value,
+                    }:
+                        # A second raw field claiming the same canonical
+                        # concept is ambiguous. Preserve both raw fields and
+                        # request review rather than silently choosing one.
+                        if decision.selected_concept in mapped_canonical_fields:
+                            canonical = decision.selected_concept
+                            status = MappingStatus.NEEDS_REVIEW
+                            has_mapping_uncertainty = True
+                        else:
+                            canonical = decision.selected_concept
+                            promoted_columns[source_field] = canonical
+                            mapped_canonical_fields.add(canonical)
+                            status = MappingStatus.AUTO_MAPPED
+                    elif decision.status in {
+                        InterpretationDecisionStatus.ACCEPTED_WITH_FLAG.value,
+                        InterpretationDecisionStatus.REVIEW_REQUIRED.value,
+                    }:
+                        canonical = decision.selected_concept
+                        status = MappingStatus.NEEDS_REVIEW
+                        has_mapping_uncertainty = True
+
             mappings.append(
                 AnalysisCaseFieldMapping(
                     organization_id=organization_id,
                     analysis_case_dataset_id=analysis_case_dataset_id,
-                    source_field=str(column),
+                    source_field=source_field,
                     canonical_field=canonical,
                     mapping_status=status,
                 )
@@ -85,9 +127,19 @@ class AnalysisCaseMappingService:
             )
 
         overall_status = (
-            MappingStatus.NEEDS_REVIEW if missing_required else MappingStatus.AUTO_MAPPED
+            MappingStatus.NEEDS_REVIEW
+            if missing_required or has_mapping_uncertainty
+            else MappingStatus.AUTO_MAPPED
         )
-        canonical_dataframe = dataframe.rename(columns=rename_map)
+
+        # Preserve source columns for semantic/entity lineage. Legacy alias
+        # mappings retain their established rename behavior; semantic-only
+        # promotions are additive canonical views over the same source data.
+        canonical_dataframe = dataframe.rename(columns=rename_map).copy()
+        for source_field, canonical in promoted_columns.items():
+            if canonical not in canonical_dataframe.columns:
+                canonical_dataframe[canonical] = dataframe[source_field]
+
         return MappingBridgeResult(
             canonical_dataframe=canonical_dataframe,
             field_mappings=mappings,
@@ -97,10 +149,8 @@ class AnalysisCaseMappingService:
     def persist(
         self, db: Session, analysis_case_dataset_id: UUID, result: MappingBridgeResult
     ) -> None:
-        """Mapping state reflects the current understanding of a dataset's
-        schema, recomputed fresh on every run -- replace, never accumulate,
-        so re-running the same case doesn't violate the per-dataset
-        (source_field) uniqueness constraint."""
+        """Replace the current per-dataset mapping state without losing
+        source-field -> canonical-field lineage."""
         db.execute(
             delete(AnalysisCaseFieldMapping).where(
                 AnalysisCaseFieldMapping.analysis_case_dataset_id == analysis_case_dataset_id
