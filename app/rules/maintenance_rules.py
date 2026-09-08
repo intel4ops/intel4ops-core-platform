@@ -7,15 +7,19 @@ from app.schemas.contracts import EvidenceCreate, FindingCreate
 RULE_ID = "MAINT-001-REPEATED-FAILURE"
 
 
+def validate_repeated_asset_failure_inputs(events: pd.DataFrame) -> None:
+    required = {"asset_id", "failure_code", "downtime_hours", "repair_cost"}
+    missing = required - set(events.columns)
+    if missing:
+        raise ValueError(f"Missing required maintenance columns: {sorted(missing)}")
+
+
 def detect_repeated_asset_failures(
     events: pd.DataFrame,
     *,
     currency: str,
 ) -> list[FindingCreate]:
-    required = {"asset_id", "failure_code", "downtime_hours", "repair_cost"}
-    missing = required - set(events.columns)
-    if missing:
-        raise ValueError(f"Missing required maintenance columns: {sorted(missing)}")
+    validate_repeated_asset_failure_inputs(events)
 
     normalized_currency = currency.strip().upper()
     if (
