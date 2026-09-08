@@ -102,7 +102,9 @@ def test_cross_dataset_asset_relationship_uses_governed_canonical_identifier() -
         ]
     )
 
-    eq10 = next(link for link in links if link.entity_type == "asset" and link.canonical_key == "EQ-10")
+    eq10 = next(
+        link for link in links if link.entity_type == "asset" and link.canonical_key == "EQ-10"
+    )
     assert eq10.status == "matched"
     assert set(eq10.source_dataset_ids) == {str(dataset_a), str(dataset_b)}
 
