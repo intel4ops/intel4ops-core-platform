@@ -60,7 +60,9 @@ class AnalysisCaseMappingService:
             dataframe,
             provider=NullSemanticReasoningProvider(),
         )
-        semantic_by_field = {decision.source_field: decision for decision in semantic_result.field_decisions}
+        semantic_by_field = {
+            decision.source_field: decision for decision in semantic_result.field_decisions
+        }
 
         rename_map: dict[str, str] = {}
         promoted_columns: dict[str, str] = {}
