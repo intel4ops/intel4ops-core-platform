@@ -6,7 +6,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.entities import Finding
-from app.rules.maintenance_rules import detect_repeated_asset_failures
+from app.rules.maintenance_rules import validate_repeated_asset_failure_inputs
 from app.schemas.findings import FindingSeverity, FindingType
 from app.services.governed_finding_publisher import (
     GovernedFindingRequest,
@@ -24,15 +24,10 @@ def run_maintenance_pack(
     actor_user_id: UUID,
 ) -> list[Finding]:
     """Reuses the same MAINT-001 threshold identity (>=3 repeated failures
-    for the same asset+failure_code, verified against
-    detect_repeated_asset_failures's own validation of required columns
-    below) but discards its legacy hard-coded USD exposure computation
-    entirely -- only the observed failure_count/downtime facts are carried
-    into the governed pipeline (economic_status=governed_pending). The
-    standalone legacy endpoint keeps calling detect_repeated_asset_failures
-    directly, unmodified, per 'do not change legacy maintenance
-    economics'."""
-    detect_repeated_asset_failures(canonical_dataframe)  # validates required columns are present
+    for the same asset+failure_code) while keeping economic exposure in the
+    governed pipeline pending until governed economics are available.
+    """
+    validate_repeated_asset_failure_inputs(canonical_dataframe)
     published: list[Finding] = []
     grouped = canonical_dataframe.groupby(["asset_id", "failure_code"], dropna=False)
     for (asset_id, failure_code), group in grouped:
@@ -70,8 +65,7 @@ def run_maintenance_pack(
                 domains=["maintenance"],
                 economic_status="governed_pending",
                 limitations=[
-                    "Economic exposure not computed -- legacy USD-per-hour assumption is not "
-                    "carried into governed Analysis Case findings."
+                    "Economic exposure not computed until governed economics are available."
                 ],
             ),
         )

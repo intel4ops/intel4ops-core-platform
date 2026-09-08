@@ -138,7 +138,13 @@ async def analyze_maintenance(
 ) -> list[Finding]:
     dataframe = await _read_tabular(file)
     try:
-        payloads = detect_repeated_asset_failures(dataframe)
+        organization = organization_service.get(db, organization_id)
+        payloads = detect_repeated_asset_failures(
+            dataframe,
+            currency=organization.default_currency,
+        )
+    except OrganizationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
