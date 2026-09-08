@@ -63,23 +63,55 @@ class CapabilityRoutingDecision:
 # common customer-native business language and are not tied to simulations,
 # record ids, hidden truth, scenario names, or expected findings.
 _CONCEPT_ALIASES: dict[str, frozenset[str]] = {
-    "asset_id": frozenset({"asset_id", "equipment_id", "unit_id", "machine_id", "equipment_number"}),
-    "work_order_id": frozenset({"work_order_id", "workorder_id", "wo_id", "service_order_id", "service_order_number"}),
+    "asset_id": frozenset(
+        {"asset_id", "equipment_id", "unit_id", "machine_id", "equipment_number"}
+    ),
+    "work_order_id": frozenset(
+        {"work_order_id", "workorder_id", "wo_id", "service_order_id", "service_order_number"}
+    ),
     "job_id": frozenset({"job_id", "project_id", "engagement_id", "job_number"}),
     "invoice_id": frozenset({"invoice_id", "invoice_number", "bill_id", "billing_document_id"}),
     "employee_id": frozenset({"employee_id", "technician_id", "worker_id", "crew_member_id"}),
-    "operational_event_id": frozenset({"operational_event_id", "event_id", "service_event_id", "activity_id"}),
+    "operational_event_id": frozenset(
+        {"operational_event_id", "event_id", "service_event_id", "activity_id"}
+    ),
     "failure_code": frozenset({"failure_code", "fault_code", "issue_code", "defect_code"}),
-    "activity_category": frozenset({"activity_category", "activity_type", "event_type", "work_type", "service_type"}),
-    "operational_event_status": frozenset({"operational_event_status", "event_status", "activity_status", "work_status", "status"}),
-    "scheduled_timestamp": frozenset({"scheduled_timestamp", "scheduled_date", "scheduled_at", "planned_date", "planned_at"}),
-    "completed_timestamp": frozenset({"completed_timestamp", "completed_date", "completed_at", "finish_date", "finished_at", "closed_at"}),
+    "activity_category": frozenset(
+        {"activity_category", "activity_type", "event_type", "work_type", "service_type"}
+    ),
+    "operational_event_status": frozenset(
+        {"operational_event_status", "event_status", "activity_status", "work_status", "status"}
+    ),
+    "scheduled_timestamp": frozenset(
+        {"scheduled_timestamp", "scheduled_date", "scheduled_at", "planned_date", "planned_at"}
+    ),
+    "completed_timestamp": frozenset(
+        {
+            "completed_timestamp",
+            "completed_date",
+            "completed_at",
+            "finish_date",
+            "finished_at",
+            "closed_at",
+        }
+    ),
     "event_timestamp": frozenset({"event_timestamp", "event_date", "occurred_at", "activity_date"}),
-    "labor_hours": frozenset({"labor_hours", "worked_hours", "work_hours", "time_hours", "billable_hours", "hours"}),
+    "labor_hours": frozenset(
+        {"labor_hours", "worked_hours", "work_hours", "time_hours", "billable_hours", "hours"}
+    ),
     "downtime_hours": frozenset({"downtime_hours", "outage_hours", "down_hours", "offline_hours"}),
     "quantity": frozenset({"quantity", "qty", "units", "unit_quantity"}),
     "rate": frozenset({"rate", "hourly_rate", "labor_rate", "unit_rate", "billing_rate"}),
-    "transaction_amount": frozenset({"transaction_amount", "invoice_amount", "billed_amount", "billing_amount", "revenue_amount", "amount"}),
+    "transaction_amount": frozenset(
+        {
+            "transaction_amount",
+            "invoice_amount",
+            "billed_amount",
+            "billing_amount",
+            "revenue_amount",
+            "amount",
+        }
+    ),
     "repair_cost": frozenset({"repair_cost", "maintenance_cost", "service_cost", "repair_amount"}),
     "currency": frozenset({"currency", "currency_code", "iso_currency"}),
 }
@@ -123,9 +155,13 @@ def _infer_field(source_field: str) -> FieldSemantic:
     best_score, best_concept, best_alias = scored[0]
     second_score = scored[1][0] if len(scored) > 1 else 0.0
     if best_score < 0.58:
-        return FieldSemantic(source_field, None, round(best_score, 4), "no sufficiently strong semantic name match")
+        return FieldSemantic(
+            source_field, None, round(best_score, 4), "no sufficiently strong semantic name match"
+        )
     if best_score - second_score < 0.08 and best_score < 0.95:
-        return FieldSemantic(source_field, None, round(best_score, 4), "ambiguous semantic name match")
+        return FieldSemantic(
+            source_field, None, round(best_score, 4), "ambiguous semantic name match"
+        )
     confidence = 0.98 if best_score == 1.0 else min(0.94, 0.55 + (0.45 * best_score))
     return FieldSemantic(
         source_field=source_field,
@@ -139,7 +175,13 @@ def _infer_domains(concepts: set[str]) -> set[str]:
     domains: set[str] = set()
     if "invoice_id" in concepts or "transaction_amount" in concepts:
         domains.add("revenue")
-    if concepts & {"work_order_id", "job_id", "operational_event_id", "activity_category", "operational_event_status"}:
+    if concepts & {
+        "work_order_id",
+        "job_id",
+        "operational_event_id",
+        "activity_category",
+        "operational_event_status",
+    }:
         domains.add("operations")
     if "asset_id" in concepts and concepts & {
         "failure_code",
@@ -284,10 +326,7 @@ def route_capabilities(
 def analyze_customer_native_datasets(
     datasets: list[tuple[str, pd.DataFrame]],
 ) -> dict[str, object]:
-    profiled = [
-        (name, frame, infer_dataset_semantics(name, frame))
-        for name, frame in datasets
-    ]
+    profiled = [(name, frame, infer_dataset_semantics(name, frame)) for name, frame in datasets]
     relationships = infer_relationships(profiled)
     decisions = route_capabilities(
         [profile for _, _, profile in profiled],

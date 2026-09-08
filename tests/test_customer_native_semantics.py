@@ -27,7 +27,13 @@ def test_generic_customer_field_names_infer_operational_concepts() -> None:
     profile = infer_dataset_semantics("customer_upload.csv", frame)
 
     concepts = profile.available_concepts
-    assert {"asset_id", "work_order_id", "failure_code", "downtime_hours", "repair_cost"} <= concepts
+    assert {
+        "asset_id",
+        "work_order_id",
+        "failure_code",
+        "downtime_hours",
+        "repair_cost",
+    } <= concepts
     assert "maintenance" in profile.inferred_domains
     assert "operations" in profile.inferred_domains
 
