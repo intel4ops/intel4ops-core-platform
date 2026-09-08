@@ -63,6 +63,9 @@ from app.api.workspace_routes import tenant_router as workspace_tenant_router
 from app.auth.request_context import RequestContextMiddleware
 from app.core.config import get_settings
 from app.ground_truth_validation.routes import router as validation_router
+from app.validation_program.autonomous_engineering_control_routes import (
+    router as autonomous_engineering_control_router,
+)
 from app.validation_program.autonomous_verification_routes import (
     router as autonomous_verification_router,
 )
@@ -204,6 +207,7 @@ app.include_router(autonomous_verification_router)
 app.include_router(verified_release_authorization_router)
 app.include_router(governed_merge_release_router)
 app.include_router(deployment_authorization_controlled_promotion_router)
+app.include_router(autonomous_engineering_control_router)
 app.include_router(semantic_router)
 app.include_router(semantic_review_router)
 app.include_router(entities_router)
