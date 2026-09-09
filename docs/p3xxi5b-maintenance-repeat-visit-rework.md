@@ -2,7 +2,7 @@
 
 ## Implementation status
 
-**Phase:** implementation quality gate; post-merge live certification not yet authorized
+**Phase:** post-merge live certification complete
 
 **Capability:** `MAINTENANCE-REPEAT-VISIT` (`MAINT-REPEAT`, version 1.0)
 
@@ -234,25 +234,142 @@ Implementation PR: **#125**
 
 CI status: **PASSED — Quality Gate**
 
-Merge status: **owner-gated; do not merge**
+Merge status: **merged at `f9d1d9455c8a7ff3624c2533a4adf1aae5a6c055`**
 
-## Post-merge live certification placeholder
+## Post-merge live certification
 
-Post-merge certification has not started and is not authorized by this PR.
-After an explicit owner-authorized merge and confirmed deployment, production
-runs must complete before the Validation Plane examines the frozen truth.
+### Merge, deployment, and production-run ledger
 
-The certification report will preserve the 76-item denominator and record:
+PR #125 merged through the repository's normal merge method at
+`f9d1d9455c8a7ff3624c2533a4adf1aae5a6c055`. Local `main` was synchronized to
+that exact `origin/main` revision with a clean worktree. The Render deployment
+record for the same SHA reached `success` at `2026-09-05T20:55:48Z`, and the
+Core health endpoint returned HTTP 200 with `status: ok`. The post-merge main
+Quality Gate subsequently completed successfully.
 
-- READY cases and safe abstentions;
-- TP, FP, FN, precision, recall, and mechanically supported economic capture;
-- duplicate suppression and exact adjacent pairing;
-- pairing failure, false-positive, and false-negative classifications;
-- mechanical/fabricated false positives; and
-- exact truth coverage without changing production pairing rules.
+Production execution preceded examiner-side truth access. All four applicable
+frozen FieldMaintenance cases reached terminal `review_required` state; this is
+an orchestrator review outcome, not a failed run.
 
-Graduation targets remain precision at least 95%, zero mechanical/fabricated
-false positives, and recall at least 80% (preferably 90% when governed evidence
-supports it). Safety thresholds will not be weakened to reach recall.
+| Frozen case | Case ID | Terminal run used | Live readiness reported by Navigator | `MAINTENANCE-REPEAT-VISIT` findings | Total findings | Revenue Amount control |
+|---|---|---|---|---:|---:|---:|
+| `FIELDMAINT-001` | `e326e61b-f11b-4713-9048-6fccc7297a38` | `99c2f022-fb79-4bfb-ac2d-61a1acbcf310` | not reported | 0 | 63 | 61 |
+| `FIELDMAINT-002` | `1fc05ddd-47d5-4f59-888e-6e968a577942` | `8c4d74bd-9dcd-4d37-a224-bc58510a345d` | not reported | 0 | 1 | 0 |
+| `FIELDMAINT-005` | `8a7f562f-ea71-42f6-9405-09e2d8f25eda` | `5accaf18-49b3-4633-a884-c24711f15572` | not reported | 0 | 87 | 86 |
+| `FIELDMAINT-007` | `fbc51228-9a76-4454-8569-a93b5ec03438` | `a473e728-e60e-463a-b05d-29c121a72cb5` | not reported | 0 | 27 | 26 |
 
-P3.xxI.5B stops at the implementation PR owner gate.
+The live readiness view returned “The backend has not reported intelligence
+readiness for this case” for the certification runs. This absence is material:
+there is no persisted live READY evidence on which to claim activation.
+
+### Production-path diagnosis
+
+The merged production code was replayed locally against the exact frozen
+customer files, without loading or consulting hidden truth. That controlled
+trace isolates two connected defects:
+
+1. The generic readiness index marks `MAINTENANCE-REPEAT-VISIT` **READY** on
+   each FieldMaintenance shape because it sees maintenance, canonical asset,
+   `operational_event_id`, `activity_category`, timestamp, and domain-level
+   Trust evidence.
+2. Execution applies a stricter dataset-local evidence contract.
+   `maintenance_events.csv.work_order_id` is only `accepted_with_flag` at 0.85
+   because both event and work-order identifiers are present. The authoritative
+   concept resolver therefore correctly refuses it as intervention identity.
+   Consequently no maintenance dataset is admitted for pairing.
+
+The representative exact trace for `FIELDMAINT-002` was:
+
+- governed readiness: `READY`, no missing-summary items;
+- eligible canonical assets: 60 of 67 (0.70 capability threshold);
+- `asset_id`: `auto_accepted`, 0.98;
+- `event_type -> activity_category`: `auto_accepted`, 0.95;
+- `completed_date -> completed_timestamp`: `auto_accepted`, 0.98;
+- `work_order_id -> work_order_id`: `accepted_with_flag`, 0.85;
+- candidate datasets: 0;
+- adjacent pairs: 0;
+- published findings: 0.
+
+The same source shape is present in all four applicable cases. Across 2,087
+maintenance-event rows, production therefore abstained before pair formation.
+The primary failure is a **CAPABILITY_MODEL_GAP**: readiness and execution do
+not evaluate the same governed, dataset-local intervention-identity evidence.
+The underlying evidence condition is a **SEMANTIC_EVIDENCE_GAP**; lowering the
+global semantic threshold is not a safe remedy.
+
+### Pairing safety and false-positive risk
+
+After all production runs were terminal, examiner-side analysis applied the
+implementation's exact pairing helper to the frozen source rows solely to
+measure the latent model risk. It did not alter production results or truth.
+
+| Case | Exact-category adjacent pairs if the identity gate were bypassed | Matches frozen `repeat_repair` truth | Non-truth pairs | Truth misses |
+|---|---:|---:|---:|---:|
+| `FIELDMAINT-001` | 114 | 0 | 114 | 0 |
+| `FIELDMAINT-002` | 136 | 16 | 120 | 22 |
+| `FIELDMAINT-005` | 765 | 0 | 765 | 0 |
+| `FIELDMAINT-007` | 106 | 20 | 86 | 18 |
+| **Total** | **1,121** | **36** | **1,085** | **40** |
+
+This proves that accepting the flagged work-order concept would be unsafe.
+Exact activity-category equality plus adjacency does not distinguish a genuine
+repeat repair from ordinary recurring maintenance. It would also miss 40 truth
+pairs whose governed `event_type` differs between the prior and subsequent
+interventions (for example `CM -> PM` or `PM -> CM`). The corpus supplies no
+governed repeat/rework marker, component/service equivalence, or policy window
+that safely closes that distinction. Repeated maintenance alone is not rework.
+
+No duplicate `(asset, work_order, completed timestamp, activity category)`
+representations exist in the four frozen source files. Production duplicate
+suppression count is therefore 0; pairing never began. Ordering, lineage, and
+finding-identity checks are not applicable because no candidate or finding was
+created. No policy violation or economic exposure was fabricated.
+
+### Validation Plane scoring
+
+Only after production was terminal did the examiner compare the persisted
+finding ledger with the pre-frozen 76-item family: 38 items in
+`FIELDMAINT-002` and 38 in `FIELDMAINT-007`, with $117,524.00 of
+truth-authored value.
+
+| Metric | Result |
+|---|---:|
+| TP | **0** |
+| FP | **0** |
+| FN | **76** |
+| Precision | **N/A** (no positive predictions) |
+| Recall | **0 / 76 = 0.00%** |
+| Truth-authored economic-value capture | **$0.00 / $117,524.00 = 0.00%** |
+| Mechanical/fabricated FP | **0** |
+| READY cases (live reported) | **0 of 4** |
+| Case-level safe abstentions | **4 of 4** |
+| Duplicate suppressions | **0** |
+| Findings overlapping `MAINT-001` | **0** |
+
+The dollar result is examiner-side, directional truth coverage. The capability
+correctly emitted no governed economic exposure because no pair-attributable
+rework cost was established.
+
+All 76 false negatives are classified **CAPABILITY_MODEL_GAP**, with the
+immediate production blocker `SEMANTIC_EVIDENCE_GAP` on authoritative
+intervention identity. Even if that immediate gate were removed, the
+1,085-pair false-positive exposure demonstrates a second capability-model gap:
+the current relationship contract is not specific enough to identify rework.
+
+### Regression controls
+
+- Revenue Amount / Billing Variance remained exactly **61 / 0 / 86 / 26**.
+- `MAINT-001` code and rule identity were unchanged. It produced no finding on
+  these four frozen cases, matching the existing FieldMaintenance behavior;
+  the new capability overlap count is 0.
+- Total persisted findings remained **63 / 1 / 87 / 27**, comprising the
+  preserved Revenue Amount results and the pre-existing cross-domain/linkage
+  findings only.
+- Mechanical/fabricated false positives remained 0.
+
+No truth, XDOM-A, XDOM-B, MAINT-001, semantic threshold, or application code
+was changed during certification.
+
+## Final classification
+
+P3.xxI.5B FAILED
